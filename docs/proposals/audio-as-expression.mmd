@@ -1,0 +1,28 @@
+graph TD
+  Work["Work: Heart Sutra"]
+  Text["Text (bo): Heart Sutra, Tibetan<br/>written Expression"]
+  Edition["Edition: critical<br/>written Manifestation"]
+  AudioA["Audio (bo): sung by Artist A<br/>audio Expression"]
+  ArtistA["Artist A (Person)"]
+  AudioB["Audio (bo): sung by Artist B<br/>second artist = second Audio"]
+  R1["Rendition: without music<br/>has timestamps"]
+  R2["Rendition: with music<br/>no timestamps"]
+  Cue["Cues<br/>start_ms, end_ms"]
+
+  Text -->|TEXT_OF| Work
+  Edition -->|EDITION_OF| Text
+  AudioB -.->|AUDIO_OF| Text
+  AudioA -->|AUDIO_OF| Text
+  R1 -->|RENDITION_OF| AudioA
+  R2 -->|RENDITION_OF| AudioA
+  R1 -->|FOLLOWS| Edition
+  Cue -->|CUE_OF| R1
+  Cue -.->|span in| Edition
+  AudioA -->|HAS_CONTRIBUTION| ArtistA
+
+  classDef written fill:#e8f0fe,stroke:#4a6fa5
+  classDef audio fill:#fdf0e0,stroke:#c07a2c
+  classDef faded fill:#f4f4f4,stroke:#bbbbbb,color:#999999
+  class Text,Edition,Work written
+  class AudioA,R1,R2,Cue,ArtistA audio
+  class AudioB faded
