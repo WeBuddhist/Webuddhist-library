@@ -67,6 +67,7 @@ class LicenseType(StrEnum):
 
 class NoteType(StrEnum):
     DURCHEN = "durchen"
+    FOOTNOTE = "footnote"
 
 
 class MarkType(StrEnum):

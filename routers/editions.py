@@ -11,6 +11,8 @@ from models.alignment import EditionAlignmentOutput
 from models.annotation import (
     BibliographicMetadataInput,
     BibliographicMetadataOutput,
+    FootnoteInput,
+    FootnoteOutput,
     MarkInput,
     MarkOutput,
     NoteInput,
@@ -25,6 +27,7 @@ from models.annotation import (
 )
 from models.content_operation import ContentOperation
 from models.edition import EditionOutput
+from models.enums import NoteType
 from models.recording import RecordingInput, RecordingOutput
 from models.requests import AnnotationSegmentsPaginationParams
 from models.responses import IdResponse, PaginatedResponse, PresignedUrlResponse
@@ -285,7 +288,7 @@ async def get_durchen_annotations(
     _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[NoteOutput]:
-    return await db.annotation.note.get_all(edition_id, "durchen")
+    return await db.annotation.note.get_all(edition_id, NoteType.DURCHEN)
 
 
 @router.post(
@@ -302,6 +305,53 @@ async def post_durchen_annotations(
 ) -> list[IdResponse]:
     annotation_ids = await db.annotation.note.add_durchens(edition_id, data)
     return [IdResponse(id=annotation_id) for annotation_id in annotation_ids]
+
+
+@router.get(
+    "/{edition_id}/footnotes",
+    summary="Get footnote annotations",
+    description="Retrieve all footnotes (citations, author's notes, etc.) for an edition, ordered by position.",
+)
+async def get_footnote_annotations(
+    edition_id: Annotated[str, Path(description="The ID of the edition")],
+    _api_key: Annotated[str, Depends(get_api_key)],
+    db: Annotated[Database, Depends(get_db)],
+) -> list[FootnoteOutput]:
+    return await db.annotation.note.get_all_footnotes(edition_id)
+
+
+@router.post(
+    "/{edition_id}/footnotes",
+    status_code=status.HTTP_201_CREATED,
+    summary="Add footnote annotations",
+    description=(
+        "Atomically add one or more footnotes to an edition. `position` is a gap index from 0 (before the "
+        "first character) to the content length (after the last character); the marker sits before the "
+        "character at `position`. Adding footnotes does not change the content."
+    ),
+)
+async def post_footnote_annotations(
+    edition_id: Annotated[str, Path(description="The ID of the edition")],
+    data: Annotated[list[FootnoteInput], Body(min_length=1)],
+    _api_key: Annotated[str, Depends(get_api_key)],
+    db: Annotated[Database, Depends(get_db)],
+) -> list[IdResponse]:
+    annotation_ids = await db.annotation.note.add_footnotes(edition_id, data)
+    return [IdResponse(id=annotation_id) for annotation_id in annotation_ids]
+
+
+@router.delete(
+    "/{edition_id}/footnotes",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete all footnote annotations",
+    description="Delete every footnote on an edition in one transaction. Durchen notes are not affected.",
+)
+async def delete_footnote_annotations(
+    edition_id: Annotated[str, Path(description="The ID of the edition")],
+    _api_key: Annotated[str, Depends(get_api_key)],
+    db: Annotated[Database, Depends(get_db)],
+) -> None:
+    await db.annotation.note.delete_all_footnotes(edition_id)
 
 
 @router.get(

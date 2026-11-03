@@ -147,7 +147,7 @@ Deletes the edition metadata and associated annotation data handled by the datab
 Delete behavior:
 
 - Deletes the `Edition` node and its incipit title `Nomen` and `LocalizedText` subgraphs.
-- Cascade-deletes segmentations, alignments, pagination, table of contents, bibliographic metadata, durchen notes, yigchung marks, recordings, spans, segments, pages, volumes, and table of contents sections associated with the edition, including annotations added after edition creation.
+- Cascade-deletes segmentations, alignments, pagination, table of contents, bibliographic metadata, durchen notes, footnotes, yigchung marks, recordings, spans, segments, pages, volumes, and table of contents sections associated with the edition, including annotations added after edition creation.
 - Deletes the edition's `HAS_SOURCE` relationship, but preserves the `Source` node.
 - Does not delete the parent `Text`, underlying `Work`, categories, tags, contributors, or lookup/type nodes.
 - Does not delete stored base text, recording audio files, or other non-database side effects.
@@ -525,6 +525,22 @@ POST /v2/editions/{edition_id}/durchens
 ```
 
 The array must contain at least one note. Creation is atomic and returns an array of `{ "id": "..." }` objects in request order.
+
+### Footnotes
+
+```http
+GET /v2/editions/{edition_id}/footnotes
+POST /v2/editions/{edition_id}/footnotes
+DELETE /v2/editions/{edition_id}/footnotes
+```
+
+```json
+[
+  {"position": 450, "text": "Cited from Degé Tengyur, vol. 34", "metadata": {}}
+]
+```
+
+`position` is a gap index from `0` (before the first character) to the content length (after the last character). The array must contain at least one footnote; creation is atomic, returns `{ "id": "..." }` objects in request order, and rejects a position past the content length with `422`. `GET` lists footnotes ordered by position. `DELETE` removes every footnote on the edition (durchen notes are kept) and returns `204`. See [annotations-api.md](annotations-api.md#create-footnotes).
 
 ## Recordings
 

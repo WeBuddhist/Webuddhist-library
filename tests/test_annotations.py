@@ -6,11 +6,13 @@ Tests endpoints:
 - GET /v2/editions/{edition_id}/segmentation
 - GET /v2/paginations/{pagination_id}
 - GET /v2/durchens/{note_id}
+- GET /v2/footnotes/{footnote_id}
 - GET /v2/yigchungs/{mark_id}
 - GET /v2/bibliographic/{bibliographic_id}
 - DELETE /v2/editions/{edition_id}/segmentation
 - DELETE /v2/paginations/{pagination_id}
 - DELETE /v2/durchens/{note_id}
+- DELETE /v2/footnotes/{footnote_id}
 - DELETE /v2/yigchungs/{mark_id}
 - DELETE /v2/bibliographic/{bibliographic_id}
 
@@ -26,6 +28,7 @@ from identifier import generate_id
 from models.annotation import (
     AnnotationMetadata,
     BibliographicMetadataInput,
+    FootnoteInput,
     MarkInput,
     NoteInput,
     Page,
@@ -443,6 +446,212 @@ class TestDeleteDurchen(TestAnnotationsEndpoints):
         assert response.status_code == 204
 
 
+class TestFootnote(TestAnnotationsEndpoints):
+    """Tests for the footnote endpoints."""
+
+    async def _create_edition(self, test_database, test_person_data) -> str:
+        person_id = await self._create_test_person(test_database, test_person_data)
+        text_id = await self._create_test_text(test_database, person_id)
+        return await self._create_test_edition(test_database, text_id, "0123456789")
+
+    async def test_footnote_lifecycle(self, client, test_database, test_person_data):
+        edition_id = await self._create_edition(test_database, test_person_data)
+
+        post_response = await client.post(
+            f"/v2/editions/{edition_id}/footnotes",
+            json=[
+                {"position": 10, "text": "After the last character"},
+                {"position": 0, "text": "Before the first character", "metadata": {"name": "Citation"}},
+                {"position": 5, "text": "In the middle"},
+            ],
+        )
+        assert post_response.status_code == 201
+        end_id, start_id, middle_id = [item["id"] for item in post_response.json()]
+
+        list_response = await client.get(f"/v2/editions/{edition_id}/footnotes")
+        assert list_response.status_code == 200
+        assert [(n["id"], n["position"], n["text"]) for n in list_response.json()] == [
+            (start_id, 0, "Before the first character"),
+            (middle_id, 5, "In the middle"),
+            (end_id, 10, "After the last character"),
+        ]
+        assert list_response.json()[0]["metadata"] == {"name": "Citation"}
+
+        get_response = await client.get(f"/v2/footnotes/{middle_id}")
+        assert get_response.status_code == 200
+        assert get_response.json() == {
+            "id": middle_id,
+            "edition_id": edition_id,
+            "text_id": list_response.json()[0]["text_id"],
+            "position": 5,
+            "text": "In the middle",
+            "metadata": None,
+        }
+
+        assert (await client.delete(f"/v2/footnotes/{middle_id}")).status_code == 204
+        assert (await client.get(f"/v2/footnotes/{middle_id}")).status_code == 404
+
+    async def test_post_footnotes_rejects_position_beyond_content(self, client, test_database, test_person_data):
+        edition_id = await self._create_edition(test_database, test_person_data)
+
+        response = await client.post(
+            f"/v2/editions/{edition_id}/footnotes",
+            json=[{"position": 3, "text": "Valid"}, {"position": 11, "text": "Past the end"}],
+        )
+
+        assert response.status_code == 422
+        assert (await client.get(f"/v2/editions/{edition_id}/footnotes")).json() == []
+
+    @pytest.mark.parametrize(
+        "body",
+        [[], [{"position": -1, "text": "Negative"}], [{"position": 0, "text": ""}], [{"position": 0}]],
+    )
+    async def test_post_footnotes_rejects_invalid_body(self, client, body):
+        response = await client.post("/v2/editions/edition-id/footnotes", json=body)
+        assert response.status_code == 422
+
+    async def test_post_footnotes_edition_not_found(self, client, test_database):
+        response = await client.post(
+            "/v2/editions/nonexistent_edition_id/footnotes", json=[{"position": 0, "text": "Footnote"}]
+        )
+        assert response.status_code == 404
+
+    async def test_get_footnotes_edition_not_found(self, client, test_database):
+        response = await client.get("/v2/editions/nonexistent_edition_id/footnotes")
+        assert response.status_code == 404
+
+    async def test_footnote_positions_count_code_points(self, client, test_database, test_person_data):
+        # 7 code points but 21 UTF-8 bytes and fewer visible stacks: positions count code points, so the end gap is 7.
+        content = "བཀྲ་ཤིས"
+        person_id = await self._create_test_person(test_database, test_person_data)
+        text_id = await self._create_test_text(test_database, person_id)
+        edition_id = await self._create_test_edition(test_database, text_id, content)
+
+        accepted = await client.post(
+            f"/v2/editions/{edition_id}/footnotes", json=[{"position": len(content), "text": "At the end"}]
+        )
+        rejected = await client.post(
+            f"/v2/editions/{edition_id}/footnotes", json=[{"position": len(content) + 1, "text": "Past the end"}]
+        )
+
+        assert accepted.status_code == 201
+        assert rejected.status_code == 422
+        assert [n["position"] for n in (await client.get(f"/v2/editions/{edition_id}/footnotes")).json()] == [7]
+
+    async def test_delete_with_other_note_type_leaves_revision(self, client, test_database, test_person_data):
+        edition_id = await self._create_edition(test_database, test_person_data)
+        durchen_response = await client.post(
+            f"/v2/editions/{edition_id}/durchens", json=[{"span": {"start": 0, "end": 5}, "text": "Durchen"}]
+        )
+        durchen_id = durchen_response.json()[0]["id"]
+
+        async def revision() -> int:
+            async with test_database.get_session() as session:
+                result = await session.run("MATCH (e:Edition {id: $id}) RETURN e.revision AS r", id=edition_id)
+                return (await result.single())["r"]
+
+        before = await revision()
+        assert (await client.delete(f"/v2/footnotes/{durchen_id}")).status_code == 204
+        assert await revision() == before
+        assert (await client.delete(f"/v2/durchens/{durchen_id}")).status_code == 204
+        assert await revision() > before
+
+    async def test_get_footnote_not_found(self, client, test_database):
+        response = await client.get("/v2/footnotes/nonexistent_id")
+        assert response.status_code == 404
+        assert "error" in response.json()
+
+    async def test_delete_footnote_not_found(self, client, test_database):
+        response = await client.delete("/v2/footnotes/nonexistent_id")
+        assert response.status_code == 204
+
+    async def test_delete_all_footnotes(self, client, test_database, test_person_data):
+        person_id = await self._create_test_person(test_database, test_person_data)
+        text_id = await self._create_test_text(test_database, person_id)
+        other_text_id = await self._create_test_text(
+            test_database, person_id, title=LocalizedString({"en": "Other text", "bo": "དཔེ་གཞན།"})
+        )
+        edition_id = await self._create_test_edition(test_database, text_id, "0123456789")
+        other_edition_id = await self._create_test_edition(test_database, other_text_id, "0123456789")
+        durchen_response = await client.post(
+            f"/v2/editions/{edition_id}/durchens", json=[{"span": {"start": 0, "end": 5}, "text": "Durchen"}]
+        )
+        assert durchen_response.status_code == 201
+        for target in (edition_id, other_edition_id):
+            response = await client.post(
+                f"/v2/editions/{target}/footnotes",
+                json=[{"position": 2, "text": "First"}, {"position": 8, "text": "Second", "metadata": {}}],
+            )
+            assert response.status_code == 201
+
+        response = await client.delete(f"/v2/editions/{edition_id}/footnotes")
+
+        assert response.status_code == 204
+        assert (await client.get(f"/v2/editions/{edition_id}/footnotes")).json() == []
+        assert len((await client.get(f"/v2/editions/{other_edition_id}/footnotes")).json()) == 2
+        assert len((await client.get(f"/v2/editions/{edition_id}/durchens")).json()) == 1
+        async with test_database.get_session() as session:
+            result = await session.run(
+                """
+                MATCH (n:Note)-[:NOTE_OF]->(:Edition {id: $edition_id})
+                OPTIONAL MATCH (n)-[:HAS_METADATA]->(m:AnnotationMetadata)
+                RETURN count(DISTINCT n) AS notes, count(m) AS metadata
+                """,
+                edition_id=edition_id,
+            )
+            record = await result.single()
+        assert (record["notes"], record["metadata"]) == (1, 0)
+
+    async def test_delete_all_footnotes_without_footnotes(self, client, test_database, test_person_data):
+        edition_id = await self._create_edition(test_database, test_person_data)
+
+        response = await client.delete(f"/v2/editions/{edition_id}/footnotes")
+
+        assert response.status_code == 204
+
+    async def test_delete_all_footnotes_edition_not_found(self, client, test_database):
+        response = await client.delete("/v2/editions/nonexistent_edition_id/footnotes")
+        assert response.status_code == 404
+
+    async def test_create_merges_missing_note_type(self, client, test_database, test_person_data):
+        edition_id = await self._create_edition(test_database, test_person_data)
+        async with test_database.get_session() as session:
+            await session.run("MATCH (nt:NoteType {name: 'footnote'}) DETACH DELETE nt")
+
+        for _ in range(2):
+            response = await client.post(
+                f"/v2/editions/{edition_id}/footnotes", json=[{"position": 5, "text": "Footnote"}]
+            )
+            assert response.status_code == 201
+
+        async with test_database.get_session() as session:
+            result = await session.run("MATCH (nt:NoteType {name: 'footnote'}) RETURN count(nt) AS count")
+            assert (await result.single())["count"] == 1
+        assert len((await client.get(f"/v2/editions/{edition_id}/footnotes")).json()) == 2
+
+    async def test_footnotes_and_durchens_are_kept_apart(self, client, test_database, test_person_data):
+        edition_id = await self._create_edition(test_database, test_person_data)
+        # An empty-span durchen has the same shape as a footnote; only its type tells them apart.
+        durchen_response = await client.post(
+            f"/v2/editions/{edition_id}/durchens", json=[{"span": {"start": 5, "end": 5}, "text": "Durchen"}]
+        )
+        durchen_id = durchen_response.json()[0]["id"]
+        footnote_response = await client.post(
+            f"/v2/editions/{edition_id}/footnotes", json=[{"position": 5, "text": "Footnote"}]
+        )
+        footnote_id = footnote_response.json()[0]["id"]
+
+        assert [n["id"] for n in (await client.get(f"/v2/editions/{edition_id}/durchens")).json()] == [durchen_id]
+        assert [n["id"] for n in (await client.get(f"/v2/editions/{edition_id}/footnotes")).json()] == [footnote_id]
+        assert (await client.get(f"/v2/durchens/{footnote_id}")).status_code == 404
+        assert (await client.get(f"/v2/footnotes/{durchen_id}")).status_code == 404
+
+        assert (await client.delete(f"/v2/durchens/{footnote_id}")).status_code == 204
+        assert (await client.delete(f"/v2/footnotes/{durchen_id}")).status_code == 204
+        assert (await client.get(f"/v2/footnotes/{footnote_id}")).status_code == 200
+        assert (await client.get(f"/v2/durchens/{durchen_id}")).status_code == 200
+
+
 class TestYigchung(TestAnnotationsEndpoints):
     """Tests for the yigchung mark annotation endpoints."""
 
@@ -811,6 +1020,10 @@ class TestDeleteEditionWithAnnotations(TestAnnotationsEndpoints):
         note_item = NoteInput(span=Span(start=5, end=10), text="Test note")
         note_id = await test_database.annotation.note.add_durchen(source_edition_id, note_item)
 
+        [footnote_id] = await test_database.annotation.note.add_footnotes(
+            source_edition_id, [FootnoteInput(position=20, text="Test footnote")]
+        )
+
         mark_item = MarkInput(span=Span(start=10, end=15))
         mark_id = await test_database.annotation.mark.add_yigchung(source_edition_id, mark_item)
 
@@ -837,6 +1050,7 @@ class TestDeleteEditionWithAnnotations(TestAnnotationsEndpoints):
         assert (await client.get(f"/v2/paginations/{pagination_id}")).status_code == 200
         assert (await client.get(f"/v2/bibliographic/{bibliographic_id}")).status_code == 200
         assert (await client.get(f"/v2/durchens/{note_id}")).status_code == 200
+        assert (await client.get(f"/v2/footnotes/{footnote_id}")).status_code == 200
         assert (await client.get(f"/v2/yigchungs/{mark_id}")).status_code == 200
         alignment_get_response = await client.get(
             f"/v2/editions/{source_edition_id}/alignments/{target_edition_id}"
@@ -850,6 +1064,7 @@ class TestDeleteEditionWithAnnotations(TestAnnotationsEndpoints):
         assert (await client.get(f"/v2/paginations/{pagination_id}")).status_code == 404
         assert (await client.get(f"/v2/bibliographic/{bibliographic_id}")).status_code == 404
         assert (await client.get(f"/v2/durchens/{note_id}")).status_code == 404
+        assert (await client.get(f"/v2/footnotes/{footnote_id}")).status_code == 404
         assert (await client.get(f"/v2/yigchungs/{mark_id}")).status_code == 404
         alignment_get_response = await client.get(
             f"/v2/editions/{source_edition_id}/alignments/{target_edition_id}"

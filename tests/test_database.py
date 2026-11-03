@@ -1207,6 +1207,57 @@ class TestSpanAdjustmentFunctions:
         result = _adjust_annotation_for_replace(start=10, end=30, replace_start=15, replace_end=20, new_len=3)
         assert result == (10, 28)
 
+    # Footnotes are empty spans (start == end) in a 10-character text.
+    @pytest.mark.parametrize(
+        ("point", "insert_pos", "expected"),
+        [
+            (0, 0, (3, 3)),  # text inserted at a footnote lands before the marker
+            (5, 5, (8, 8)),
+            (10, 10, (13, 13)),  # end footnote follows appended text
+            (5, 2, (8, 8)),
+            (5, 7, (5, 5)),
+        ],
+    )
+    async def test_footnote_insert(self, point, insert_pos, expected):
+        from database.span_database import _adjust_annotation_for_insert
+
+        assert _adjust_annotation_for_insert(start=point, end=point, insert_pos=insert_pos, insert_len=3) == expected
+
+    @pytest.mark.parametrize(
+        ("point", "del_start", "del_end", "expected"),
+        [
+            (5, 0, 5, (0, 0)),  # deleting text just before keeps the footnote
+            (5, 5, 10, (5, 5)),  # deleting text just after keeps the footnote
+            (5, 3, 7, None),  # deleting text on both sides removes the footnote
+            (0, 0, 10, (0, 0)),  # an edge footnote survives deleting everything
+            (10, 0, 10, (0, 0)),
+        ],
+    )
+    async def test_footnote_delete(self, point, del_start, del_end, expected):
+        from database.span_database import _adjust_span_for_delete
+
+        assert _adjust_span_for_delete(start=point, end=point, del_start=del_start, del_end=del_end) == expected
+
+    @pytest.mark.parametrize(
+        ("point", "replace_start", "replace_end", "expected"),
+        [
+            (5, 5, 8, (5, 5)),  # replacement starting at the footnote stays after it
+            (5, 2, 5, (6, 6)),  # replacement ending at the footnote shifts it
+            (5, 3, 7, None),  # replacement around the footnote removes it
+            (0, 0, 10, (0, 0)),
+            (10, 0, 10, (4, 4)),
+        ],
+    )
+    async def test_footnote_replace(self, point, replace_start, replace_end, expected):
+        from database.span_database import _adjust_annotation_for_replace
+
+        assert (
+            _adjust_annotation_for_replace(
+                start=point, end=point, replace_start=replace_start, replace_end=replace_end, new_len=4
+            )
+            == expected
+        )
+
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestSpanAdjustmentEdgeCases:

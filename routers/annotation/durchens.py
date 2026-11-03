@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Path, status
 
 from dependencies import get_api_key, get_db
 from models.annotation import NoteOutput
+from models.enums import NoteType
 
 if TYPE_CHECKING:
     from database import Database
@@ -25,7 +26,7 @@ async def get_durchen(
     db: Annotated[Database, Depends(get_db)],
 ) -> NoteOutput:
     """Get a durchen annotation."""
-    return await db.annotation.note.get(durchen_id)
+    return await db.annotation.note.get(durchen_id, NoteType.DURCHEN)
 
 
 @router.delete(
@@ -40,4 +41,4 @@ async def delete_durchen(
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     """Delete a durchen note annotation."""
-    await db.annotation.note.delete(durchen_id)
+    await db.annotation.note.delete(durchen_id, NoteType.DURCHEN)
