@@ -4,7 +4,7 @@ Editions are concrete versions of a text. The metadata lives in Neo4j and the ba
 
 ## Concepts
 
-- **Diplomatic edition**: A transcription of a source. Requires `metadata.type = "diplomatic"`, a `bdrc` value, and a `pagination` annotation at creation.
+- **Diplomatic edition**: A transcription of a source. Requires `metadata.type = "diplomatic"`, a `bdrc` value, and a `pagination` annotation at creation. May also include `segmentation`.
 - **Critical edition**: A scholarly edition. Must not include `bdrc`, and requires a `segmentation` annotation at creation.
 - **Collated edition**: Accepted by the metadata enum, but the create request does not enforce initial pagination or segmentation for this type.
 - **Content operations**: Insert, delete, and replace operations update stored base text and adjust stored spans for annotations on the edition, including the cues of its recordings.
@@ -180,9 +180,9 @@ curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/TXT123/editions?edition_type=
 POST /v2/texts/{text_id}/editions
 ```
 
-Creates an edition, stores its content, creates the required initial annotation, and requests a best-effort content-search update.
+Creates an edition, stores its content, creates the supplied initial annotations, and requests a best-effort content-search update.
 
-Diplomatic request:
+Diplomatic request with optional segmentation:
 
 ```json
 {
@@ -200,11 +200,17 @@ Diplomatic request:
           {
             "reference": "1a",
             "lines": [
-              {"start": 0, "end": 100}
+              {"start": 0, "end": 28}
             ]
           }
         ]
       }
+    ]
+  },
+  "segmentation": {
+    "segments": [
+      {"lines": [{"start": 0, "end": 16}]},
+      {"lines": [{"start": 16, "end": 28}]}
     ]
   }
 }
@@ -251,8 +257,8 @@ Important validation rules:
 
 - `content` is required and must contain at least one non-whitespace character.
 - `content` is stored exactly as submitted, including leading and trailing whitespace.
-- Span offsets must not extend past the end of `content`.
-- Diplomatic editions require `metadata.bdrc` and `pagination`; they must not include `segmentation`.
+- Span offsets in both pagination and segmentation must not extend past the end of `content`.
+- Diplomatic editions require `metadata.bdrc` and `pagination`; they may also include `segmentation` in the same request.
 - Critical editions must not include `metadata.bdrc`; they require `segmentation` and must not include `pagination`.
 - `alt_incipit_titles` can only be set when `incipit_title` is set.
 - Every span must satisfy `0 <= start <= end`; see [span layout rules](#span-layout-rules).

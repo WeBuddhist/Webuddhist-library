@@ -90,12 +90,12 @@ class EditionRequestModel(OpenPechaModel):
 
     @model_validator(mode="after")
     def validate_spans_within_content(self) -> Self:
-        annotation = self.segmentation or self.pagination
-        if annotation and annotation.max_end > len(self.content):
-            raise ValueError(
-                f"annotation spans extend to {annotation.max_end} but content is {len(self.content)} characters; "
-                "spans must be Unicode code point offsets into the submitted content"
-            )
+        for annotation in (self.segmentation, self.pagination):
+            if annotation is not None and annotation.max_end > len(self.content):
+                raise ValueError(
+                    f"annotation spans extend to {annotation.max_end} but content is {len(self.content)} characters; "
+                    "spans must be Unicode code point offsets into the submitted content"
+                )
         return self
 
     @model_validator(mode="after")
@@ -105,11 +105,8 @@ class EditionRequestModel(OpenPechaModel):
                 raise ValueError("Critical editions must have segmentation_annotation")
             if self.pagination:
                 raise ValueError("Critical editions must not have pagination_annotation")
-        elif self.metadata.type is EditionType.DIPLOMATIC:
-            if not self.pagination:
-                raise ValueError("Diplomatic editions must have pagination_annotation")
-            if self.segmentation:
-                raise ValueError("Diplomatic editions must not have segmentation_annotation")
+        elif self.metadata.type is EditionType.DIPLOMATIC and not self.pagination:
+            raise ValueError("Diplomatic editions must have pagination_annotation")
 
         return self
 

@@ -433,8 +433,9 @@ class TestCreateEdition(TestEditionsEndpoints):
         assert second_response.status_code == 422
         assert "error" in second_response.json()
 
-    async def test_create_edition_round_trip(self, client, test_database, test_person_data):
-        """Test creating an edition and retrieving it"""
+    @pytest.mark.parametrize("include_segmentation", [False, True])
+    async def test_create_edition_round_trip(self, client, test_database, test_person_data, include_segmentation):
+        """Diplomatic editions retain content, metadata, pagination, and optional segmentation."""
         person_id = await self._create_test_person(test_database, test_person_data)
         text_id = await self._create_test_text(test_database, person_id)
 
@@ -454,8 +455,16 @@ class TestCreateEdition(TestEditionsEndpoints):
             },
         }
 
+        if include_segmentation:
+            edition_data["segmentation"] = {
+                "segments": [
+                    {"lines": [{"start": 0, "end": 10}]},
+                    {"lines": [{"start": 10, "end": 23}]},
+                ],
+            }
+
         post_response = await client.post(f"/v2/texts/{text_id}/editions", json=edition_data)
-        assert post_response.status_code == 201
+        assert post_response.status_code == 201, post_response.json()
         edition_id = post_response.json()["id"]
 
         content_response = await client.get(f"/v2/editions/{edition_id}/content")
@@ -468,6 +477,19 @@ class TestCreateEdition(TestEditionsEndpoints):
         assert metadata["bdrc"] == "W12345"
         assert metadata["wiki"] == "Q123456"
         assert metadata["colophon"] == "Test colophon"
+
+        pagination_response = await client.get(f"/v2/editions/{edition_id}/pagination")
+        assert pagination_response.status_code == 200
+        assert pagination_response.json()["volumes"][0]["pages"] == edition_data["pagination"]["volumes"][0]["pages"]
+
+        segments_response = await client.get(f"/v2/editions/{edition_id}/segmentation/segments")
+        if include_segmentation:
+            assert segments_response.status_code == 200
+            assert [s["lines"] for s in segments_response.json()["items"]] == [
+                s["lines"] for s in edition_data["segmentation"]["segments"]
+            ]
+        else:
+            assert segments_response.status_code == 404
 
     async def test_create_edition_preserves_surrounding_whitespace(self, client, test_database, test_person_data):
         """Content must be stored verbatim so annotation offsets stay valid"""

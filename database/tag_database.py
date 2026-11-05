@@ -175,7 +175,11 @@ class TagDatabase:
             await lock_nodes(tx, "Tag", [tag_id])
             result = await tx.run(TagDatabase.TAG_WORK_QUERY, work_id=work_id, tag_id=tag_id, application=application)
             if not await result.single():
-                raise DataNotFoundError(f"Work '{work_id}' or Tag '{tag_id}' not found")
+                result = await tx.run("MATCH (w:Work {id: $id}) RETURN w.id", id=work_id)
+                if await result.single() is None:
+                    raise DataNotFoundError(f"Work '{work_id}' not found")
+                scope = f" in application '{application}'" if application is not None else ""
+                raise DataNotFoundError(f"Tag '{tag_id}' not found{scope}")
 
         async with self.session as session:
             await session.execute_write(write)
