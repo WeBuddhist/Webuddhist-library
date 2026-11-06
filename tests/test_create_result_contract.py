@@ -39,8 +39,10 @@ from exceptions import DataNotFoundError, DataValidationError
 from models.annotation import (
     BibliographicMetadataInput,
     FootnoteInput,
+    FootnoteOutput,
     MarkInput,
     NoteInput,
+    NoteOutput,
     Page,
     PaginationInput,
     SegmentationInput,
@@ -170,8 +172,7 @@ async def test_footnote_create_rejects_position_beyond_content(monkeypatch):
     "query",
     [
         NoteDatabase.GET_BY_ID_QUERY,
-        NoteDatabase.GET_FOOTNOTE_BY_ID_QUERY,
-        NoteDatabase.GET_FOOTNOTES_BY_EDITION_ID_QUERY,
+        NoteDatabase.GET_BY_EDITION_ID_QUERY,
         NoteDatabase.GET_EDITION_ID_QUERY,
         NoteDatabase.DELETE_QUERY,
         NoteDatabase.DELETE_ALL_BY_TYPE_QUERY,
@@ -179,6 +180,28 @@ async def test_footnote_create_rejects_position_beyond_content(monkeypatch):
 )
 def test_note_queries_filter_by_note_type(query):
     assert "NoteType {name: $note_type}" in query
+
+
+def test_footnote_output_takes_position_from_note_span():
+    note = NoteOutput(
+        id="note-id",
+        edition_id="edition-id",
+        text_id="text-id",
+        span=Span(start=7, end=7),
+        text="footnote",
+        metadata={"name": "Citation"},
+    )
+
+    footnote = FootnoteOutput.from_note(note)
+
+    assert footnote.model_dump() == {
+        "id": "note-id",
+        "edition_id": "edition-id",
+        "text_id": "text-id",
+        "position": 7,
+        "text": "footnote",
+        "metadata": {"name": "Citation"},
+    }
 
 
 async def test_delete_note_touches_its_edition_then_deletes(monkeypatch):

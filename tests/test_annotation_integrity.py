@@ -6,6 +6,7 @@ from exceptions import DataValidationError
 from identifier import generate_id
 from models.annotation import NoteInput, PaginationInput, SegmentationInput
 from models.edition import EditionInput
+from models.enums import NoteType
 from models.text import TextInput
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -214,7 +215,9 @@ async def test_content_edits_move_footnotes(test_database, mock_storage, operati
         edition_id, [FootnoteInput(position=position, text=f"At {position}") for position in (0, 3, 5, 7, 10)]
     )
     await edit_content(db, mock_storage, edition_id, ContentOperation.model_validate(operation))
-    assert [note.position for note in await db.annotation.note.get_all_footnotes(edition_id)] == expected
+    notes = await db.annotation.note.get_all(edition_id, NoteType.FOOTNOTE)
+    assert [note.span.start for note in notes] == expected
+    assert all(note.span.start == note.span.end for note in notes)
 
 
 @pytest.mark.parametrize(

@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from database.database import Database
-from models.annotation import FootnoteInput, FootnoteOutput, NoteInput, NoteOutput, SingleSpanAnnotation, Span
+from models.annotation import FootnoteInput, NoteInput, NoteOutput, SingleSpanAnnotation, Span
 from models.enums import NoteType
 
 from .single_span import (
@@ -16,16 +16,6 @@ from .single_span import (
     SINGLE_SPAN_RETURN,
     create_single_span_annotation,
 )
-
-# A footnote is stored as an empty span, so its position is the span start.
-FOOTNOTE_RETURN: LiteralString = """
-    annotation.id AS id,
-    edition.id AS edition_id,
-    text.id AS text_id,
-    annotation.text AS text,
-    span.start AS position,
-    [(annotation)-[:HAS_METADATA]->(metadata:AnnotationMetadata) | metadata {.name}][0] AS metadata
-"""
 
 
 class NoteDatabase:
@@ -47,25 +37,7 @@ class NoteDatabase:
     MATCH (span:Span)-[:SPAN_OF]->(annotation)
 
     RETURN annotation.text AS text, {SINGLE_SPAN_RETURN}
-    ORDER BY span.start, span.end
-    """
-
-    GET_FOOTNOTE_BY_ID_QUERY: LiteralString = f"""
-    MATCH (span:Span)-[:SPAN_OF]->(annotation:Note {{id: $note_id}})
-        -[:HAS_TYPE]->(:NoteType {{name: $note_type}}),
-        (annotation)-[:NOTE_OF]->(edition:Edition)-[:EDITION_OF]->(text:Text)
-
-    RETURN {FOOTNOTE_RETURN}
-    """
-
-    GET_FOOTNOTES_BY_EDITION_ID_QUERY: LiteralString = f"""
-    MATCH (edition:Edition {{id: $edition_id}})<-[:NOTE_OF]-(annotation:Note)
-        -[:HAS_TYPE]->(:NoteType {{name: $note_type}}),
-        (edition)-[:EDITION_OF]->(text:Text)
-    MATCH (span:Span)-[:SPAN_OF]->(annotation)
-
-    RETURN {FOOTNOTE_RETURN}
-    ORDER BY position, id
+    ORDER BY span.start, span.end, id
     """
 
     # MERGE creates a note type on first use, so a new type needs no data migration.
@@ -120,31 +92,6 @@ class NoteDatabase:
                 note_type=str(note_type),
             )
             return [NoteOutput.model_validate(record) for record in await result.data()]
-
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_value, edition_id, read)
-
-    async def get_footnote(self, note_id: str) -> FootnoteOutput:
-        async def read(tx: AsyncManagedTransaction) -> FootnoteOutput:
-            result = await tx.run(
-                NoteDatabase.GET_FOOTNOTE_BY_ID_QUERY, note_id=note_id, note_type=str(NoteType.FOOTNOTE)
-            )
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Footnote with ID '{note_id}' not found")
-            return FootnoteOutput.model_validate(record)
-
-        async with self._db.get_session() as session:
-            return await session.execute_read(read)
-
-    async def get_all_footnotes(self, edition_id: str) -> list[FootnoteOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[FootnoteOutput]:
-            result = await tx.run(
-                NoteDatabase.GET_FOOTNOTES_BY_EDITION_ID_QUERY,
-                edition_id=edition_id,
-                note_type=str(NoteType.FOOTNOTE),
-            )
-            return [FootnoteOutput.model_validate(record) for record in await result.data()]
 
         async with self._db.get_session() as session:
             return await session.execute_read(read_value, edition_id, read)

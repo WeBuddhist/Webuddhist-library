@@ -26,7 +26,7 @@ async def get_footnote(
     db: Annotated[Database, Depends(get_db)],
 ) -> FootnoteOutput:
     """Get a footnote annotation."""
-    return await db.annotation.note.get_footnote(footnote_id)
+    return FootnoteOutput.from_note(await db.annotation.note.get(footnote_id, NoteType.FOOTNOTE))
 
 
 @router.delete(

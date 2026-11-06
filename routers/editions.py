@@ -317,7 +317,8 @@ async def get_footnote_annotations(
     _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[FootnoteOutput]:
-    return await db.annotation.note.get_all_footnotes(edition_id)
+    notes = await db.annotation.note.get_all(edition_id, NoteType.FOOTNOTE)
+    return [FootnoteOutput.from_note(note) for note in notes]
 
 
 @router.post(
