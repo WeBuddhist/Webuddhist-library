@@ -6,6 +6,7 @@ from exceptions import DataValidationError
 from identifier import generate_id
 from models.annotation import NoteInput, PaginationInput, SegmentationInput
 from models.edition import EditionInput
+from models.enums import NoteType
 from models.text import TextInput
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -178,6 +179,45 @@ async def test_marker_only_segments_stay_empty_through_content_edits(test_databa
     after = await db.annotation.segmentation.get_all_segments_by_edition(edition_id)
     assert [s.id for s in after] == [s.id for s in before]
     assert [(line.start, line.end) for s in after for line in s.lines] == expected
+
+
+@pytest.mark.parametrize(
+    "operation,expected",
+    [
+        ({"type": "insert", "position": 5, "text": "XX"}, [0, 3, 7, 9, 12]),  # inserted text lands before the marker
+        ({"type": "insert", "position": 10, "text": "XX"}, [0, 3, 5, 7, 12]),
+        ({"type": "delete", "start": 3, "end": 7}, [0, 3, 3, 6]),  # only the footnote strictly inside is removed
+        ({"type": "delete", "start": 0, "end": 5}, [0, 0, 2, 5]),  # the start footnote survives
+        ({"type": "delete", "start": 5, "end": 10}, [0, 3, 5, 5]),  # the end footnote survives
+        ({"type": "replace", "start": 3, "end": 7, "text": "X"}, [0, 3, 4, 7]),
+        ({"type": "replace", "start": 5, "end": 7, "text": "XYZ"}, [0, 3, 5, 8, 11]),
+    ],
+)
+async def test_content_edits_move_footnotes(test_database, mock_storage, operation, expected):
+    from content_service import create_edition, edit_content
+    from models.annotation import FootnoteInput
+    from models.content_operation import ContentOperation
+    from models.requests import EditionRequestModel
+
+    db = test_database
+    text = await db.text.create(TextInput(title={"en": "Footnote edits"}, language="en", category_id="category"))
+    edition_id = await create_edition(
+        db,
+        mock_storage,
+        text,
+        EditionRequestModel(
+            metadata={"type": "critical"},
+            content="0123456789",
+            segmentation={"segments": [{"lines": [{"start": 0, "end": 10}]}]},
+        ),
+    )
+    await db.annotation.note.add_footnotes(
+        edition_id, [FootnoteInput(position=position, text=f"At {position}") for position in (0, 3, 5, 7, 10)]
+    )
+    await edit_content(db, mock_storage, edition_id, ContentOperation.model_validate(operation))
+    notes = await db.annotation.note.get_all(edition_id, NoteType.FOOTNOTE)
+    assert [note.span.start for note in notes] == expected
+    assert all(note.span.start == note.span.end for note in notes)
 
 
 @pytest.mark.parametrize(

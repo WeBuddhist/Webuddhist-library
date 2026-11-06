@@ -257,6 +257,40 @@ class NoteOutput(NoteBase):
     text_id: NonEmptyStr
 
 
+class FootnoteBase(OpenPechaModel):
+    """A footnote anchored to a point in the content rather than a range, rendered as a marker.
+
+    `position` is a gap index: the marker sits before the character at `position`, so 0 is before the
+    first character and the content length is after the last one.
+    """
+
+    position: int = Field(..., ge=0, description="Gap index where the marker sits (0 to content length, inclusive)")
+    text: NonEmptyStr
+    metadata: AnnotationMetadata | None = None
+
+
+class FootnoteInput(FootnoteBase):
+    pass
+
+
+class FootnoteOutput(FootnoteBase):
+    id: NonEmptyStr
+    edition_id: NonEmptyStr
+    text_id: NonEmptyStr
+
+    @classmethod
+    def from_note(cls, note: NoteOutput) -> Self:
+        """A footnote is stored as a note with an empty span; its position is the span start."""
+        return cls(
+            id=note.id,
+            edition_id=note.edition_id,
+            text_id=note.text_id,
+            position=note.span.start,
+            text=note.text,
+            metadata=note.metadata,
+        )
+
+
 class MarkInput(SingleSpanAnnotation):
     pass
 

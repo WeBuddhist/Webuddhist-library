@@ -222,6 +222,7 @@ async def test_database(_neo4j_database):
             CREATE (:LicenseType {name: 'copyrighted'})
             CREATE (:LicenseType {name: 'unknown'})
             CREATE (:NoteType {name: 'durchen'})
+            CREATE (:NoteType {name: 'footnote'})
             CREATE (:BibliographyType {name: 'colophon'})
             CREATE (:BibliographyType {name: 'incipit'})
             CREATE (:BibliographyType {name: 'alt_incipit'})

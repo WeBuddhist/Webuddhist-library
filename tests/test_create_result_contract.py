@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import database.annotation.note_database as note_module
 import database.annotation.pagination_database as pagination_module
 import database.annotation.segmentation_database as segmentation_module
 import database.annotation.single_span as single_span_module
@@ -34,10 +35,14 @@ from database.person_database import PersonDatabase
 from database.recording_database import RecordingDatabase
 from database.tag_database import TagDatabase
 from database.text_database import TextDatabase
+from exceptions import DataNotFoundError, DataValidationError
 from models.annotation import (
     BibliographicMetadataInput,
+    FootnoteInput,
+    FootnoteOutput,
     MarkInput,
     NoteInput,
+    NoteOutput,
     Page,
     PaginationInput,
     SegmentationInput,
@@ -45,7 +50,7 @@ from models.annotation import (
     Span,
     Volume,
 )
-from models.enums import AudioFormat, BibliographyType, MarkType
+from models.enums import AudioFormat, BibliographyType, MarkType, NoteType
 
 
 class TrackingResult:
@@ -124,6 +129,123 @@ async def test_note_create_strictly_returns_neo4j_id(monkeypatch, skip_span_vali
     )
 
     assert_strict_neo4j_id(create_result, returned_id, "id")
+
+
+class RecordingTransaction:
+    def __init__(self, record=None):
+        self.record = record
+        self.calls = []
+
+    async def run(self, query, parameters=None, **params):
+        self.calls.append((query, {**(parameters or {}), **params}))
+        return TrackingResult(self.record)
+
+
+@pytest.mark.parametrize("position", [0, 1])
+async def test_footnote_create_stores_empty_span_with_note_type(monkeypatch, skip_span_validation, position):
+    monkeypatch.setattr(single_span_module, "generate_id", lambda: "submitted-footnote-id")
+    tx = RecordingTransaction({"id": "neo4j-footnote-id"})
+
+    returned_id = await NoteDatabase.add_footnote_with_transaction(
+        tx, "edition-id", FootnoteInput(position=position, text="footnote")
+    )
+
+    assert returned_id == "neo4j-footnote-id"
+    [(query, params)] = tx.calls
+    assert query == NoteDatabase.CREATE_QUERY
+    assert (params["span_start"], params["span_end"]) == (position, position)
+    assert params["note_type"] == "footnote"
+
+
+async def test_footnote_create_rejects_position_beyond_content(monkeypatch):
+    state = ContentState("edition-id", "text-id", "key", 5, 0)
+    monkeypatch.setattr(single_span_module, "touch_edition", AsyncMock(return_value=state))
+    tx = RecordingTransaction()
+
+    with pytest.raises(DataValidationError):
+        await NoteDatabase.add_footnote_with_transaction(tx, "edition-id", FootnoteInput(position=6, text="footnote"))
+
+    assert tx.calls == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        NoteDatabase.GET_BY_ID_QUERY,
+        NoteDatabase.GET_BY_EDITION_ID_QUERY,
+        NoteDatabase.GET_EDITION_ID_QUERY,
+        NoteDatabase.DELETE_QUERY,
+        NoteDatabase.DELETE_ALL_BY_TYPE_QUERY,
+    ],
+)
+def test_note_queries_filter_by_note_type(query):
+    assert "NoteType {name: $note_type}" in query
+
+
+def test_footnote_output_takes_position_from_note_span():
+    note = NoteOutput(
+        id="note-id",
+        edition_id="edition-id",
+        text_id="text-id",
+        span=Span(start=7, end=7),
+        text="footnote",
+        metadata={"name": "Citation"},
+    )
+
+    footnote = FootnoteOutput.from_note(note)
+
+    assert footnote.model_dump() == {
+        "id": "note-id",
+        "edition_id": "edition-id",
+        "text_id": "text-id",
+        "position": 7,
+        "text": "footnote",
+        "metadata": {"name": "Citation"},
+    }
+
+
+async def test_delete_note_touches_its_edition_then_deletes(monkeypatch):
+    touch = AsyncMock()
+    monkeypatch.setattr(note_module, "touch_edition", touch)
+    tx = RecordingTransaction({"edition_id": "edition-id"})
+
+    await NoteDatabase.delete_with_transaction(tx, "note-id", NoteType.FOOTNOTE)
+
+    touch.assert_awaited_once_with(tx, "edition-id")
+    params = {"note_id": "note-id", "note_type": "footnote"}
+    assert tx.calls == [(NoteDatabase.GET_EDITION_ID_QUERY, params), (NoteDatabase.DELETE_QUERY, params)]
+
+
+async def test_delete_note_of_other_type_touches_nothing(monkeypatch):
+    touch = AsyncMock()
+    monkeypatch.setattr(note_module, "touch_edition", touch)
+    tx = RecordingTransaction(None)
+
+    await NoteDatabase.delete_with_transaction(tx, "durchen-id", NoteType.FOOTNOTE)
+
+    touch.assert_not_awaited()
+    assert tx.calls == [(NoteDatabase.GET_EDITION_ID_QUERY, {"note_id": "durchen-id", "note_type": "footnote"})]
+
+
+async def test_delete_all_footnotes_touches_edition_and_sends_note_type(monkeypatch):
+    touch = AsyncMock()
+    monkeypatch.setattr(note_module, "touch_edition", touch)
+    tx = RecordingTransaction()
+
+    await NoteDatabase(FakeDatabase(tx)).delete_all_footnotes("edition-id")
+
+    touch.assert_awaited_once_with(tx, "edition-id")
+    assert tx.calls == [(NoteDatabase.DELETE_ALL_BY_TYPE_QUERY, {"edition_id": "edition-id", "note_type": "footnote"})]
+
+
+async def test_delete_all_footnotes_raises_when_edition_missing(monkeypatch):
+    monkeypatch.setattr(note_module, "touch_edition", AsyncMock(side_effect=DataNotFoundError("missing")))
+    tx = RecordingTransaction()
+
+    with pytest.raises(DataNotFoundError):
+        await NoteDatabase(FakeDatabase(tx)).delete_all_footnotes("missing")
+
+    assert tx.calls == []
 
 
 async def test_bibliographic_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):

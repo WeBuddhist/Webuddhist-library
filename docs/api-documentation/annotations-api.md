@@ -13,6 +13,7 @@ Annotations attach structured information to edition content using character spa
 - **Table of contents**: A table-of-contents style hierarchy for an edition. Each section has a character span, localized title, optional localized summary, and optional nested subsections.
 - **Bibliographic metadata**: Span-level metadata such as colophon, title, incipit, or author.
 - **Durchen note**: A span-level critical apparatus note.
+- **Footnote**: A note anchored to a point (source citation, author's note, etc.) shown as a marker between characters. It carries a `position` instead of a span.
 - **Yigchung mark**: A span-only mark with no text or value payload.
 
 ## Authentication
@@ -25,7 +26,7 @@ X-API-Key: your_api_key
 
 ## Create and List Annotations on an Edition
 
-Annotations are created and listed by type under an edition. Durchen and Yigchung batch creation return arrays of ID objects; other `POST` endpoints return `{ "id": "..." }`.
+Annotations are created and listed by type under an edition. Durchen, Footnote and Yigchung batch creation return arrays of ID objects; other `POST` endpoints return `{ "id": "..." }`.
 
 | Type | List | Create |
 |------|------|--------|
@@ -34,6 +35,7 @@ Annotations are created and listed by type under an edition. Durchen and Yigchun
 | Table of contents | `GET /v2/editions/{edition_id}/table-of-contents` | `POST /v2/editions/{edition_id}/table-of-contents` |
 | Bibliographic metadata | `GET /v2/editions/{edition_id}/bibliographic` | `POST /v2/editions/{edition_id}/bibliographic` |
 | Durchen notes | `GET /v2/editions/{edition_id}/durchens` | `POST /v2/editions/{edition_id}/durchens` |
+| Footnotes | `GET /v2/editions/{edition_id}/footnotes` | `POST /v2/editions/{edition_id}/footnotes` (delete all: `DELETE /v2/editions/{edition_id}/footnotes`) |
 | Yigchung marks | `GET /v2/editions/{edition_id}/yigchungs` | `POST /v2/editions/{edition_id}/yigchungs` |
 
 
@@ -205,6 +207,36 @@ The request must contain at least one item. All notes are created atomically, an
   {"id": "DUR124"}
 ]
 ```
+
+### Create Footnotes
+
+```json
+[
+  {"position": 0, "text": "Footnote before the first character"},
+  {"position": 450, "text": "Cited from Degé Tengyur, vol. 34", "metadata": {"name": "Citation"}},
+  {"position": 1200, "text": "Footnote after the last character"}
+]
+```
+
+`position` is a gap index between characters: `0` is before the first character, the content length is after the last one, and a footnote at `position` sits before the character at that index. Positions count Unicode code points, like spans. Adding footnotes never changes the content. The request must contain at least one item. All footnotes are created atomically, and the response preserves request order:
+
+```json
+[
+  {"id": "FTN123"},
+  {"id": "FTN124"},
+  {"id": "FTN125"}
+]
+```
+
+A position past the content length returns `422` and nothing is created. Listed footnotes are ordered by `position`, then by `id` when several footnotes share a position.
+
+### Delete All Footnotes
+
+```http
+DELETE /v2/editions/{edition_id}/footnotes
+```
+
+Deletes every footnote on the edition in one transaction and returns `204 No Content`, including when the edition has no footnotes. Durchen notes are not affected. An unknown edition returns `404`.
 
 ### Create Yigchung Marks
 
@@ -444,6 +476,30 @@ Response:
 }
 ```
 
+Only durchen notes are returned or deleted here; a footnote ID returns `404` on `GET` and is left untouched by `DELETE`.
+
+### Footnote
+
+```http
+GET /v2/footnotes/{footnote_id}
+DELETE /v2/footnotes/{footnote_id}
+```
+
+Response:
+
+```json
+{
+  "id": "FTN124",
+  "edition_id": "ED123",
+  "text_id": "TXT123",
+  "position": 450,
+  "text": "Cited from Degé Tengyur, vol. 34",
+  "metadata": {"name": "Citation"}
+}
+```
+
+Only footnotes are returned or deleted here; a durchen ID returns `404` on `GET` and is left untouched by `DELETE`.
+
 ### Yigchung Mark
 
 ```http
@@ -486,6 +542,16 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/durchens" \
 curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/durchens/DUR123" \
   -H "X-API-Key: your_api_key"
 
+curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/footnotes" \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"position": 450, "text": "Cited from Degé Tengyur, vol. 34"}
+  ]'
+
+curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/footnotes" \
+  -H "X-API-Key: your_api_key"
+
 curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/yigchungs" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
@@ -515,3 +581,4 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/table-of-con
 - Models live in `models/annotation.py`.
 - Content changes through `PATCH /v2/editions/{edition_id}/content` adjust affected spans automatically.
 - Neo4j deployment for Yigchung support must apply `database/neo4j_constraints.cypher` and reinstall triggers. Creation automatically merges the `yigchung` mark type.
+- A footnote is stored as an empty `Span` (`start == end == position`) on a `Note` node with `HAS_TYPE -> NoteType {name: 'footnote'}`, so content edits move it like any other annotation. Text inserted exactly at a footnote's position lands before the marker, and the footnote is removed only when an edit deletes or replaces text on both sides of it, so footnotes at either end of the content always survive. Creation merges the `footnote` note type, so no data migration is needed.
