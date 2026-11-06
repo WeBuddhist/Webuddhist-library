@@ -1,6 +1,6 @@
 # Audio as its own Expression
 
-Status: proposal, revision 3. Branch `feat/audio-expression-proposal`, up to date with `dev` (`8593529`). Issue: [#449](https://github.com/Webuddhist-tech/Webuddhist-library/issues/449).
+Status: proposal, revision 3. Branch `feat/audio-expression-proposal`, up to date with `dev` (`8593529`). Issue: [#449](https://github.com/WeBuddhist/Webuddhist-library/issues/449).
 
 Revision 2 adds two items from team review:
 
@@ -10,7 +10,7 @@ Revision 2 adds two items from team review:
 Revision 3 adds these items from team review:
 
 1. One Audio is one performance. The migration does not group recordings by artist (rule 7, C9).
-2. This document is the only audio model. It replaces the audio sections of the two older documents (see "Other documents").
+2. This document is the only audio model. It replaces two older drafts (see "Older drafts").
 
 ## Idea
 
@@ -120,16 +120,16 @@ Today the cue span offsets point into the edition of `RECORDING_OF`. In this pro
 | Highlights in other editions through `ALIGNED_TO` segments | Now or later | Later. |
 | Clean up audio files with no rendition | Now or later | Later. |
 
-## Other documents
+## Older drafts
 
-This document is the only audio model. It replaces these sections:
+Two older drafts were on this branch. They are removed. You can find them in commit `b732243`. Do not use their audio model:
 
-| Document | Replaced section | Why |
-|---|---|---|
-| `audio-recordings-and-84000-ingestion.md` | "1. Audio: is the current model correct?" (the proposed change and the segment timings), and steps 3 to 5 of "4. Sequence of the work" | It links Recording to Text with no Audio node, adds a new `Timing` node, and deletes S3 audio on edition delete. |
-| `new-requirements-sections-audio-84000-footnotes.md` | "2. Audio" | It links Audio to `Work` and puts the narrator on the Recording. |
+| Draft | Why it is replaced |
+|---|---|
+| `audio-recordings-and-84000-ingestion.md` | It links Recording to Text with no Audio node, adds a new `Timing` node instead of the existing cues, and deletes S3 audio on edition delete. |
+| `new-requirements-sections-audio-84000-footnotes.md` | It links Audio to `Work` and puts the narrator on the Recording. |
 
-The other sections of these documents (artists in the library, 84000 ingestion, sections, footnotes) stay valid.
+Their other topics (84000 ingestion, text sections, footnotes) are not about audio. They need their own proposal.
 
 ## Not in scope
 
