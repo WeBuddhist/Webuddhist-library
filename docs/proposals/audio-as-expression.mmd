@@ -5,9 +5,9 @@ graph TD
   AudioA["Audio (bo): sung by Artist A<br/>audio Expression"]
   ArtistA["Artist A (Person)"]
   AudioB["Audio (bo): sung by Artist B<br/>second artist = second Audio"]
-  R1["Rendition: without music<br/>has timestamps"]
-  R2["Rendition: with music<br/>no timestamps"]
-  Cue["Cues<br/>start_ms, end_ms"]
+  R1["Rendition: without music<br/>has cues"]
+  R2["Rendition: with music<br/>no cues"]
+  Cue["Cues (already in dev)<br/>start_ms, end_ms + Span"]
 
   Text -->|TEXT_OF| Work
   Edition -->|EDITION_OF| Text
@@ -15,7 +15,7 @@ graph TD
   AudioA -->|AUDIO_OF| Text
   R1 -->|RENDITION_OF| AudioA
   R2 -->|RENDITION_OF| AudioA
-  R1 -->|FOLLOWS| Edition
+  R1 -->|"FOLLOWS (same Text only)"| Edition
   Cue -->|CUE_OF| R1
   Cue -.->|span in| Edition
   AudioA -->|HAS_CONTRIBUTION| ArtistA
