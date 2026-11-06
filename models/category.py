@@ -1,6 +1,6 @@
 from pydantic import Field
 
-from .base import LocalizedString, NonEmptyStr, OpenPechaModel
+from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel
 
 
 class CategoryBase(OpenPechaModel):
@@ -11,6 +11,11 @@ class CategoryBase(OpenPechaModel):
 
 class CategoryInput(CategoryBase):
     pass
+
+
+class CategoryPatch(PatchModel):
+    title: LocalizedString | None = None
+    description: LocalizedString | None = None
 
 
 class CategoryOutput(CategoryBase):

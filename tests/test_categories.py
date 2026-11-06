@@ -6,6 +6,7 @@ Tests endpoints:
 - GET /v2/categories/ (get all categories)
 - GET /v2/categories/{category_id} (get category by ID)
 - POST /v2/categories/ (create category)
+- PATCH /v2/categories/{category_id} (update category localizations)
 
 Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
@@ -16,6 +17,7 @@ import logging
 
 import pytest
 from models.category import CategoryInput
+from tests.graph_assertions import snapshot_graph
 
 logger = logging.getLogger(__name__)
 
@@ -434,6 +436,330 @@ class TestCreateCategoryV2:
         data = response2.json()
         assert "error" in data
         assert "already exists" in data["error"].lower()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+class TestUpdateCategoryV2:
+    """Tests for PATCH /v2/categories/{category_id} endpoint (update category localizations)"""
+
+    async def test_patch_category_adds_title_language(self, client, test_database):
+        """Test adding a title language keeps the existing languages"""
+        category = CategoryInput.model_validate({"title": {"en": "Patch Add Title", "bo": "ཁ་སྣོན་མཚན་བྱང་།"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"zh": "添加标题"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == category_id
+        assert data["title"] == {"en": "Patch Add Title", "bo": "ཁ་སྣོན་མཚན་བྱང་།", "zh": "添加标题"}
+
+        get_response = await client.get(f"/v2/categories/{category_id}", headers=APPLICATION_HEADER)
+        assert get_response.status_code == 200
+        assert get_response.json()["title"] == {"en": "Patch Add Title", "bo": "ཁ་སྣོན་མཚན་བྱང་།", "zh": "添加标题"}
+
+    async def test_patch_category_overwrites_title_language(self, client, test_database):
+        """Test overwriting a title language keeps the other languages"""
+        category = CategoryInput.model_validate({"title": {"en": "Patch Old Title", "bo": "མཚན་བྱང་རྙིང་པ།"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"en": "Patch New Title"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["title"] == {"en": "Patch New Title", "bo": "མཚན་བྱང་རྙིང་པ།"}
+
+    async def test_patch_category_adds_and_overwrites_in_one_request(self, client, test_database):
+        """Test adding and overwriting languages in the same request"""
+        category = CategoryInput.model_validate({"title": {"en": "Patch Mixed Title", "bo": "མཚན་བྱང་།"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"en": "Patch Mixed Title Updated", "zh": "混合标题"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["title"] == {"en": "Patch Mixed Title Updated", "bo": "མཚན་བྱང་།", "zh": "混合标题"}
+
+    async def test_patch_category_adds_description_when_missing(self, client, test_database):
+        """Test adding a description to a category that has none"""
+        category = CategoryInput.model_validate({"title": {"en": "Patch No Description"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"description": {"zh": "新的描述"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["description"] == {"zh": "新的描述"}
+        assert data["title"] == {"en": "Patch No Description"}
+
+    async def test_patch_category_merges_description(self, client, test_database):
+        """Test description languages are added or replaced and the rest are kept"""
+        category = CategoryInput.model_validate(
+            {
+                "title": {"en": "Patch Description Merge"},
+                "description": {"en": "Old description", "bo": "འགྲེལ་བཤད་རྙིང་པ།"},
+            }
+        )
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"description": {"en": "New description", "zh": "描述"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["description"] == {
+            "en": "New description",
+            "bo": "འགྲེལ་བཤད་རྙིང་པ།",
+            "zh": "描述",
+        }
+
+    async def test_patch_category_title_only_keeps_description(self, client, test_database):
+        """Test patching only the title leaves the description unchanged"""
+        category = CategoryInput.model_validate(
+            {"title": {"en": "Patch Title Only"}, "description": {"en": "Untouched description"}}
+        )
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"zh": "仅标题"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["description"] == {"en": "Untouched description"}
+
+    async def test_patch_category_keeps_parent_and_children(self, client, test_database):
+        """Test patching localizations does not change the hierarchy"""
+        parent = CategoryInput.model_validate({"title": {"en": "Patch Hierarchy Parent"}})
+        parent_id = await test_database.category.create(parent, application="test_application")
+        child = CategoryInput.model_validate({"title": {"en": "Patch Hierarchy Child"}, "parent_id": parent_id})
+        child_id = await test_database.category.create(child, application="test_application")
+        grandchild = CategoryInput.model_validate(
+            {"title": {"en": "Patch Hierarchy Grandchild"}, "parent_id": child_id}
+        )
+        grandchild_id = await test_database.category.create(grandchild, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{child_id}",
+            json={"title": {"zh": "子类"}, "description": {"en": "Child description"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["parent_id"] == parent_id
+        assert data["children"] == [grandchild_id]
+
+    async def test_patch_category_with_own_title_allowed(self, client, test_database):
+        """Test resending the category's own title is not treated as a duplicate"""
+        category = CategoryInput.model_validate({"title": {"en": "Patch Own Title"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"en": "Patch Own Title"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["title"] == {"en": "Patch Own Title"}
+
+    async def test_patch_category_duplicate_sibling_title_rejected(self, client, test_database):
+        """Test a title that duplicates a sibling category in the same language is rejected"""
+        sibling = CategoryInput.model_validate({"title": {"zh": "重复标题", "en": "Patch Sibling"}})
+        await test_database.category.create(sibling, application="test_application")
+        category = CategoryInput.model_validate({"title": {"en": "Patch Duplicate Target"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"zh": "重复标题"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 422
+        data = response.json()
+        assert "already exists" in data["error"].lower()
+
+        get_response = await client.get(f"/v2/categories/{category_id}", headers=APPLICATION_HEADER)
+        assert get_response.json()["title"] == {"en": "Patch Duplicate Target"}
+
+    async def test_patch_category_same_title_under_different_parent_allowed(self, client, test_database):
+        """Test a title used by a category under another parent is allowed"""
+        other = CategoryInput.model_validate({"title": {"en": "Patch Other Parent"}})
+        other_id = await test_database.category.create(other, application="test_application")
+        cousin = CategoryInput.model_validate({"title": {"zh": "表亲标题"}, "parent_id": other_id})
+        await test_database.category.create(cousin, application="test_application")
+        category = CategoryInput.model_validate({"title": {"en": "Patch Root Without Cousin"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"zh": "表亲标题"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+
+    async def test_patch_category_not_found(self, client, test_database):
+        """Test patching a nonexistent category returns 404"""
+        response = await client.patch(
+            "/v2/categories/nonexistent_category_id",
+            json={"title": {"zh": "不存在"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 404
+        data = response.json()
+        assert "error" in data
+
+    async def test_patch_category_from_other_application_not_found(self, client, test_database):
+        """Test a category cannot be patched through another application"""
+        await _seed_app_b(test_database)
+        category = CategoryInput.model_validate({"title": {"en": "Patch Cross App"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"zh": "跨应用"}},
+            headers=APP_B_HEADER,
+        )
+
+        assert response.status_code == 404
+
+        get_response = await client.get(f"/v2/categories/{category_id}", headers=APPLICATION_HEADER)
+        assert get_response.json()["title"] == {"en": "Patch Cross App"}
+
+    async def test_patch_category_invalid_application(self, client, test_database):
+        """Test patching with an invalid application returns 404"""
+        response = await client.patch(
+            "/v2/categories/category",
+            json={"title": {"zh": "无效应用"}},
+            headers={"X-Application": "nonexistent_app"},
+        )
+
+        assert response.status_code == 404
+        data = response.json()
+        assert "error" in data
+
+    async def test_patch_category_missing_application_header(self, client, test_database):
+        """Test patching without X-Application header fails"""
+        response = await client.patch("/v2/categories/category", json={"title": {"zh": "无标头"}})
+
+        assert response.status_code == 422
+
+    async def test_patch_category_invalid_language_code(self, client, test_database):
+        """Test patching with a language code not in /v2/languages returns 400"""
+        category = CategoryInput.model_validate({"title": {"en": "Patch Invalid Language"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"xx": "Invalid Language"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "error" in data
+
+    async def test_patch_category_invalid_description_language_rolls_back_title(self, client, test_database):
+        """Test a failing description leaves the graph untouched, including the title"""
+        category = CategoryInput.model_validate(
+            {"title": {"en": "Patch Rollback"}, "description": {"en": "Rollback description"}}
+        )
+        category_id = await test_database.category.create(category, application="test_application")
+        before = await snapshot_graph(test_database)
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"zh": "回滚"}, "description": {"xx": "Invalid Language"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 400
+        assert await snapshot_graph(test_database) == before
+
+    async def test_patch_category_replaces_nomens_without_orphans(self, client, test_database):
+        """Test the old title and description nomens are replaced, not left orphaned"""
+        category = CategoryInput.model_validate(
+            {"title": {"en": "Patch Orphan Check"}, "description": {"en": "Orphan description"}}
+        )
+        category_id = await test_database.category.create(category, application="test_application")
+
+        count_query = """
+            MATCH (c:Category {id: $category_id})
+            RETURN count { (c)-[:HAS_TITLE]->(:Nomen) } AS title_count,
+                   count { (c)-[:HAS_DESCRIPTION]->(:Nomen) } AS description_count,
+                   count { MATCH (n:Nomen) } AS nomen_count,
+                   count { MATCH (lt:LocalizedText) } AS localized_text_count
+        """
+        async with test_database.get_session() as session:
+            before = await (await session.run(count_query, category_id=category_id)).single()
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"zh": "孤儿检查"}, "description": {"zh": "孤儿描述"}},
+            headers=APPLICATION_HEADER,
+        )
+        assert response.status_code == 200
+
+        async with test_database.get_session() as session:
+            after = await (await session.run(count_query, category_id=category_id)).single()
+
+        assert after["title_count"] == 1
+        assert after["description_count"] == 1
+        assert after["nomen_count"] == before["nomen_count"]
+        assert after["localized_text_count"] == before["localized_text_count"] + 2
+
+    async def test_patch_category_empty_body_rejected(self, client, test_database):
+        """Test patching with no fields returns 422"""
+        response = await client.patch("/v2/categories/category", json={}, headers=APPLICATION_HEADER)
+
+        assert response.status_code == 422
+
+    async def test_patch_category_null_field_rejected(self, client, test_database):
+        """Test null fields are rejected instead of clearing localizations"""
+        response = await client.patch(
+            "/v2/categories/category",
+            json={"description": None},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 422
+
+    async def test_patch_category_empty_localization_rejected(self, client, test_database):
+        """Test an empty title mapping returns 422"""
+        response = await client.patch("/v2/categories/category", json={"title": {}}, headers=APPLICATION_HEADER)
+
+        assert response.status_code == 422
+
+    async def test_patch_category_rejects_parent_id(self, client, test_database):
+        """Test parent_id is not accepted by the localization endpoint"""
+        response = await client.patch(
+            "/v2/categories/category",
+            json={"parent_id": "category"},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 422
 
 
 @pytest.mark.asyncio(loop_scope="session")
