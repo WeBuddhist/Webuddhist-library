@@ -20,6 +20,7 @@ from observability import setup_telemetry, shutdown_telemetry
 from routers.alignments import router as alignments_router
 from routers.annotation.bibliographic import router as bibliographic_router
 from routers.annotation.durchens import router as durchens_router
+from routers.annotation.footnotes import router as footnotes_router
 from routers.annotation.paginations import router as paginations_router
 from routers.annotation.table_of_contents import router as table_of_contents_router
 from routers.annotation.yigchungs import router as yigchungs_router
@@ -203,6 +204,7 @@ def create_app(*, testing: bool = False) -> FastAPI:
     app.include_router(table_of_contents_router)
     app.include_router(bibliographic_router)
     app.include_router(durchens_router)
+    app.include_router(footnotes_router)
     app.include_router(yigchungs_router)
     app.include_router(applications_router)
     app.include_router(content_search_router)

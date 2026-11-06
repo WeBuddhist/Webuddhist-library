@@ -658,6 +658,7 @@ nodes:
         required: true
         allowed_values:
           - durchen
+          - footnote
 
   MarkType:
     enum: true

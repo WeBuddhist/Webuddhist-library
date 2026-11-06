@@ -5,7 +5,7 @@ import pytest_asyncio
 from pydantic import ValidationError
 
 import database.tag_database as tag_database
-from exceptions import DataConflictError
+from exceptions import DataConflictError, DataNotFoundError
 from identifier import generate_id
 from models.annotation import SegmentationInput
 from models.category import CategoryInput
@@ -51,6 +51,7 @@ async def test_new_work_requires_category(relation):
 
 
 async def test_tagged_translation_inherits_category(auth_client, test_database, work):
+    new_tag = await test_database.tag.create(TagInput(title={"en": "Translation tag"}), "test_application")
     response = await auth_client.post(
         "/v2/texts",
         headers=work["headers"],
@@ -58,14 +59,29 @@ async def test_tagged_translation_inherits_category(auth_client, test_database, 
             "title": {"en": "Translation"},
             "language": "en",
             "translation_of": work["text"],
-            "tag_ids": [work["a"]],
+            "tag_ids": [new_tag],
         },
     )
     assert response.status_code == 201, response.text
     translated = await test_database.text.get(response.json()["id"])
     assert translated.category_id == "category"
-    assert set(translated.tag_ids) == {work["a"], work["b"]}
+    assert set(translated.tag_ids) == {work["a"], work["b"], new_tag}
+    assert set((await test_database.text.get(work["text"])).tag_ids) == set(translated.tag_ids)
     assert await test_database.text.get_work_id(translated.id) == await test_database.text.get_work_id(work["text"])
+
+
+@pytest.mark.parametrize("application", [None, "test_application"])
+async def test_missing_tag_identifies_tag(client, work, application):
+    headers = {"X-Application": application} if application else {}
+    response = await client.post(f"/v2/texts/{work['text']}/tags/missing-tag", headers=headers)
+    scope = f" in application '{application}'" if application else ""
+    assert response.status_code == 404, response.text
+    assert response.json() == {"error": f"Tag 'missing-tag' not found{scope}"}
+
+
+async def test_missing_work_identifies_work(test_database, work):
+    with pytest.raises(DataNotFoundError, match="^Work 'missing-work' not found$"):
+        await test_database.tag.tag_work("missing-work", work["a"])
 
 
 async def test_bound_key_cannot_create_text_with_foreign_category(auth_client, test_database, work):
@@ -111,6 +127,8 @@ async def test_foreign_tag_cannot_be_attached_or_removed(auth_client, test_datab
             method, f"/v2/{resource}/{resource_id}/tags/{work['b']}", headers=work["headers"]
         )
         assert response.status_code == 404, response.text
+        if resource == "texts" and method == "POST":
+            assert response.json() == {"error": f"Tag '{work['b']}' not found in application 'test_application'"}
     assert work["b"] in (await test_database.text.get(work["text"])).tag_ids
     assert work["b"] in (await test_database.segment.get(segment.id)).tag_ids
 
