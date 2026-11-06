@@ -101,6 +101,8 @@ graph LR
 
 ## 2. Audio
 
+> **Superseded.** The audio model in this section is replaced by [audio-as-expression.md](audio-as-expression.md) (issue [#449](https://github.com/Webuddhist-tech/Webuddhist-library/issues/449)). Use that document for the audio model, the cue rules, and the work steps. The `AUDIO_OF → Work` link and the narrator on `Recording` in this section are not used. Audio links to `Text`, and the narrator is on `Audio`.
+
 ### Problem
 
 - We will upload more than one audio file for each text.
@@ -267,7 +269,7 @@ Fixes necessary before the load: D1 (remove the "must not" rules) and D2 (see th
 | 1 | Footnote note type and endpoints | Small | New enum value, new optional field |
 | 2 | D1 and D2 fixes for the 84000 load | Small | D2 only, if `bdrc` becomes optional |
 | 3 | 84000 loader script (diplomatic + English + alignment) | Medium | No |
-| 4 | Audio: `Audio` node, `Recording` as audio edition, `FOLLOWS`, migration | Medium | Yes |
+| 4 | Audio: see [audio-as-expression.md](audio-as-expression.md) (C1 to C10) | Medium | Yes |
 | 5 | Section texts with derived editions | Medium to large | Yes |
 
 Items 1 and 2 are necessary for item 3. Items 4 and 5 are independent.

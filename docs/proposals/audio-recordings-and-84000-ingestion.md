@@ -45,6 +45,8 @@ Source: `database/neo4j_schema.yaml`, `storage/s3.py:34,94`.
 
 ## 1. Audio: is the current model correct?
 
+> **Superseded.** The audio model in this section is replaced by [audio-as-expression.md](audio-as-expression.md) (issue [#449](https://github.com/Webuddhist-tech/Webuddhist-library/issues/449)). Use that document for the audio model, the cue rules, and the work steps. The findings A1 to A5 stay correct.
+
 ### Current endpoints and data
 
 - `POST /v2/editions/{edition_id}/recordings` uploads the audio file and the JSON metadata in one multipart request (`routers/editions.py:355`).
@@ -107,6 +109,8 @@ In this proposal, one `Recording` node is both the Expression and the Manifestat
 
 ### Segment timings (A5): necessary if the app shows follow-along
 
+> **Superseded.** Do not add a `Timing` node. Cues already exist in `dev` (`(:Span)-[:SPAN_OF]->(:Cue)-[:CUE_OF]->(:Recording)`, `/v2/recordings/{id}/cues`), and their spans move with content edits. See "What is in `dev` now" in [audio-as-expression.md](audio-as-expression.md).
+
 This endpoint uses the same pattern as other annotations: one set for each parent.
 
 ```
@@ -125,7 +129,7 @@ PUT /v2/recordings/{recording_id}/timings
 **Answer: keep the artist data in the library. The library already supports it.**
 
 - A reciter is a `Person`. For text-to-speech, the reciter is an `AI`.
-- The `Recording` gives credit to the reciter with `Contribution{role: narrator}`. A `Text` gives credit to authors and translators in the same way.
+- The `Recording` gives credit to the reciter with `Contribution{role: narrator}`. (In [audio-as-expression.md](audio-as-expression.md), the contribution moves to the `Audio` node.) A `Text` gives credit to authors and translators in the same way.
 - We examined the WeBuddhist app backend (`main` and `audio_track_clean_v2`). It has no artist model. Its audio code is for audio that users upload and for text-to-speech in plans. That is a different function.
 
 Divide the data as follows:
@@ -215,15 +219,15 @@ Two rules cause problems: one validation rule and one identifier rule (see below
 |---|---|---|
 | 1 | D1: remove the "must not" rules in `EditionRequestModel.validate_annotation`. | A test makes a diplomatic edition with a pagination and a segmentation in one request. The current test for a critical edition without a segmentation must continue to fail. |
 | 2 | D2: do the change that you select. | A test makes two diplomatic editions from the same source. The `bdrc` constraint must not stop the second edition. |
-| 3 | A2: delete the S3 audio files when the system deletes an edition. This bug fix is independent. It is also necessary after step 4. | A test makes sure that the system calls `storage.delete_recording` for each recording of the deleted edition. |
-| 4 | A1, A3, A4: connect `Recording` to `Text`. Add the `FOLLOWS` relation. Change the storage key. Add the list endpoint. Do the migration. | The recording tests pass with the new endpoint. The old edition endpoint continues to work. The migration audit query finds 0 orphan recordings. |
-| 5 | A5: add the timings. Do this step only if the answer to decision 3 is "yes". | A `PUT` with an unknown reference gives a 422 error. A `GET` gives the timings in the sequence of `start_ms`. |
+| 3 | ~~A2: delete the S3 audio files when the system deletes an edition.~~ **Superseded.** Edition delete must not delete recordings or audio files. See rule 8 and C6 in [audio-as-expression.md](audio-as-expression.md). | A test makes sure that an edition delete keeps the recordings and their files. |
+| 4 | A1, A3, A4: **superseded.** Do C1 to C9 in [audio-as-expression.md](audio-as-expression.md) (Audio node, `AUDIO_OF → Text`, `FOLLOWS`, same-text rule, storage key, migration). | The recording tests pass with the new endpoint. The old edition endpoint continues to work. The migration audit query finds 0 orphan recordings. |
+| 5 | A5: **superseded.** Cues already exist in `dev`. Keep them and change only their match path (C4, C5 in [audio-as-expression.md](audio-as-expression.md)). | A `PUT` with an unknown reference gives a 422 error. A `GET` gives the timings in the sequence of `start_ms`. |
 | 6 | Write the 84000 loader script. The script is not a part of the API. | Do a test run on the 2 texts that we already have. The script must make only the new diplomatic edition, the English text and edition, and the alignment. A second run must not make duplicates. |
 
 Steps 1 to 3 are small, and you can do them in any sequence. Only step 4 changes the schema.
 
 ## Deferred (we do not propose these items now)
 
-- **Make two nodes from `Recording`: an audio Expression and one or more Manifestations.** Do this only when one performance has more than one master (for example, a remaster, a different mix, or an excerpt). Different file formats of the same master do not need this change, because each file format is an Item.
+- **Make two nodes from `Recording`: an audio Expression and one or more Manifestations.** (Now proposed in [audio-as-expression.md](audio-as-expression.md).) Do this only when one performance has more than one master (for example, a remaster, a different mix, or an excerpt). Different file formats of the same master do not need this change, because each file format is an Item.
 - **Separate roles for the chant leader and the assembly, and a group entity.** Add these when the app shows them separately.
 - **A new name for `EditionType.critical`.** See D3.

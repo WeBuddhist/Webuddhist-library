@@ -1,15 +1,20 @@
 # Audio as its own Expression
 
-Status: proposal, revision 2. Branch `feat/audio-expression-proposal`, up to date with `dev` (`8593529`). Issue: [#449](https://github.com/Webuddhist-tech/Webuddhist-library/issues/449).
+Status: proposal, revision 3. Branch `feat/audio-expression-proposal`, up to date with `dev` (`8593529`). Issue: [#449](https://github.com/Webuddhist-tech/Webuddhist-library/issues/449).
 
 Revision 2 adds two items from team review:
 
 1. Cues and timings are already in `dev`. This proposal keeps them. It changes only the node that a cue attaches to.
 2. The edition that a rendition follows must belong to the same text as the audio. The database must enforce this rule.
 
+Revision 3 adds these items from team review:
+
+1. One Audio is one performance. The migration does not group recordings by artist (rule 7, C9).
+2. This document is the only audio model. It replaces the audio sections of the two older documents (see "Other documents").
+
 ## Idea
 
-- One artist's performance of a text is an **Audio** (Expression level).
+- One performance of a text (one artist, one take) is an **Audio** (Expression level).
 - Each version of that performance (with music, without music) is a **rendition** (Manifestation level).
 - A rendition with cues follows one written edition. That edition must be an edition of the same text as the Audio.
 - A rendition without cues links only to the Audio.
@@ -25,7 +30,7 @@ Work: Heart Sutra
       └─ Rendition: with music                    ← no cues → links to the Audio only
 ```
 
-A second artist gets a second Audio under the same Tibetan text.
+A second artist gets a second Audio under the same Tibetan text. A second performance by Artist A also gets a second Audio.
 
 ## Graph
 
@@ -74,8 +79,8 @@ Today the cue span offsets point into the edition of `RECORDING_OF`. In this pro
 4. **Same text.** If a rendition has `FOLLOWS → Edition`, then that edition must have `EDITION_OF` the same `Text` as the Audio's `AUDIO_OF`. An edition of a translation or a commentary is not permitted.
 5. A rendition can have cues only if it has `FOLLOWS`. All cue spans point into that edition.
 6. If you change or remove `FOLLOWS`, the system deletes the cues of that rendition. Offsets into one edition are not correct in a different edition.
-7. Contributions (the artist) are on the Audio only. All renditions of one Audio have the same artist. A different artist must have a different Audio.
-8. If you delete an edition, the system deletes only the `FOLLOWS` relations and the cues that point into it. The Audio and its renditions stay.
+7. Contributions (the artist) are on the Audio only. All renditions of one Audio have the same artist. A different artist must have a different Audio. A second performance (take) by the same artist is also a different Audio. Only versions of one performance (for example with music and without music) are renditions of one Audio.
+8. If you delete an edition, the system deletes only the `FOLLOWS` relations and the cues that point into it. The Audio, its renditions, and their audio files stay.
 9. The audio file key must not contain an edition ID. The rendition stores its key.
 
 ## Changes to make
@@ -90,8 +95,8 @@ Today the cue span offsets point into the edition of `RECORDING_OF`. In this pro
 | C6 | Edition delete: replace the cascade `RecordingDatabase.DELETE_ALL_QUERY` with a query that deletes only `FOLLOWS`, cues, and their spans. | `edition_database.py:200`, `recording_database.py` |
 | C7 | Store the audio key on the rendition (`audio_key`), as `Edition.content_key` does. New key: `recordings/{rendition_id}.{format}`. Old files stay at their old keys. | `content_service.py:86`, `recording_database.py` |
 | C8 | API. Add `POST` and `GET /v2/texts/{text_id}/audios`, and `GET`, `PATCH`, `DELETE /v2/audios/{id}`. Add `POST /v2/audios/{id}/renditions` (multipart). Add a way to set and remove `FOLLOWS`. Keep the cue endpoints. | `routers/`, `docs/api-documentation/recordings-api.md` |
-| C9 | Migration. For each existing recording: make one Audio per (text, narrator set), attach the recording to it, change `RECORDING_OF` to `FOLLOWS`, and copy the old key into `audio_key`. Cues do not change. | new migration script |
-| C10 | Tests: same-text rule, cues without `FOLLOWS`, edition delete keeps audio, migration. | `tests/test_recordings.py`, `tests/test_neo4j_triggers.py`, `tests/schema_contract.py` |
+| C9 | Migration. For each existing recording: make one new Audio (one Audio per recording, because each recording is one performance). Do not group recordings by text or artist. Attach the recording to its Audio, change `RECORDING_OF` to `FOLLOWS`, and copy the old key into `audio_key`. Cues do not change. | new migration script |
+| C10 | Tests: same-text rule, cues without `FOLLOWS`, edition delete keeps audio and files, migration makes one Audio per recording. | `tests/test_recordings.py`, `tests/test_neo4j_triggers.py`, `tests/schema_contract.py` |
 
 ## Must keep (do not change these)
 
@@ -99,7 +104,7 @@ Today the cue span offsets point into the edition of `RECORDING_OF`. In this pro
 - The same-text rule (rule 4). The database enforces it with a trigger, not only the API.
 - Cue spans point into exactly one edition, the `FOLLOWS` edition. No cues without `FOLLOWS`.
 - The current cue rules, the `Span` pattern, the bulk cue API, and the span updates on content edits.
-- One Audio has one artist. The contributions are on the Audio.
+- One Audio is one performance by one artist. The contributions are on the Audio.
 - Edition delete never deletes audio.
 - The audio file key does not depend on an edition.
 
@@ -114,6 +119,17 @@ Today the cue span offsets point into the edition of `RECORDING_OF`. In this pro
 | Old S3 keys | Copy files to new keys, or keep old keys with `audio_key` | Keep old keys. Do not copy files. |
 | Highlights in other editions through `ALIGNED_TO` segments | Now or later | Later. |
 | Clean up audio files with no rendition | Now or later | Later. |
+
+## Other documents
+
+This document is the only audio model. It replaces these sections:
+
+| Document | Replaced section | Why |
+|---|---|---|
+| `audio-recordings-and-84000-ingestion.md` | "1. Audio: is the current model correct?" (the proposed change and the segment timings), and steps 3 to 5 of "4. Sequence of the work" | It links Recording to Text with no Audio node, adds a new `Timing` node, and deletes S3 audio on edition delete. |
+| `new-requirements-sections-audio-84000-footnotes.md` | "2. Audio" | It links Audio to `Work` and puts the narrator on the Recording. |
+
+The other sections of these documents (artists in the library, 84000 ingestion, sections, footnotes) stay valid.
 
 ## Not in scope
 
