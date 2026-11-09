@@ -216,8 +216,8 @@ def _custom_cases() -> dict[str, str]:
         """,
         "enforce_text_title_unique": """
             CREATE (lang:Language {code: 'test-lang-' + randomUUID()})
-            CREATE (text_a:Text {id: randomUUID()})
-            CREATE (text_b:Text {id: randomUUID()})
+            CREATE (text_a:Text {id: randomUUID()})-[:HAS_LANGUAGE]->(lang)
+            CREATE (text_b:Text {id: randomUUID()})-[:HAS_LANGUAGE]->(lang)
             CREATE (title_a:Nomen {id: randomUUID()})
             CREATE (title_b:Nomen {id: randomUUID()})
             CREATE (text_a)-[:HAS_TITLE]->(title_a)
