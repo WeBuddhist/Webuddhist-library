@@ -8,8 +8,12 @@ Tests endpoints:
 - DELETE /v2/texts/{text_id} while an audio recites it
 """
 
+import asyncio
+
 import pytest
+from exceptions import DataConflictError, DataNotFoundError
 from identifier import generate_id
+from models.audio import AudioInput
 from models.text import TextInput
 
 from tests.test_recordings import RecordingHelpers
@@ -220,3 +224,49 @@ class TestAudiosEndpoints(RecordingHelpers):
 
         assert response.status_code == 409
         assert "1 audio(s)" in response.text
+
+    async def test_create_and_patch_reject_unknown_language(self, client, test_database):
+        text_id = await self._text(test_database)
+        body = {"language": "xx", "contributions": [{"type": "ai", "id": "tts", "role": "narrator"}]}
+
+        assert (await client.post(f"/v2/texts/{text_id}/audios", json=body)).status_code == 400
+        audio_id = await self._create_audio(client, text_id, await self._create_person(test_database))
+        assert (await client.patch(f"/v2/audios/{audio_id}", json={"language": "xx"})).status_code == 400
+
+    async def test_title_changes_and_delete_leave_no_orphan_titles(self, client, test_database):
+        text_id = await self._text(test_database)
+        person_id = await self._create_person(test_database)
+        before = (await self._count(test_database, "Nomen"), await self._count(test_database, "LocalizedText"))
+        response = await client.post(
+            f"/v2/texts/{text_id}/audios",
+            json={"title": {"en": "First"}, "contributions": [{"type": "person", "id": person_id, "role": "singer"}]},
+        )
+        audio_id = response.json()["id"]
+
+        for title in ("Second", "Third"):
+            assert (await client.patch(f"/v2/audios/{audio_id}", json={"title": {"en": title}})).status_code == 200
+        assert (await self._count(test_database, "Nomen"), await self._count(test_database, "LocalizedText")) == (
+            before[0] + 1,
+            before[1] + 1,
+        )
+
+        assert (await client.delete(f"/v2/audios/{audio_id}")).status_code == 204
+        assert (await self._count(test_database, "Nomen"), await self._count(test_database, "LocalizedText")) == before
+
+    @pytest.mark.parametrize("round_", range(3))
+    async def test_audio_create_and_text_delete_serialize(self, test_database, round_):
+        text_id = await self._text(test_database)
+        audio = AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}])
+
+        created, deleted = await asyncio.gather(
+            test_database.audio.create(text_id, audio), test_database.text.delete(text_id), return_exceptions=True
+        )
+
+        # Either the audio exists and protects its text, or the text is gone and the audio was refused.
+        if isinstance(created, str):
+            assert isinstance(deleted, DataConflictError), deleted
+            assert (await test_database.audio.get(created)).text_id == text_id
+        else:
+            assert isinstance(created, DataNotFoundError), created
+            assert deleted is None
+            assert await self._count(test_database, "Audio") == 0

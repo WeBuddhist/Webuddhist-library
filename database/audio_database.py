@@ -8,6 +8,7 @@ from .contribution_database import ContributionDatabase, contributions_return
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
+from .text_database import TextDatabase
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, AsyncSession
@@ -170,7 +171,7 @@ class AudioDatabase:
     async def create_with_transaction(
         tx: AsyncManagedTransaction, text_id: str, audio: AudioInput, audio_id: str
     ) -> str:
-        await lock_nodes(tx, "Text", [text_id])
+        await TextDatabase.lock_with_work(tx, text_id)
         await AudioDatabase._validate_text_exists(tx, text_id)
         await DatabaseValidator.validate_contribution_references(tx, audio.contributions)
 

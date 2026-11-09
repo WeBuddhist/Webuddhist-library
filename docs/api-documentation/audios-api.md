@@ -63,8 +63,9 @@ Validation rules:
 
 Error responses:
 
+- `400 Bad Request`: Unknown language.
 - `404 Not Found`: Text does not exist.
-- `422 Validation Error`: Another role, an empty `contributions` list, an unknown person, or an unknown language.
+- `422 Validation Error`: Another role, an empty `contributions` list, or an unknown person.
 
 ## List Audios for a Text
 

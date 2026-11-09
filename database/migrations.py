@@ -10,7 +10,16 @@ from neo4j import AsyncDriver, AsyncManagedTransaction
 from database.locking import lock_nodes
 from database.neo4j_triggers import audit_triggers, install_triggers, wait_for_triggers
 from identifier import generate_id
-from models.enums import AttributeType, BibliographyType, ContributorRole, EditionType, LicenseType, MarkType, NoteType
+from models.enums import (
+    AUDIO_ROLES,
+    AttributeType,
+    BibliographyType,
+    ContributorRole,
+    EditionType,
+    LicenseType,
+    MarkType,
+    NoteType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +65,30 @@ AUDITS: dict[str, LiteralString] = {
     """,
 }
 
+# Each condition the conversion relies on; a legacy recording failing one would stop the upgrade midway.
+UNCONVERTIBLE_RECORDINGS_QUERY: LiteralString = """
+    MATCH (r:Recording)-[:RECORDING_OF]->()
+    WHERE NOT EXISTS {
+            (r)-[:RECORDING_OF]->(:Edition)-[:EDITION_OF]->(t:Text)-[:TEXT_OF]->(:Work)
+            WHERE EXISTS { (t)-[:HAS_LANGUAGE]->(:Language) }
+        }
+       OR count { (r)-[:RECORDING_OF]->() } > 1
+       OR r.format IS NULL
+       OR NOT EXISTS { (r)-[:HAS_CONTRIBUTION]->(:Contribution)-[:BY]->(:Person|AI) }
+       OR EXISTS {
+            (r)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(role:RoleType)
+            WHERE NOT coalesce(role.name, '') IN $roles
+        }
+       OR NOT (EXISTS { (r)-[:HAS_LICENSE]->(:LicenseType) } OR EXISTS { (:LicenseType {name: 'public'}) })
+    RETURN DISTINCT r.id AS violating_id
+"""
+
 LEGACY_RECORDINGS_QUERY: LiteralString = """
     MATCH (r:Recording)-[:RECORDING_OF]->() RETURN DISTINCT r.id AS id ORDER BY id
+"""
+
+LEGACY_RECORDING_QUERY: LiteralString = """
+    MATCH (r:Recording {id: $id})-[:RECORDING_OF]->() RETURN r.id AS id LIMIT 1
 """
 
 # A legacy recording was both performance and file, attached to one edition. Its performance metadata
@@ -103,8 +134,14 @@ async def legacy_recording_ids(driver: AsyncDriver, database: str) -> list[str]:
         return [record["id"] async for record in result]
 
 
+async def unconvertible_recording_ids(driver: AsyncDriver, database: str) -> list[str]:
+    async with driver.session(database=database) as session:
+        result = await session.run(UNCONVERTIBLE_RECORDINGS_QUERY, roles=list(AUDIO_ROLES))
+        return [record["violating_id"] async for record in result]
+
+
 async def audit_schema(driver: AsyncDriver, database: str) -> dict[str, list[str]]:
-    """Report invariant violations. Legacy recordings are pending conversion, not violations."""
+    """Report invariant violations. Legacy recordings are pending conversion, unless they cannot be converted."""
     violations = await audit_triggers(driver, database)
     async with driver.session(database=database) as session:
         for name, query in AUDITS.items():
@@ -115,7 +152,21 @@ async def audit_schema(driver: AsyncDriver, database: str) -> dict[str, list[str
     legacy = set(await legacy_recording_ids(driver, database))
     if legacy:
         violations = {name: kept for name, ids in violations.items() if (kept := [i for i in ids if i not in legacy])}
+    if unconvertible := await unconvertible_recording_ids(driver, database):
+        violations["legacy_recording_unconvertible"] = unconvertible
     return violations
+
+
+def _constraint_statements() -> list[LiteralString]:
+    constraints = Path(__file__).with_name("neo4j_constraints.cypher").read_text()
+    return [cast(LiteralString, statement) for statement in constraints.split(";") if statement.strip()]
+
+
+async def ensure_audio_constraint(driver: AsyncDriver, database: str) -> None:
+    """Create the Audio id constraint. It is new, so no existing data can violate it."""
+    statement: LiteralString = next(s for s in _constraint_statements() if "audio_id_unique" in s)
+    async with driver.session(database=database) as session:
+        await (await session.run(statement)).consume()
 
 
 async def upgrade_recordings(driver: AsyncDriver, database: str, wait_seconds: float = 120) -> int:
@@ -123,21 +174,21 @@ async def upgrade_recordings(driver: AsyncDriver, database: str, wait_seconds: f
 
     Repeatable: converted recordings no longer match, so later runs convert nothing. The current triggers
     must be live first, because the triggers they replace reject a Recording without RECORDING_OF.
+    Every recording is checked before the first one changes, so a bad record stops the upgrade untouched.
     """
+    await ensure_audio_constraint(driver, database)
     pending = await legacy_recording_ids(driver, database)
     if not pending:
         return 0
+    if unconvertible := await unconvertible_recording_ids(driver, database):
+        raise RuntimeError(f"Legacy recordings cannot be converted; repair them first: {unconvertible[:20]}")
     await wait_for_triggers(driver, database, wait_seconds=wait_seconds)
 
     async def convert(tx: AsyncManagedTransaction, recording_id: str, audio_id: str) -> None:
         await lock_nodes(tx, "Recording", [recording_id])
         result = await tx.run(UPGRADE_RECORDING_QUERY, recording_id=recording_id, audio_id=audio_id)
-        if await result.single() is None:
-            still_legacy = await tx.run(
-                "MATCH (r:Recording {id: $id})-[:RECORDING_OF]->() RETURN r.id AS id", id=recording_id
-            )
-            if await still_legacy.single() is not None:
-                raise RuntimeError(f"Recording '{recording_id}' has no edition, text and work to convert from")
+        if await result.single() is None and await (await tx.run(LEGACY_RECORDING_QUERY, id=recording_id)).single():
+            raise RuntimeError(f"Recording '{recording_id}' has no edition, text and work to convert from")
 
     for recording_id in pending:
         async with driver.session(database=database) as session:
@@ -157,10 +208,8 @@ async def migrate(driver: AsyncDriver, database: str) -> None:
             logger.error("%s: %s", name, ids[:20])
         raise RuntimeError("Schema audit failed; repair reported records before applying migrations")
     async with driver.session(database=database) as session:
-        constraints = Path(__file__).with_name("neo4j_constraints.cypher").read_text()
-        for statement in constraints.split(";"):
-            if statement.strip():
-                await (await session.run(cast(LiteralString, statement))).consume()
+        for statement in _constraint_statements():
+            await (await session.run(statement)).consume()
         lookups: dict[LiteralString, type[StrEnum]] = {
             "RoleType": ContributorRole,
             "EditionType": EditionType,

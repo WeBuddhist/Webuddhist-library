@@ -260,18 +260,25 @@ class RecordingDatabase:
         return record["audio_id"], record["edition_id"]
 
     @staticmethod
-    async def _lock(tx: AsyncManagedTransaction, recording_id: str, followed: str | None, editions: set[str]) -> None:
-        """Lock editions before the recording, in the order content edits use, then confirm FOLLOWS held still."""
-        await lock_nodes(tx, "Edition", sorted(editions))
-        await lock_nodes(tx, "Recording", [recording_id])
-        if (await RecordingDatabase._get_links(tx, recording_id))[1] != followed:
-            raise DataConflictError(f"Recording '{recording_id}' changed its edition; retry the operation")
+    async def _lock(tx: AsyncManagedTransaction, recording_id: str, also: str | None = None) -> tuple[str, str | None]:
+        """Lock the followed edition (and `also`) before the recording, the order content edits use.
+
+        FOLLOWS can change, or its edition be deleted, while this waits for a lock. Re-read after locking and
+        lock again until the edition followed is one already locked; return the audio and that edition.
+        """
+        for _ in range(3):
+            _, followed = await RecordingDatabase._get_links(tx, recording_id)
+            await lock_nodes(tx, "Edition", sorted({edition for edition in (followed, also) if edition}))
+            await lock_nodes(tx, "Recording", [recording_id])
+            audio_id, current = await RecordingDatabase._get_links(tx, recording_id)
+            if current == followed:
+                return audio_id, current
+        raise DataConflictError(f"Recording '{recording_id}' keeps changing its edition; retry the operation")
 
     @staticmethod
     async def _lock_followed_edition(tx: AsyncManagedTransaction, recording_id: str) -> ContentState | None:
         """Lock the followed edition and the recording. Cue writes change that edition's annotations."""
-        _, edition_id = await RecordingDatabase._get_links(tx, recording_id)
-        await RecordingDatabase._lock(tx, recording_id, edition_id, {edition_id} if edition_id else set())
+        _, edition_id = await RecordingDatabase._lock(tx, recording_id)
         if edition_id is None:
             return None
         await advance_revision(tx, edition_id)
@@ -286,7 +293,13 @@ class RecordingDatabase:
             _, edition_id = await RecordingDatabase._get_links(tx, recording_id)
             if edition_id is None:
                 return []
-            return await read_value(tx, edition_id, cues)
+            try:
+                return await read_value(tx, edition_id, cues)
+            except DataNotFoundError:
+                # The edition was deleted after the links were read; the recording then follows nothing.
+                if (await RecordingDatabase._get_links(tx, recording_id))[1] is None:
+                    return []
+                raise
 
         async with self.session as session:
             return await session.execute_read(read)
@@ -321,11 +334,11 @@ class RecordingDatabase:
         """Follow an edition. Cues point into the old edition, so a change of edition deletes them."""
 
         async def write(tx: AsyncManagedTransaction) -> None:
-            audio_id, current = await RecordingDatabase._get_links(tx, recording_id)
+            audio_id, current = await RecordingDatabase._lock(tx, recording_id, also=edition_id)
+            # Validate under the locks, so the edition cannot be deleted between the check and the write.
             await RecordingDatabase.validate_target_with_transaction(tx, audio_id, edition_id)
             if current == edition_id:
                 return
-            await RecordingDatabase._lock(tx, recording_id, current, {edition_id} | ({current} if current else set()))
             if current is not None:
                 await advance_revision(tx, current)
             await tx.run(RecordingDatabase.DELETE_CUES_QUERY, recording_id=recording_id)
@@ -347,7 +360,7 @@ class RecordingDatabase:
             await session.execute_write(write)
 
     @staticmethod
-    async def count_cued_followers(tx: AsyncManagedTransaction, edition_id: str) -> int:
+    async def count_cued_followers_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> int:
         result = await tx.run(RecordingDatabase.COUNT_CUED_FOLLOWERS_QUERY, edition_id=edition_id)
         return (await result.single(strict=True))["count"]
 
@@ -381,6 +394,9 @@ class RecordingDatabase:
         audio_format: AudioFormat,
         size_bytes: int,
     ) -> str:
+        # Editions first, as everywhere else, so an edition delete cannot interleave with the FOLLOWS write.
+        if recording.edition_id is not None:
+            await lock_nodes(tx, "Edition", [recording.edition_id])
         await lock_nodes(tx, "Audio", [audio_id])
         await RecordingDatabase.validate_target_with_transaction(tx, audio_id, recording.edition_id)
 
@@ -432,8 +448,6 @@ class RecordingDatabase:
 
     @staticmethod
     async def delete_with_transaction(tx: AsyncManagedTransaction, recording_id: str) -> None:
-        await lock_nodes(tx, "Recording", [recording_id])
-        result = await tx.run("MATCH (r:Recording {id: $id}) RETURN r.id AS id", id=recording_id)
-        if await result.single() is None:
-            raise DataNotFoundError(f"Recording '{recording_id}' not found")
+        # Its cues are annotations of the followed edition, so lock and touch that edition as a cue delete does.
+        await RecordingDatabase._lock_followed_edition(tx, recording_id)
         await tx.run(RecordingDatabase.DELETE_QUERY, recording_id=recording_id)

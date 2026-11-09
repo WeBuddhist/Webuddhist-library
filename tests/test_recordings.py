@@ -14,16 +14,20 @@ Tests endpoints:
 - GET/PUT/DELETE /v2/recordings/{recording_id}/cues
 """
 
+import asyncio
 import json
 import logging
 
 import pytest
+from database.content_state import read_state
+from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from identifier import generate_id
 from models.base import LocalizedString
 from models.contribution import PersonContributionInput
 from models.edition import EditionType
-from models.enums import ContributorRole
+from models.enums import AudioFormat, ContributorRole
 from models.person import PersonInput
+from models.recording import RecordingCue, RecordingInput
 from models.text import TextInput
 from neo4j.exceptions import ClientError
 
@@ -542,3 +546,81 @@ class TestRecordingCues(RecordingHelpers):
 
         assert await self._get_cues(client, recording_id) == []
         assert await self._count(test_database, "Cue") == 0
+
+
+@pytest.mark.asyncio(loop_scope="session")
+class TestRecordingConsistency(RecordingHelpers):
+    """Edition revisions and concurrent writes around recordings, cues and edition deletes."""
+
+    CONTENT = "0123456789"
+
+    async def _revision(self, test_database, edition_id: str) -> int:
+        async with test_database.get_session() as session:
+            return (await session.execute_read(read_state, edition_id)).revision
+
+    async def test_deleting_recording_advances_the_followed_edition(self, client, test_database):
+        edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
+        recording_id = await self._create_recording(client, audio_id, {"edition_id": edition_id})
+        await client.put(f"/v2/recordings/{recording_id}/cues", json=[_cue(0, 4, 0, 1200)])
+        before = await self._revision(test_database, edition_id)
+
+        assert (await client.delete(f"/v2/recordings/{recording_id}")).status_code == 204
+
+        assert await self._revision(test_database, edition_id) == before + 1
+
+    async def test_upload_to_missing_audio_stores_no_object(self, client, mock_storage):
+        stored = len(mock_storage._storage)
+
+        assert (await self._post_recording(client, generate_id(), {})).status_code == 404
+
+        assert len(mock_storage._storage) == stored
+
+    async def test_after_edition_delete_cues_read_empty_and_cannot_be_written(self, client, test_database):
+        edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
+        recording_id = await self._create_recording(client, audio_id, {"edition_id": edition_id})
+        assert (await client.delete(f"/v2/editions/{edition_id}")).status_code == 204
+
+        assert (await client.get(f"/v2/recordings/{recording_id}/cues")).json() == []
+        response = await client.put(f"/v2/recordings/{recording_id}/cues", json=[_cue(0, 4, 0, 1200)])
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize("round_", range(3))
+    async def test_cue_write_and_edition_delete_serialize(self, client, test_database, round_):
+        edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
+        recording_id = await self._create_recording(client, audio_id, {"edition_id": edition_id})
+        cue = RecordingCue.model_validate(_cue(0, 4, 0, 1200))
+
+        cues, deleted = await asyncio.gather(
+            test_database.recording.replace_cues(recording_id, [cue]),
+            test_database.edition.delete(edition_id),
+            return_exceptions=True,
+        )
+
+        # Either the cues land first and protect the edition, or the edition goes first and cues are refused.
+        if cues is None:
+            assert isinstance(deleted, DataConflictError), deleted
+            assert await test_database.recording.get_cues(recording_id) == [cue]
+        else:
+            assert isinstance(cues, DataValidationError), cues
+            assert deleted is None
+            assert (await test_database.recording.get(recording_id)).edition_id is None
+
+    @pytest.mark.parametrize("round_", range(3))
+    async def test_recording_upload_and_audio_delete_serialize(self, client, test_database, round_):
+        _, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
+        recording_id = generate_id()
+
+        added, deleted = await asyncio.gather(
+            test_database.recording.add(
+                audio_id, RecordingInput(), recording_id, f"objects/{recording_id}", AudioFormat.MP3, 5
+            ),
+            test_database.audio.delete(audio_id),
+            return_exceptions=True,
+        )
+
+        if added == recording_id:
+            assert isinstance(deleted, DataConflictError), deleted
+        else:
+            assert isinstance(added, DataNotFoundError), added
+            assert deleted is None
+            assert await self._count(test_database, "Recording") == 0

@@ -11,6 +11,7 @@ from .annotation.note_database import NoteDatabase
 from .annotation.pagination_database import PaginationDatabase
 from .annotation.segmentation_database import SegmentationDatabase
 from .annotation.table_of_contents_database import TableOfContentsDatabase
+from .content_state import lock_connected_editions
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
@@ -191,8 +192,8 @@ class EditionDatabase:
     @staticmethod
     async def delete_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> None:
         # Audio outlives the edition: deleting it only removes FOLLOWS, so cues would lose their target.
-        await lock_nodes(tx, "Edition", [edition_id])
-        cued = await RecordingDatabase.count_cued_followers(tx, edition_id)
+        await lock_connected_editions(tx, edition_id)
+        cued = await RecordingDatabase.count_cued_followers_with_transaction(tx, edition_id)
         if cued:
             raise DataConflictError(
                 f"Edition '{edition_id}' cannot be deleted because {cued} recording(s) with cues follow it"

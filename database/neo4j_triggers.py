@@ -150,6 +150,45 @@ def _rel_target_type_trigger(
     }
 
 
+def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: str) -> dict:
+    """Generate a trigger + audit pair limiting an optional relationship to at most one."""
+    return {
+        "name": name,
+        "description": f"{source_label} must have at most one {rel_type}->{target_label}",
+        "phase": "before",
+        "query": f"""
+        CALL () {{
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:{source_label}
+            RETURN n AS node
+          UNION ALL
+            UNWIND $createdRelationships AS rel
+            WITH rel WHERE type(rel) = '{rel_type}'
+            WITH startNode(rel) AS n
+            WHERE n:{source_label}
+            RETURN n AS node
+        }}
+        WITH DISTINCT node
+        WITH node, count {{ (node)-[:{rel_type}]->(:{target_label}) }} AS cnt
+        WHERE cnt > 1
+        WITH collect(coalesce(node.id, elementId(node))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            '{name}: {source_label} must have at most one {rel_type}. IDs: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
+        """,
+        "audit": f"""
+        MATCH (n:{source_label})
+        WITH n, count {{ (n)-[:{rel_type}]->(:{target_label}) }} AS cnt
+        WHERE cnt > 1
+        RETURN coalesce(n.id, elementId(n)) AS violating_id
+        """,
+    }
+
+
 TRIGGERS: list[dict] = []
 
 # Required outgoing relationships; the last field controls maximum cardinality.
@@ -521,43 +560,12 @@ TRIGGERS.append(
         "Edition",
     )
 )
-TRIGGERS.append(
-    {
-        "name": "enforce_recording_follows_max_one",
-        "description": "Recording must have at most one FOLLOWS relationship",
-        "phase": "before",
-        "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
-            WITH n WHERE n:Recording
-            RETURN n AS node
-          UNION ALL
-            UNWIND $createdRelationships AS rel
-            WITH rel WHERE type(rel) = 'FOLLOWS'
-            WITH startNode(rel) AS n
-            WHERE n:Recording
-            RETURN n AS node
-        }
-        WITH DISTINCT node
-        WITH node, count { (node)-[:FOLLOWS]->(:Edition) } AS cnt
-        WHERE cnt > 1
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_recording_follows_max_one: Recording must follow at most one Edition. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-        """,
-        "audit": """
-        MATCH (r:Recording)
-        WITH r, count { (r)-[:FOLLOWS]->(:Edition) } AS cnt
-        WHERE cnt > 1
-        RETURN coalesce(r.id, elementId(r)) AS violating_id
-        """,
-    }
-)
+for name, source, relationship, target in [
+    ("enforce_recording_follows_max_one", "Recording", "FOLLOWS", "Edition"),
+    ("enforce_audio_has_title_max_one", "Audio", "HAS_TITLE", "Nomen"),
+    ("enforce_recording_has_title_max_one", "Recording", "HAS_TITLE", "Nomen"),
+]:
+    TRIGGERS.append(_max_one_trigger(name, source, relationship, target))
 TRIGGERS.append(
     {
         "name": "enforce_recording_follows_recited_text",
@@ -645,6 +653,29 @@ TRIGGERS.append(
         MATCH (r:Recording)
         WHERE EXISTS { (:Cue)-[:CUE_OF]->(r) } AND NOT (r)-[:FOLLOWS]->(:Edition)
         RETURN coalesce(r.id, elementId(r)) AS violating_id
+    """,
+    }
+)
+
+# Cue offsets belong to the edition its recording follows, so a cue cannot move to another recording.
+# __CREATED_NODES__ and __CREATED_RELATIONSHIPS__ stay the raw APOC event lists (see below).
+TRIGGERS.append(
+    {
+        "name": "enforce_cue_cue_of_fixed",
+        "description": "A Cue keeps the Recording it was created with",
+        "phase": "before",
+        "query": """
+        UNWIND __CREATED_RELATIONSHIPS__ AS rel
+        WITH rel
+        WHERE type(rel) = 'CUE_OF' AND NOT startNode(rel) IN __CREATED_NODES__
+        WITH collect(toString(startNode(rel).start_ms) + '-' + toString(startNode(rel).end_ms)) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            'enforce_cue_cue_of_fixed: A Cue cannot move to another Recording. Cues: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
     """,
     }
 )
@@ -1080,6 +1111,8 @@ for trigger in TRIGGERS:
         trigger["query"]
         .replace("$createdNodes", _CHANGED_NODES)
         .replace("$createdRelationships", _CHANGED_RELATIONSHIPS)
+        .replace("__CREATED_NODES__", "$createdNodes")
+        .replace("__CREATED_RELATIONSHIPS__", "$createdRelationships")
     )
 
 
@@ -1102,25 +1135,36 @@ async def install_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -
     async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
         await session.execute_write(write)
 
-    logger.info("All %d triggers installed.", len(TRIGGERS))
+    # Callers write right after installing; return only once the database runs the new rules.
+    await wait_for_triggers(driver, database)
+    logger.info("All %d triggers installed and live.", len(TRIGGERS))
 
 
 async def wait_for_triggers(
     driver: AsyncDriver, database: str = DATABASE_NAME, wait_seconds: float = 120, interval: float = 1
 ) -> None:
-    """Wait until the database runs TRIGGERS. APOC loads installed triggers only after its refresh interval."""
-    expected = {trigger["name"] for trigger in TRIGGERS}
+    """Wait until the database runs TRIGGERS. APOC loads installed triggers only after its refresh interval.
+
+    Live triggers must match the installed ones by name and statement, so a trigger whose statement changed
+    under the same name also counts as pending.
+    """
+    names = {trigger["name"] for trigger in TRIGGERS}
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_seconds
     while True:
+        async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
+            result = await session.run("CALL apoc.trigger.show($database) YIELD name, query", database=database)
+            expected = {record["name"]: record["query"] async for record in result}
         async with driver.session(database=database) as session:
-            result = await session.run("CALL apoc.trigger.list() YIELD name RETURN collect(name) AS names")
-            live = set((await result.single(strict=True))["names"])
-        if live == expected:
+            result = await session.run("CALL apoc.trigger.list() YIELD name, query RETURN name, query")
+            live = {record["name"]: record["query"] async for record in result}
+        if live == expected and set(expected) == names:
             return
         if loop.time() >= deadline:
-            missing, stale = sorted(expected - live), sorted(live - expected)
-            raise TimeoutError(f"Triggers not live after {wait_seconds}s; missing {missing[:5]}, stale {stale[:5]}")
+            pending = names ^ set(expected) | {
+                n for n in expected.keys() | live.keys() if expected.get(n) != live.get(n)
+            }
+            raise TimeoutError(f"Triggers not live after {wait_seconds}s; pending: {sorted(pending)[:5]}")
         await asyncio.sleep(interval)
 
 

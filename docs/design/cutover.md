@@ -17,13 +17,14 @@ Schema upgrades repeat idempotent steps without a version marker. Content backfi
 
 ### Recording conversion on deploy
 
-Deploy runs `python -m scripts.upgrade_recordings` after installing triggers and before restarting the API. The command:
+Deploy runs these steps in order:
 
-1. Finds recordings that still have `RECORDING_OF`. When there are none, it stops at once and logs `Converted 0 legacy recording(s).` This is the case on every deploy after the first one.
-2. Waits until the database runs the newly installed triggers. APOC loads triggers only after its refresh interval (`apoc.trigger.refresh`, 60 seconds by default). The triggers it replaces would reject a recording without `RECORDING_OF`.
-3. Converts each recording in its own transaction, so an interrupted run leaves only fully converted or untouched recordings. Rerun the deploy to finish.
+1. `python -m scripts.install_neo4j_triggers` installs the triggers and returns once the database runs them. APOC loads installed triggers only after its refresh interval (`apoc.trigger.refresh`, 60 seconds by default), so on a release that changes triggers this step can take that long. The API keeps serving meanwhile.
+2. The API stops. The old API must not edit content while recordings convert, because it would not move the cues of converted recordings.
+3. `python -m scripts.upgrade_recordings` creates the `audio_id_unique` constraint, then converts each recording that is still attached to an edition, one transaction per recording. It first checks every such recording and stops before changing any of them if one cannot be converted. When there is nothing to convert, it logs `Converted 0 legacy recording(s).` This is the case on every deploy after the first one.
+4. The API starts from the new checkout. It also starts when step 3 fails; the deploy then reports the failure. Recordings that were not converted stay hidden from the API until a rerun converts them, and their cues still move with content edits.
 
-Between the trigger install and the restart, the old API cannot write recordings and does not list converted ones. With a small number of recordings this lasts seconds. `python -m scripts.migrate --apply` runs the same conversion; the read-only audit reports pending recordings as a count, not as violations.
+Before merging a release that converts recordings into an environment, run `python -m scripts.migrate` there (read-only). It reports pending recordings as a count, and recordings that cannot be converted as `legacy_recording_unconvertible`. Repair those first. `python -m scripts.migrate --apply` runs the same conversion.
 
 ## Prepare
 

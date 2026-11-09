@@ -10,7 +10,6 @@ from models.text import TextBase, TextInput, TextOutput, TextPatch
 
 from .contribution_database import ContributionDatabase, contributions_return
 from .database_validator import DatabaseValidator
-from .locking import lock_nodes
 from .nomen_database import NomenDatabase
 from .tag_database import TagDatabase
 
@@ -224,6 +223,12 @@ class TextDatabase:
     RETURN w.id AS work_id
     """
 
+    LOCK_WITH_WORK_QUERY: LiteralString = """
+    MATCH (e:Text {id: $id})-[:TEXT_OF]->(w:Work)
+    CALL apoc.lock.nodes([w, e])
+    FINISH
+    """
+
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (e:Text {id: $text_id})-[:TEXT_OF]->(w:Work)
     RETURN w.id AS work_id,
@@ -343,8 +348,8 @@ class TextDatabase:
 
     async def delete(self, text_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
-            # Audio creation locks the text too, so a new recitation cannot slip past this check.
-            await lock_nodes(tx, "Text", [text_id])
+            # Audio creation takes the same locks, so a new recitation cannot slip past this check.
+            await TextDatabase.lock_with_work(tx, text_id)
             result = await tx.run(TextDatabase.DELETE_CHECK_QUERY, text_id=text_id)
             record = await result.single()
             if record is None:
@@ -417,17 +422,13 @@ class TextDatabase:
         return created_text_id
 
     @staticmethod
+    async def lock_with_work(tx: AsyncManagedTransaction, text_id: str) -> None:
+        """Lock a text and its Work, Work first, as every text mutation does."""
+        await (await tx.run(TextDatabase.LOCK_WITH_WORK_QUERY, id=text_id)).consume()
+
+    @staticmethod
     async def _get_for_update(tx: AsyncManagedTransaction, text_id: str) -> Record | None:
-        await (
-            await tx.run(
-                """
-            MATCH (e:Text {id: $id})-[:TEXT_OF]->(w:Work)
-            CALL apoc.lock.nodes([w, e])
-            FINISH
-        """,
-                id=text_id,
-            )
-        ).consume()
+        await TextDatabase.lock_with_work(tx, text_id)
         return await (await tx.run(TextDatabase.GET_QUERY, id=text_id, application=None)).single()
 
     @staticmethod
