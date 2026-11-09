@@ -5,9 +5,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import LiteralString, cast
 
-from neo4j import AsyncDriver
+from neo4j import AsyncDriver, AsyncManagedTransaction
 
-from database.neo4j_triggers import audit_triggers, install_triggers
+from database.locking import lock_nodes
+from database.neo4j_triggers import audit_triggers, install_triggers, wait_for_triggers
+from identifier import generate_id
 from models.enums import AttributeType, BibliographyType, ContributorRole, EditionType, LicenseType, MarkType, NoteType
 
 logger = logging.getLogger(__name__)
@@ -49,10 +51,60 @@ AUDITS: dict[str, LiteralString] = {
     "legacy_category_relationship": """
         MATCH (c:Category)-[:CHILD_OF]->() RETURN coalesce(c.id, elementId(c)) AS violating_id
     """,
+    "recording_audio_key": """
+        MATCH (r:Recording) WHERE r.audio_key IS NULL RETURN coalesce(r.id, elementId(r)) AS violating_id
+    """,
 }
+
+LEGACY_RECORDINGS_QUERY: LiteralString = """
+    MATCH (r:Recording)-[:RECORDING_OF]->() RETURN DISTINCT r.id AS id ORDER BY id
+"""
+
+# A legacy recording was both performance and file, attached to one edition. Its performance metadata
+# moves to a new Audio that recites the edition's text; the recording keeps its file and cues, and its
+# edition link becomes FOLLOWS. Cue spans stay valid because they still point into the same edition.
+UPGRADE_RECORDING_QUERY: LiteralString = """
+    MATCH (r:Recording {id: $recording_id})-[legacy:RECORDING_OF]->(m:Edition)
+          -[:EDITION_OF]->(t:Text)-[:TEXT_OF]->(w:Work)
+    WHERE NOT (r)-[:RENDITION_OF]->()
+    MATCH (t)-[text_language_rel:HAS_LANGUAGE]->(text_language:Language)
+    OPTIONAL MATCH (r)-[language_rel:HAS_LANGUAGE]->(language:Language)
+    OPTIONAL MATCH (r)-[license_rel:HAS_LICENSE]->(license:LicenseType)
+    OPTIONAL MATCH (public:LicenseType {name: 'public'})
+    OPTIONAL MATCH (r)-[title_rel:HAS_TITLE]->(title:Nomen)
+    WITH r, legacy, m, t, w, title, title_rel, language_rel, license_rel,
+         coalesce(language, text_language) AS audio_language,
+         CASE WHEN language IS NULL THEN coalesce(text_language_rel.bcp47, text_language.code)
+              ELSE coalesce(language_rel.bcp47, language.code) END AS bcp47,
+         coalesce(license, public) AS audio_license
+    CREATE (a:Audio {id: $audio_id, date: r.date})
+    CREATE (a)-[:AUDIO_OF]->(w), (a)-[:RECITATION_OF]->(t),
+           (a)-[:HAS_LANGUAGE {bcp47: bcp47}]->(audio_language), (a)-[:HAS_LICENSE]->(audio_license)
+    CALL (*) { WHEN title IS NOT NULL THEN { CREATE (a)-[:HAS_TITLE]->(title) } }
+    DELETE title_rel, language_rel, license_rel
+    WITH r, legacy, m, a
+    CALL (r, a) {
+        MATCH (r)-[contribution_rel:HAS_CONTRIBUTION]->(c:Contribution)
+        CREATE (a)-[:HAS_CONTRIBUTION]->(c)
+        DELETE contribution_rel
+    }
+    CREATE (r)-[:RENDITION_OF]->(a), (r)-[:FOLLOWS]->(m)
+    DELETE legacy
+    SET r.audio_key = coalesce(r.audio_key, 'recordings/' + m.id + '/' + r.id + '.' + r.format)
+    REMOVE r.date
+    RETURN a.id AS audio_id
+"""
+
+
+async def legacy_recording_ids(driver: AsyncDriver, database: str) -> list[str]:
+    """Recordings still attached to an edition, waiting for `upgrade_recordings`."""
+    async with driver.session(database=database) as session:
+        result = await session.run(LEGACY_RECORDINGS_QUERY)
+        return [record["id"] async for record in result]
 
 
 async def audit_schema(driver: AsyncDriver, database: str) -> dict[str, list[str]]:
+    """Report invariant violations. Legacy recordings are pending conversion, not violations."""
     violations = await audit_triggers(driver, database)
     async with driver.session(database=database) as session:
         for name, query in AUDITS.items():
@@ -60,7 +112,38 @@ async def audit_schema(driver: AsyncDriver, database: str) -> dict[str, list[str
             ids = [record["violating_id"] async for record in result]
             if ids:
                 violations[name] = ids
+    legacy = set(await legacy_recording_ids(driver, database))
+    if legacy:
+        violations = {name: kept for name, ids in violations.items() if (kept := [i for i in ids if i not in legacy])}
     return violations
+
+
+async def upgrade_recordings(driver: AsyncDriver, database: str, wait_seconds: float = 120) -> int:
+    """Convert each legacy recording into an Audio plus its Recording; return how many were converted.
+
+    Repeatable: converted recordings no longer match, so later runs convert nothing. The current triggers
+    must be live first, because the triggers they replace reject a Recording without RECORDING_OF.
+    """
+    pending = await legacy_recording_ids(driver, database)
+    if not pending:
+        return 0
+    await wait_for_triggers(driver, database, wait_seconds=wait_seconds)
+
+    async def convert(tx: AsyncManagedTransaction, recording_id: str, audio_id: str) -> None:
+        await lock_nodes(tx, "Recording", [recording_id])
+        result = await tx.run(UPGRADE_RECORDING_QUERY, recording_id=recording_id, audio_id=audio_id)
+        if await result.single() is None:
+            still_legacy = await tx.run(
+                "MATCH (r:Recording {id: $id})-[:RECORDING_OF]->() RETURN r.id AS id", id=recording_id
+            )
+            if await still_legacy.single() is not None:
+                raise RuntimeError(f"Recording '{recording_id}' has no edition, text and work to convert from")
+
+    for recording_id in pending:
+        async with driver.session(database=database) as session:
+            await session.execute_write(convert, recording_id, generate_id())
+        logger.info("Converted recording %s", recording_id)
+    return len(pending)
 
 
 async def migrate(driver: AsyncDriver, database: str) -> None:
@@ -92,3 +175,11 @@ async def migrate(driver: AsyncDriver, database: str) -> None:
                 await session.run(f"UNWIND $names AS name MERGE (:{label} {{name: name}})", names=list(enum))
             ).consume()
     await install_triggers(driver, database)
+    converted = await upgrade_recordings(driver, database)
+    if converted:
+        logger.info("Converted %d legacy recordings", converted)
+        violations = await audit_schema(driver, database)
+        if violations:
+            for name, ids in violations.items():
+                logger.error("%s: %s", name, ids[:20])
+            raise RuntimeError("Schema audit failed after converting recordings")

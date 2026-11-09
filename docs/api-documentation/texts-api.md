@@ -535,7 +535,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts" \
 
 ### Delete Text
 
-Delete a text when it has no editions and no incoming translation/commentary relationships.
+Delete a text when it has no editions, no audios, and no incoming translation/commentary relationships.
 
 **Endpoint:**
 
@@ -550,7 +550,7 @@ No response body is returned.
 **Error Responses:**
 
 - `404 Not Found`: Text does not exist
-- `409 Conflict`: Text has editions, translations, or commentaries pointing to it
+- `409 Conflict`: Text has editions, audios, translations, or commentaries pointing to it
 - `401 Unauthorized`: Missing or invalid API key in deployed environments
 
 **Example Usage:**
@@ -563,6 +563,7 @@ curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
 **Delete Behavior:**
 - Deletes the `Text`, title/alternative-title `Nomen` and `LocalizedText` subgraphs, and contribution nodes attached to the text.
 - Blocks if any edition belongs to the text.
+- Blocks if any audio recites the text. Audios of a text are created and listed with `POST` and `GET /v2/texts/{text_id}/audios`; see [audios-api.md](audios-api.md).
 - Blocks if another text points to this text through `TRANSLATION_OF` or `COMMENTARY_OF`.
 - Deletes the underlying `Work` only when no other text still points to that work.
 - If the work is preserved because other texts still use it, existing `HAS_TAG` relationships on the work are preserved.

@@ -85,6 +85,8 @@ jobs:
           source .venv/bin/activate
           pip install -r requirements.txt
           python -m scripts.install_neo4j_triggers
+          # Converts recordings to the Audio shape once; later deploys convert nothing.
+          python -m scripts.upgrade_recordings
           owner=$(stat -c '%U:%G' .)
           chown -R "$owner" .
           sudo systemctl restart openpecha-api

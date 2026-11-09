@@ -1,7 +1,7 @@
 import logging
 from typing import TYPE_CHECKING, LiteralString
 
-from exceptions import DataNotFoundError, DataValidationError
+from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from models.edition import EditionOutput
 from models.enums import EditionType
 
@@ -190,6 +190,13 @@ class EditionDatabase:
 
     @staticmethod
     async def delete_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> None:
+        # Audio outlives the edition: deleting it only removes FOLLOWS, so cues would lose their target.
+        await lock_nodes(tx, "Edition", [edition_id])
+        cued = await RecordingDatabase.count_cued_followers(tx, edition_id)
+        if cued:
+            raise DataConflictError(
+                f"Edition '{edition_id}' cannot be deleted because {cued} recording(s) with cues follow it"
+            )
         await SegmentationDatabase.delete_by_edition_with_transaction(tx, edition_id)
         for query in (
             PaginationDatabase.DELETE_ALL_QUERY,
@@ -197,7 +204,6 @@ class EditionDatabase:
             BibliographicDatabase.DELETE_ALL_QUERY,
             NoteDatabase.DELETE_ALL_QUERY,
             MarkDatabase.DELETE_ALL_QUERY,
-            RecordingDatabase.DELETE_ALL_QUERY,
             EditionDatabase.DELETE_QUERY,
         ):
             await tx.run(query, edition_id=edition_id)

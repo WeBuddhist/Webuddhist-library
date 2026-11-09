@@ -45,7 +45,7 @@ async def migrate_content(db: Database, storage: Storage, *, apply: bool = False
                         UNION MATCH (e)<-[:NOTE_OF|MARK_OF|BIBLIOGRAPHY_OF|ATTRIBUTE_OF]-()<-[:SPAN_OF]-(s:Span)
                         RETURN s
                         UNION MATCH (e)<-[:TOC_OF]-()<-[:SECTION_OF]-()<-[:SPAN_OF]-(s:Span) RETURN s
-                        UNION MATCH (e)<-[:RECORDING_OF]-()<-[:CUE_OF]-()<-[:SPAN_OF]-(s:Span) RETURN s
+                        UNION MATCH (e)<-[:RECORDING_OF|FOLLOWS]-()<-[:CUE_OF]-()<-[:SPAN_OF]-(s:Span) RETURN s
                     }
                     WITH s
                     WHERE s.start IS NULL OR s.end IS NULL OR s.start < 0 OR s.end < s.start OR s.end > $length

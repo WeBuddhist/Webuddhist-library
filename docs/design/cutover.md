@@ -1,6 +1,6 @@
 # Content state and search: manual maintenance
 
-Ordinary deployment updates and restarts the API. It does not run migrations or reindexing. Complete any required data upgrade before starting a release that depends on it. Content-edit request and response bodies stay unchanged; edition revisions remain internal.
+Ordinary deployment updates and restarts the API. Apart from the recording conversion described below, it does not run migrations or reindexing. Complete any required data upgrade before starting a release that depends on it. Content-edit request and response bodies stay unchanged; edition revisions remain internal.
 
 ## What needs migration
 
@@ -10,11 +10,20 @@ Ordinary deployment updates and restarts the API. It does not run migrations or 
 | Pagination | Audit for empty pages, volumes, and paginations. Correct invalid records before upgrading. Nonempty pages are ordered by offsets; no ordering field or backfill is needed. |
 | Segmentation | Audit line continuity within and between segments. Gaps and overlaps require an explicit correction before upgrade; migration does not guess new boundaries. |
 | Editions | Record each existing S3 key, verified content length, and internal revision. Existing files stay at their current locations; no copy is needed. Future edits always write fresh keys. |
+| Recordings | Convert each recording attached to an edition (`RECORDING_OF`) into an `Audio` plus its `Recording`. Title, language, license, date, and contributions move to the new audio, which recites the edition's text and belongs to its Work. The recording follows the same edition (`FOLLOWS`), keeps its cues unchanged, and records its existing S3 key in `audio_key`. No file is copied. |
 | Search | Manually rebuild indexes when changing mappings or repairing missed updates. Content projection version 3 changes the chunk mapping and adds immutable-content references. Keep the names `content-search` and `catalog-search`. |
 
 Schema upgrades repeat idempotent steps without a version marker. Content backfill sets missing fields; reindexing reads current canonical records. Application ownership rules do not require rewriting valid Work relationships.
 
-Recordings need no migration. Audio paths remain derived from edition ID, recording ID, and format.
+### Recording conversion on deploy
+
+Deploy runs `python -m scripts.upgrade_recordings` after installing triggers and before restarting the API. The command:
+
+1. Finds recordings that still have `RECORDING_OF`. When there are none, it stops at once and logs `Converted 0 legacy recording(s).` This is the case on every deploy after the first one.
+2. Waits until the database runs the newly installed triggers. APOC loads triggers only after its refresh interval (`apoc.trigger.refresh`, 60 seconds by default). The triggers it replaces would reject a recording without `RECORDING_OF`.
+3. Converts each recording in its own transaction, so an interrupted run leaves only fully converted or untouched recordings. Rerun the deploy to finish.
+
+Between the trigger install and the restart, the old API cannot write recordings and does not list converted ones. With a small number of recordings this lasts seconds. `python -m scripts.migrate --apply` runs the same conversion; the read-only audit reports pending recordings as a count, not as violations.
 
 ## Prepare
 

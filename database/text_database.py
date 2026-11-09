@@ -10,6 +10,7 @@ from models.text import TextBase, TextInput, TextOutput, TextPatch
 
 from .contribution_database import ContributionDatabase, contributions_return
 from .database_validator import DatabaseValidator
+from .locking import lock_nodes
 from .nomen_database import NomenDatabase
 from .tag_database import TagDatabase
 
@@ -228,7 +229,8 @@ class TextDatabase:
     RETURN w.id AS work_id,
            count { (e)<-[:EDITION_OF]-(:Edition) } AS edition_count,
            count { (e)<-[:TRANSLATION_OF]-(:Text) } AS translation_count,
-           count { (e)<-[:COMMENTARY_OF]-(:Text) } AS commentary_count
+           count { (e)<-[:COMMENTARY_OF]-(:Text) } AS commentary_count,
+           count { (e)<-[:RECITATION_OF]-(:Audio) } AS audio_count
     """
 
     DELETE_QUERY: LiteralString = """
@@ -341,6 +343,8 @@ class TextDatabase:
 
     async def delete(self, text_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
+            # Audio creation locks the text too, so a new recitation cannot slip past this check.
+            await lock_nodes(tx, "Text", [text_id])
             result = await tx.run(TextDatabase.DELETE_CHECK_QUERY, text_id=text_id)
             record = await result.single()
             if record is None:
@@ -353,6 +357,8 @@ class TextDatabase:
                 blockers.append(f"{record['translation_count']} translation(s)")
             if record["commentary_count"]:
                 blockers.append(f"{record['commentary_count']} commentary/commentaries")
+            if record["audio_count"]:
+                blockers.append(f"{record['audio_count']} audio(s)")
             if blockers:
                 raise DataConflictError(f"Text '{text_id}' cannot be deleted because it has {', '.join(blockers)}")
 

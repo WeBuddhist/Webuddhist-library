@@ -146,10 +146,30 @@ def _custom_cases() -> dict[str, str]:
             CREATE (span)-[rel_2:SPAN_OF]->(page)
             RETURN [span] AS createdNodes, [rel_1, rel_2] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
-        "enforce_recording_contribution_narrator": """
+        "enforce_audio_contribution_role": """
             MERGE (role:RoleType {name: 'translator'})
+            CREATE (audio:Audio {id: randomUUID()})
+            CREATE (audio)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(role)
+            RETURN [audio] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
+        "enforce_audio_recitation_in_work": """
+            CREATE (work:Work {id: randomUUID()}), (other_work:Work {id: randomUUID()})
+            CREATE (text:Text {id: randomUUID()})-[:TEXT_OF {original: true}]->(work)
+            CREATE (audio:Audio {id: randomUUID()})-[:RECITATION_OF]->(text)
+            CREATE (audio)-[:AUDIO_OF]->(other_work)
+            RETURN [audio] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
+        "enforce_recording_follows_recited_text": """
+            CREATE (recited:Text {id: randomUUID()}), (other:Text {id: randomUUID()})
+            CREATE (audio:Audio {id: randomUUID()})-[:RECITATION_OF]->(recited)
+            CREATE (edition:Edition {id: randomUUID()})-[:EDITION_OF]->(other)
+            CREATE (recording:Recording {id: randomUUID()})-[:RENDITION_OF]->(audio)
+            CREATE (recording)-[:FOLLOWS]->(edition)
+            RETURN [recording] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
+        "enforce_cue_requires_follows": """
             CREATE (recording:Recording {id: randomUUID()})
-            CREATE (recording)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(role)
+            CREATE (:Cue {start_ms: 0, end_ms: 100})-[:CUE_OF]->(recording)
             RETURN [recording] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
         "enforce_contribution_by": """
