@@ -351,7 +351,7 @@ Returns the updated category with all of its localizations.
 ```
 
 **Error Responses:**
-- `400 Bad Request`: A language code is not listed in `/v2/languages`
+- `400 Bad Request`: The base language of a language code (the part before the first `-`, e.g. `en` for `en-US`) is not listed in `/v2/languages`. Region and script tags are not checked, so `en-US` is accepted when `en` is listed.
 - `401 Unauthorized`: Missing or invalid API key in deployed environments
 - `404 Not Found`: Application or category does not exist in the requested application
 - `422 Validation Error`: Missing `X-Application` header, empty or `null` body fields, or a title that duplicates a sibling category's title in the same language
@@ -372,6 +372,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/categories/CAT12345678" \
 
 **Update Behavior:**
 - Localizations are merged per language: languages in the request overwrite existing ones, other languages are left unchanged.
+- Language codes are matched case-insensitively. Sending `en-us` replaces an existing `en-US` entry, and the stored code takes the spelling from the request.
 - Localizations cannot be removed through this endpoint.
 - `parent_id` cannot be changed through this endpoint.
 

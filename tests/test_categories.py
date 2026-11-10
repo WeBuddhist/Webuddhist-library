@@ -490,6 +490,39 @@ class TestUpdateCategoryV2:
         assert response.status_code == 200
         assert response.json()["title"] == {"en": "Patch Mixed Title Updated", "bo": "མཚན་བྱང་།", "zh": "混合标题"}
 
+    async def test_patch_category_title_language_matched_case_insensitively(self, client, test_database):
+        """Test a differently-cased language code replaces the existing title instead of adding a second one"""
+        category = CategoryInput.model_validate({"title": {"en-US": "Patch Case Old", "bo": "ཡིག་འབྲུ།"}})
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"title": {"en-us": "Patch Case New"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["title"] == {"en-us": "Patch Case New", "bo": "ཡིག་འབྲུ།"}
+
+        get_response = await client.get(f"/v2/categories/{category_id}", headers=APPLICATION_HEADER)
+        assert get_response.json()["title"] == {"en-us": "Patch Case New", "bo": "ཡིག་འབྲུ།"}
+
+    async def test_patch_category_description_language_matched_case_insensitively(self, client, test_database):
+        """Test a differently-cased language code replaces the existing description"""
+        category = CategoryInput.model_validate(
+            {"title": {"en": "Patch Case Description"}, "description": {"EN": "Old description", "bo": "རྙིང་པ།"}}
+        )
+        category_id = await test_database.category.create(category, application="test_application")
+
+        response = await client.patch(
+            f"/v2/categories/{category_id}",
+            json={"description": {"en": "New description"}},
+            headers=APPLICATION_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["description"] == {"en": "New description", "bo": "རྙིང་པ།"}
+
     async def test_patch_category_adds_description_when_missing(self, client, test_database):
         """Test adding a description to a category that has none"""
         category = CategoryInput.model_validate({"title": {"en": "Patch No Description"}})

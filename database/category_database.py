@@ -15,6 +15,17 @@ if TYPE_CHECKING:
     from .database import Database
 
 
+def _merge_localizations(existing: dict[str, str], patch: dict[str, str]) -> dict[str, str]:
+    """Add or replace the patch's languages, matching language codes case-insensitively.
+
+    The patch's spelling of a language code replaces the existing one, so patching
+    ``en-us`` over ``en-US`` leaves a single ``en-us`` entry.
+    """
+    replaced = {language.lower() for language in patch}
+    kept = {language: text for language, text in existing.items() if language.lower() not in replaced}
+    return kept | patch
+
+
 class CategoryDatabase:
     _CATEGORY_RETURN: LiteralString = """
     {
@@ -143,15 +154,18 @@ class CategoryDatabase:
         return self._db.get_session()
 
     async def get_by_id(self, category_id: str, application: str) -> CategoryOutput | None:
-        async def read(tx: AsyncManagedTransaction) -> CategoryOutput | None:
-            result = await tx.run(CategoryDatabase.GET_BY_ID_QUERY, category_id=category_id, application=application)
-            record = await result.single()
-            if record is None:
-                return None
-            return CategoryOutput.model_validate(record["category"])
-
         async with self.session as session:
-            return await session.execute_read(read)
+            return await session.execute_read(self.get_with_transaction, category_id, application)
+
+    @staticmethod
+    async def get_with_transaction(
+        tx: AsyncManagedTransaction, category_id: str, application: str
+    ) -> CategoryOutput | None:
+        result = await tx.run(CategoryDatabase.GET_BY_ID_QUERY, category_id=category_id, application=application)
+        record = await result.single()
+        if record is None:
+            return None
+        return CategoryOutput.model_validate(record["category"])
 
     async def get_all(self, application: str, parent_id: str | None = None) -> list[CategoryOutput]:
         async def read(tx: AsyncManagedTransaction) -> list[CategoryOutput]:
@@ -191,29 +205,30 @@ class CategoryDatabase:
     async def update(self, category_id: str, patch: CategoryPatch, application: str) -> CategoryOutput:
         async def update_transaction(tx: AsyncManagedTransaction) -> CategoryOutput:
             await lock_nodes(tx, "Category", [category_id])
-            result = await tx.run(CategoryDatabase.GET_BY_ID_QUERY, category_id=category_id, application=application)
-            record = await result.single()
-            if record is None:
+            existing = await self.get_with_transaction(tx, category_id, application)
+            if existing is None:
                 raise DataNotFoundError(f"Category '{category_id}' not found in application '{application}'")
-            existing = CategoryOutput.model_validate(record["category"])
 
             if patch.title is not None:
                 await self._validate_not_exists_tx(
                     tx, application, patch.title.root, existing.parent_id, category_id=category_id
                 )
+                title = _merge_localizations(existing.title.root, patch.title.root)
                 await tx.run(CategoryDatabase.DELETE_TITLE_QUERY, category_id=category_id)
-                nomen_id = await NomenDatabase.create_with_transaction(tx, existing.title.root | patch.title.root)
+                nomen_id = await NomenDatabase.create_with_transaction(tx, title)
                 await tx.run(CategoryDatabase.LINK_TITLE_QUERY, category_id=category_id, nomen_id=nomen_id)
 
             if patch.description is not None:
-                description = (existing.description.root if existing.description else {}) | patch.description.root
+                existing_description = existing.description.root if existing.description else {}
+                description = _merge_localizations(existing_description, patch.description.root)
                 await tx.run(CategoryDatabase.DELETE_DESCRIPTION_QUERY, category_id=category_id)
                 nomen_id = await NomenDatabase.create_with_transaction(tx, description)
                 await tx.run(CategoryDatabase.LINK_DESCRIPTION_QUERY, category_id=category_id, nomen_id=nomen_id)
 
-            result = await tx.run(CategoryDatabase.GET_BY_ID_QUERY, category_id=category_id, application=application)
-            record = await result.single(strict=True)
-            return CategoryOutput.model_validate(record["category"])
+            updated = await self.get_with_transaction(tx, category_id, application)
+            if updated is None:
+                raise RuntimeError(f"Category '{category_id}' disappeared during update")
+            return updated
 
         async with self.session as session:
             return await session.execute_write(update_transaction)
