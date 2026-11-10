@@ -1,9 +1,10 @@
 # Tradition and Chants Tagging: Main Report
 
-**Library:** library-prod.webuddhist.com, application `webuddhist`
-**Audit date:** 2026-11-09
+**Library audited:** library-prod.webuddhist.com (prod), application `webuddhist`. Snapshot taken 2026-11-09.
+**Uploaded to:** library.webuddhist.com (dev) **only, for now**, on 2026-11-10. Dev was snapshotted before and after the upload.
+**Audit date:** 2026-11-09. Updated 2026-11-10 with the dev upload.
 **Scope:** all 1,630 texts (877 works) in 12 languages and 14 categories
-**Status:** plan ready for review. **Not applied to production.** Nothing committed or pushed.
+**Status:** plan committed on branch `tradition-tag-audit`. **Applied to dev and verified. Not applied to prod.**
 
 ## 1. Summary
 
@@ -15,9 +16,88 @@
   - **All 892 texts identified as chants** carry the Chants tag.
 - Every chant decision is made, except 3 test records that are deliberately left alone.
 
-"Added by the plan" below means tags **not yet on the library**. They're added only when the plan is applied with `apply_tag_plan.sh --apply`. Until then the library stays at the "today" numbers.
+In sections 4 to 7, **"Today"** is **prod's snapshot of 2026-11-09**, and **"Added by the plan"** is the 467 additions in `tag_plan.tsv`. Prod is not changed yet, so it still matches the "Today" numbers. **Dev has its own before-and-after numbers in section 2**, because its data differs from prod's.
 
-## 2. Tag IDs
+## 2. Upload status: prod and dev
+
+| | Prod (`library-prod.webuddhist.com`) | Dev (`library.webuddhist.com`) |
+|---|---|---|
+| Texts | 1,630 | 1,445 |
+| Snapshot before upload | 2026-11-09 (the "Today" numbers in this report) | 2026-11-10, just before the upload |
+| Plan applied | **no**, prod is unchanged | **yes**, 2026-11-10, with `apply_tag_plan.sh --apply` |
+| Additions sent | — | **448** of the 467 (19 target texts don't exist on dev; see below) |
+| Removed or changed | nothing | nothing; the script only adds |
+| Result | — | 448 added, 0 failed |
+| Verified | prod dry run on 2026-11-09 (section 11) | dev dry run after the upload: `0 additions, 448 already done, 0 blocked, 0 errors` |
+
+**What was uploaded to dev** (works; translations get the tag through their work):
+
+| Tag | Tag ID | Works |
+|---|---|---:|
+| Vajrayāna | `ZPcgMZgVJxAMQ7rpfW72a` | 227 |
+| Mahāyāna | `zjHEBN2egpftHD7BRMQko` | 152 |
+| Theravāda | `296WZOr8MXWteSqBBI7pl` | 2 |
+| Chants | `FZ5STsdU0eLvo7Nb2CpvH` | 67 |
+| **Total** | | **448** |
+
+**Dev before and after the upload (texts, with works in brackets):**
+
+| Tag | Dev before | Change | Dev after |
+|---|---:|---:|---:|
+| Vajrayāna `ZPcgMZgVJxAMQ7rpfW72a` | 713 (124) | +230 (+227) | **943 (351)** |
+| Mahāyāna `zjHEBN2egpftHD7BRMQko` | 4 (2) | +171 (+152) | **175 (154)** |
+| Theravāda `296WZOr8MXWteSqBBI7pl` | 87 (55) | +4 (+2) | **91 (57)** |
+| No tradition tag | 641 (605) | −405 (−381) | **236 (224)** |
+| Chants `FZ5STsdU0eLvo7Nb2CpvH` | 786 (163) | +67 (+67) | **853 (230)** |
+| **Total** | **1,445 (786)** | | **1,445 (786)** |
+
+443 dev texts changed. **No text lost a tag, and no text has two tradition tags.**
+
+**Dev tradition by category (texts, Vajrayāna / Mahāyāna / Theravāda / none):**
+
+| Category | Texts | Dev before | Dev after | Chants before → after |
+|---|---:|---|---|---|
+| Liturgy (Chant and Recitation) | 784 | 694 / 0 / 58 / 32 | 700 / 1 / 62 / 21 | 771 → 774 |
+| Tantras | 275 | 0 / 0 / 0 / 275 | 223 / 0 / 0 / 52 | 0 → 26 |
+| Middle Way | 107 | 10 / 0 / 0 / 97 | 10 / 70 / 0 / 27 | 0 → 2 |
+| Prajñāpāramitā | 58 | 9 / 0 / 0 / 49 | 9 / 45 / 0 / 4 | 9 → 9 |
+| Miscellaneous | 41 | 0 / 0 / 0 / 41 | 1 / 15 / 0 / 25 | 0 → 35 |
+| Mind-only Treatises | 39 | 0 / 0 / 0 / 39 | 0 / 22 / 0 / 17 | 0 → 0 |
+| Systematic Treatises | 32 | 0 / 0 / 21 / 11 | 0 / 0 / 21 / 11 | 0 → 0 |
+| Logic | 28 | 0 / 0 / 0 / 28 | 0 / 2 / 0 / 26 | 0 → 0 |
+| Discourses | 26 | 0 / 0 / 0 / 26 | 0 / 13 / 0 / 13 | 0 → 0 |
+| Monastic Rules | 16 | 0 / 0 / 0 / 16 | 0 / 0 / 0 / 16 | 0 → 1 |
+| Mind Trainings and Advices | 15 | 0 / 0 / 0 / 15 | 0 / 3 / 0 / 12 | 0 → 0 |
+| Linguistics Treatises | 10 | 0 / 0 / 0 / 10 | 0 / 0 / 0 / 10 | 0 → 0 |
+| History and Stories | 1 | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 1 | 0 → 0 |
+| Uncategorised (probe record) | 1 | 0 / 0 / 0 / 1 | 0 / 0 / 0 / 1 | 0 → 0 |
+| Only on dev (not in the prod audit) | 12 | 0 / 4 / 8 / 0 | 0 / 4 / 8 / 0 | 6 → 6 |
+| **Total** | **1,445** | **713 / 4 / 87 / 641** | **943 / 175 / 91 / 236** | **786 → 853** |
+
+**How dev differs from prod:**
+- 1,433 texts exist on both.
+- 197 prod texts are not on dev. These are mostly English and Tibetan Liturgy and Discourses texts.
+- 12 dev texts are not on prod. They're Pali Abhidhamma commentaries and a few sūtras and dhāraṇīs, each already tagged and left as they are.
+- On texts that exist on both, the tags were the same as prod's for all but 12.
+
+**The 19 additions not made on dev.** All are Vajrayāna, on Tibetan Liturgy texts that exist on prod but not on dev under the same IDs:
+- Taklung practice texts and supplications
+- lineage and long-life prayers
+- the Mañjuśrī-nāma-saṃgīti
+- Sitātapatrā, Siṃhamukhā and Cakrasaṃvara texts
+- an Akṣobhya rite
+
+The same texts may exist on dev under other IDs. They'll be tagged on prod when the plan is applied there.
+
+**To check dev again later** (read-only, from the `Webuddhist-library` folder), use the dev plan `final/tag_plan_dev.tsv`, which is `tag_plan.tsv` without the 19 lines. It should report `0 additions, 448 already done, 0 blocked, 0 errors`:
+
+```bash
+BASE=https://library.webuddhist.com zsh docs/tag-audit/apply_tag_plan.sh --plan final/tag_plan_dev.tsv
+```
+
+The full 467-line plan reports the 19 missing texts as errors on dev, and the script then refuses to apply. That's expected: those texts don't exist there.
+
+## 3. Tag IDs
 
 | Tag | Tag ID | Type | Used by this plan |
 |---|---|---|---|
@@ -29,7 +109,7 @@
 
 **Tags live on the work, not the text.** A translation shares its root text's work, and the API (`POST /v2/texts/{id}/tags/{tag}`) tags the whole work. Each addition is made once, on the root text, and all its translations receive the tag automatically. The API merges tags, so a tag can never be duplicated.
 
-## 3. Totals by tag
+## 4. Totals by tag
 
 **Texts:**
 
@@ -53,7 +133,7 @@
 | **Total works** | 877 | | 877 |
 | Chants | 254 | +67 | **321** |
 
-## 4. Tags by category
+## 5. Tags by category
 
 **Tradition tags (texts):**
 
@@ -97,7 +177,7 @@
 
 Three test records (2 in Liturgy, 1 uncategorised) are neither chants nor non-chants and are left alone. "Kept Chants on non-chants" means texts that read as not recited but already carry Chants. Existing tags are not touched, so those tags stay and are listed for review.
 
-## 5. Tags by language (texts)
+## 6. Tags by language (texts)
 
 | Language | Texts | Today: Vajra / Mahā / Thera / none | After: Vajra / Mahā / Thera / none | Carry Chants after |
 |---|---:|---|---|---:|
@@ -115,7 +195,7 @@ Three test records (2 in Liturgy, 1 uncategorised) are neither chants nor non-ch
 | Classical Chinese (lzh) | 1 | 1 / 0 / 0 / 0 | 1 / 0 / 0 / 0 | 1 |
 | **Total** | **1,630** | **710 / 88 / 110 / 722** | **977 / 259 / 114 / 280** | **1,035** |
 
-## 6. What the plan adds, in detail
+## 7. What the plan adds, in detail
 
 **Tradition tags (400 works, 442 texts):**
 
@@ -137,9 +217,9 @@ Tradition tags go **only to works that have no tradition tag today**, so none ca
 | Rites written as the words to recite: bodhicitta, novice precepts, confession, Seven Tathāgatas reading | 4 |
 | Dhāraṇī | 1 |
 
-59 of these come from the first reading. The other 8 come from the second, closer reading of the borderline texts (section 8).
+59 of these come from the first reading. The other 8 come from the second, closer reading of the borderline texts (section 9).
 
-## 7. What does not change
+## 8. What does not change
 
 - **All 908 existing tradition tags stay as they are.** 362 are confirmed by the content. The other 546 are kept although this audit could not confirm them, since existing tags are out of scope.
 - **All 968 existing Chants tags stay**, including 141 texts (50 works) whose content reads as not recited:
@@ -156,7 +236,7 @@ Tradition tags go **only to works that have no tradition tag today**, so none ca
 - **The Kangyur tag is untouched.**
 - **No records and no test records are deleted.**
 
-## 8. How decisions were made
+## 9. How decisions were made
 
 1. **Every work's content was read.** For all 877 works, independent readers read the opening and a middle passage of the text itself. They didn't see existing tags or the earlier audit's verdict.
 2. **A tradition tag is added only when:**
@@ -172,7 +252,7 @@ Tradition tags go **only to works that have no tradition tag today**, so none ca
 
    Result: 22 chants (8 newly tagged) and 113 not chants. The 2 test works stay undecided.
 
-## 9. Texts left without a tradition tag (280)
+## 10. Texts left without a tradition tag (280)
 
 | Reason | Texts | Rule |
 |---|---:|---|
@@ -182,18 +262,21 @@ Tradition tags go **only to works that have no tradition tag today**, so none ca
 | Reading and earlier audit disagree | 5 | 1 |
 | Test or probe records (kept, not deleted) | 3 | — |
 
-## 10. Dry run and tests
+## 11. Dry run and tests
 
 A **dry run** is a rehearsal against the live server. It reads the current tags and reports exactly what would be added, without changing anything.
 
 | Check | Result |
 |---|---|
 | Prod dry run, 2026-11-09 16:24 (the 459 additions planned at that time) | all 459 pending; 0 already done, 0 blocked, 0 errors; nothing changed. Log: `final/apply_log_20261109_162441_dryrun.txt` |
-| The 8 Chants additions from the second reading | **not yet dry-run on prod.** By instruction, prod and dev were not contacted for this check. Run the dry run before applying, so all 467 are checked against the live library |
+| The 8 Chants additions from the second reading | **not yet dry-run on prod.** Run the prod dry run before applying there, so all 467 are checked against the live library. On dev they were applied and verified (section 2). |
 | Offline check of the full 467-addition plan against the saved library export (2026-11-09) | **16 / 16 pass**: add-only; every line on a root text; tag names match IDs; no duplicates; no tag already present; no tradition added to a work that has one; every addition supported; no text with two tradition tags; no existing tag lost; every chant tagged; plan, CSVs and dry-run list agree |
 | Local mock of the API on this machine only, same script, full 467-addition plan (2026-11-09 17:06) | dry run listed 467 additions and made 0 changes; a removal line was refused; a second tradition tag was blocked; applying sent exactly 467 additions (POST only) with 0 failures; a rerun found 0 to do and 467 already done; no existing tag lost; end state matched the plan exactly |
+| Dev dry run before upload, 2026-11-10 (dev plan, 448 additions) | 448 pending; 0 already done, 0 blocked, 0 errors |
+| Dev upload, 2026-11-10 | 448 added, 0 failed. Log: `final/apply_log_20261110_101628_apply.txt` |
+| Dev dry run after upload, 2026-11-10 | `0 additions, 448 already done, 0 blocked, 0 errors`; no text lost a tag; no text has two tradition tags. Log: `final/apply_log_20261110_102701_dryrun.txt` |
 
-## 11. Verdicts
+## 12. Verdicts
 
 | Check | Verdict |
 |---|---|
@@ -207,7 +290,7 @@ A **dry run** is a rehearsal against the live server. It reads the current tags 
 | Existing tags untouched | **PASS**: the plan and the script are add-only |
 | Counts reconcile across plan, CSVs, dry-run list and script | **PASS** (467 additions everywhere) |
 
-## 12. Open items for review (do not block applying)
+## 13. Open items for review (do not block applying)
 
 | Item | Works | Texts |
 |---|---:|---:|
@@ -218,7 +301,11 @@ A **dry run** is a rehearsal against the live server. It reads the current tags 
 
 Also: the readings were done by AI readers from excerpts, and no person has checked them. A reviewer spot check is recommended before applying.
 
-## 13. How to apply (run by the library owner)
+## 14. How to apply (run by the library owner)
+
+**Dev:** applied and verified on 2026-11-10 (section 2). To recheck it, run the dev command in section 2.
+
+**Prod:** not applied yet. When the reviewer approves:
 
 1. **Dry run** (read-only):
 
@@ -234,7 +321,7 @@ To apply one tag at a time, add `--only Vajrayana`, `--only Mahayana`, `--only T
 
 `apply_tag_plan.sh` is the only apply script. Don't run `tools/tibetan_audit.py merge`, which would write the old pre-audit scripts again.
 
-## 14. Files (in `final/`)
+## 15. Files (in `final/`)
 
 | File | Contents |
 |---|---|
@@ -246,7 +333,10 @@ To apply one tag at a time, add `--only Vajrayana`, `--only Mahayana`, `--only T
 | `tag_plan.tsv` | The 467 additions the script applies, one per line, with tag IDs |
 | `dry_run.txt` | Every record that changes, including translations affected through their work |
 | `readings.json` | The content readings of every work, the second chant reading, and both briefs |
-| `apply_log_20261109_162441_dryrun.txt` | Output of the prod dry run |
+| `tag_plan_dev.tsv` | The dev plan: the 448 lines of `tag_plan.tsv` whose texts exist on dev |
+| `apply_log_20261109_162441_dryrun.txt` | Output of the prod dry run (2026-11-09) |
+| `apply_log_20261110_101628_apply.txt` | Output of the dev upload (2026-11-10): every addition, with OK or FAIL |
+| `apply_log_20261110_102701_dryrun.txt` | Output of the dev dry run after the upload (2026-11-10) |
 
 To rebuild the CSVs from a fresh read-only export:
 
