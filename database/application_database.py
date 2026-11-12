@@ -16,6 +16,7 @@ class ApplicationDatabase:
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (a:Application {id: $application_id})
     RETURN count { (:Tag)-[:BELONGS_TO]->(a) } AS tag_count,
+           count { (:TagGroup)-[:BELONGS_TO]->(a) } AS tag_group_count,
            count { (:Category)-[:BELONGS_TO]->(a) } AS category_count,
            count { (:ApiKey)-[:BOUND_TO]->(a) } AS api_key_count
     """
@@ -64,6 +65,8 @@ class ApplicationDatabase:
             blockers = []
             if record["tag_count"]:
                 blockers.append(f"{record['tag_count']} tag(s)")
+            if record["tag_group_count"]:
+                blockers.append(f"{record['tag_group_count']} tag group(s)")
             if record["category_count"]:
                 blockers.append(f"{record['category_count']} category/categories")
             if record["api_key_count"]:

@@ -185,6 +185,20 @@ class TestReferenceDeletes:
         assert response.status_code == 409
         assert "api key" in response.json()["error"].lower()
 
+    async def test_delete_application_conflicts_with_tag_group(self, client, test_database):
+        name = f"app{generate_id()[:6].lower()}"
+        assert (await client.post("/v2/applications", json={"name": name})).status_code == 201
+        response = await client.post(
+            "/v2/tag-groups", json={"title": {"en": _unique("Group")}}, headers={"X-Application": name}
+        )
+        assert response.status_code == 201
+
+        response = await client.delete(f"/v2/applications/{name}")
+
+        assert response.status_code == 409
+        assert "1 tag group(s)" in response.json()["error"]
+        assert await _scalar(test_database, "RETURN EXISTS { (:Application {id: $name}) }", name=name) is True
+
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestPersonAndCategoryDeletes:

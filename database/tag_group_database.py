@@ -193,7 +193,9 @@ class TagGroupDatabase:
             # Application first, as in create, so title checks of concurrent creates and renames serialize.
             await lock_nodes(tx, "Application", [application])
             await lock_nodes(tx, "TagGroup", [group_id])
-            await TagGroupDatabase._get_with_transaction(tx, group_id, application)
+            params = {"group_id": group_id, "application": application}
+            if await (await tx.run(TagGroupDatabase.GROUP_EXISTS_QUERY, **params)).single() is None:
+                raise DataNotFoundError(f"Tag group '{group_id}' not found in application '{application}'")
 
             # Like other PATCH endpoints, a sent localization map replaces the field as a whole.
             if patch.title is not None:

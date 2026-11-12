@@ -141,7 +141,7 @@ No response body is returned.
 
 **Error Responses:**
 - `404 Not Found`: Application does not exist
-- `409 Conflict`: Application still has tags, categories, or API keys bound to it
+- `409 Conflict`: Application still has tags, tag groups, categories, or API keys bound to it
 - `401 Unauthorized`: Missing or invalid API key in deployed environments
 
 **Example Usage:**
