@@ -102,6 +102,37 @@ class TestCatalogSearch:
         assert response.json()["items"][0]["id"] == person_id
         assert response.json()["items"][0]["alt_names"][0]["sa-x-iast"] == "Śāntideva"
 
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            ("pad", {"Padmasambhava"}),
+            ("Padma", {"Padmasambhava"}),
+            ("nagar", {"Nāgārjuna"}),
+            ("santi", {"Śāntideva", "Śāntigarbha"}),
+        ],
+    )
+    async def test_person_name_matches_partial_last_word(
+        self,
+        catalog_client,
+        catalog_search,
+        test_database,
+        query,
+        expected,
+    ):
+        names = {
+            "Padmasambhava": {"en": "Padmasambhava"},
+            "Nāgārjuna": {"sa-x-iast": "Nāgārjuna"},
+            "Śāntideva": {"sa-x-iast": "Śāntideva"},
+            "Śāntigarbha": {"sa-x-iast": "Śāntigarbha"},
+        }
+        ids = {label: await _create_person(test_database, name=name) for label, name in names.items()}
+        await publish_catalog(catalog_search, test_database)
+
+        response = await catalog_client.get("/v2/persons", params={"name": query})
+
+        assert response.status_code == 200, response.json()
+        assert {item["id"] for item in response.json()["items"]} == {ids[label] for label in expected}
+
     async def test_text_title_sanskrit_lenient_search_returns_canonical_record(
         self,
         catalog_client,
@@ -168,6 +199,36 @@ class TestCatalogSearch:
 
         assert response.status_code == 200, response.json()
         assert response.json()["items"][0]["id"] == text_id
+
+    @pytest.mark.parametrize("query", ["asp", "Asp", "aspiration pr", "prayer from the bodhichar", "bodhicharya"])
+    async def test_text_title_matches_partial_last_word(
+        self,
+        catalog_client,
+        catalog_search,
+        test_database,
+        query,
+    ):
+        person_id = await _create_person(test_database, name={"en": "Search Author"})
+        text_id = await _create_text(
+            test_database,
+            person_id=person_id,
+            title={"en": "Aspiration Prayer from the Bodhicharyāvatāra"},
+            language="en",
+        )
+        unrelated_id = await _create_text(
+            test_database,
+            person_id=person_id,
+            title={"en": "Heart Sutra"},
+            language="en",
+        )
+        await publish_catalog(catalog_search, test_database)
+
+        response = await catalog_client.get("/v2/texts", params={"title": query, "language": "en"})
+
+        assert response.status_code == 200, response.json()
+        returned_ids = [item["id"] for item in response.json()["items"]]
+        assert returned_ids == [text_id]
+        assert unrelated_id not in returned_ids
 
     async def test_person_tibetan_phonetic_search_returns_tibetan_record(
         self,
