@@ -70,13 +70,15 @@ class CatalogSearchService:
         application: str | None = None,
     ) -> list[TextOutput]:
         tag_groups: list[list[str]] = []
-        if filters.language or filters.tag_ids:
+        # Groups only matter for "all"; with "any" one `terms` filter over every tag already matches correctly.
+        needs_groups = filters.tag_id_match == "all" and bool(filters.tag_ids)
+        if filters.language or needs_groups:
             async with db.get_session() as session:
                 if filters.language:
                     await session.execute_read(
                         DatabaseValidator.validate_language_code_exists, filters.language.split("-")[0]
                     )
-                if filters.tag_ids:
+                if needs_groups:
                     tag_groups = await session.execute_read(TagDatabase.resolve_groups, filters.tag_ids)
         return await self._search(
             query,

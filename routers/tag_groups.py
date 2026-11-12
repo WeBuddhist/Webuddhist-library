@@ -53,11 +53,10 @@ async def create_tag_group(
 
 @router.patch(
     "/{group_id}",
-    summary="Update tag group localizations",
+    summary="Update tag group",
     description=(
-        "Add or replace title and description localizations of a tag group. Languages sent are added or replaced; "
-        "languages not sent are kept, and a language cannot be removed. Language codes are stored in standard "
-        "BCP 47 casing (EN -> en, en-us -> en-US), and each language may appear only once per field."
+        "Partially update a tag group. A sent `title` or `description` replaces that field as a whole: "
+        "languages not sent are removed."
     ),
 )
 async def update_tag_group(

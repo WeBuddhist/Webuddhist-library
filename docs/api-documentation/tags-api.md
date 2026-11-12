@@ -234,17 +234,11 @@ titles in the same application are rejected with `422`.
 PATCH /v2/tag-groups/{group_id}
 ```
 
-Adds or replaces `title` and/or `description` localizations and returns the updated group with `200 OK`.
+Updates `title` and/or `description` and returns the updated group with `200 OK`.
 
-- Localizations merge per language: languages in the request are added or replace the existing text, and
-  languages not sent are kept. A group titled `{"en": "Tradition", "bo": "ལུགས་སྲོལ།"}` patched with
-  `{"title": {"mn": "Уламжлал"}}` keeps `en` and `bo` and gains `mn`.
-- A language cannot be removed once added.
-- Language codes are stored in standard BCP 47 casing: `EN` becomes `en`, `en-us` becomes `en-US`, and
-  `zh-hans` becomes `zh-Hans`. So sending `EN-us` replaces an existing `en-US`, and clients can always read
-  `title["en"]`.
-- Each language may appear only once per field: `{"title": {"en": "A", "EN": "B"}}` is rejected with `422`.
-- Both rules also apply when creating a group.
+- A sent field replaces its localizations as a whole, like the other PATCH endpoints: a group titled
+  `{"en": "Tradition", "bo": "ལུགས་སྲོལ།"}` patched with `{"title": {"en": "Tradition"}}` keeps only `en`. Send every
+  language you want to keep.
 - `null` values, an empty body, and unknown fields are rejected with `422`. A title already used by another group
   of the application is rejected with `422`, and an unknown group returns `404`.
 
@@ -253,7 +247,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/tag-groups/GROUP123" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist" \
   -H "Content-Type: application/json" \
-  -d '{"title": {"mn": "Уламжлал"}}'
+  -d '{"title": {"en": "Tradition", "bo": "ལུགས་སྲོལ།"}}'
 ```
 
 ### Delete Tag Group
@@ -286,7 +280,8 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/tag-groups/GROUP123/tags/TH
 The router lives in `routers/tags.py`; text and segment tagging endpoints are in `routers/texts.py` and `routers/segments.py`. The request and response models are `TagInput` and `TagOutput` in `models/tag.py`.
 
 Tag groups live in `routers/tag_groups.py` and `database/tag_group_database.py`, stored as
-`(:TagGroup)-[:BELONGS_TO]->(:Application)` with `(:Tag)-[:IN_GROUP]->(:TagGroup)`. Text filters resolve the
-requested tag IDs into groups with `TagDatabase.resolve_groups` for both the Neo4j list and catalog title search.
+`(:TagGroup)-[:BELONGS_TO]->(:Application)` with `(:Tag)-[:IN_GROUP]->(:TagGroup)`. With `tag_id_match=all`, text
+filters resolve the requested tag IDs into groups with `TagDatabase.resolve_groups` for both the Neo4j list and
+catalog title search. With `any`, grouping cannot change the result, so the lookup is skipped.
 
 Tag titles and descriptions use the same `LocalizedString` shape as categories. Empty localized strings, extra request fields, and missing required application headers are rejected by Pydantic/FastAPI validation.

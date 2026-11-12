@@ -8,6 +8,7 @@ tag_id_match (AND for the default "all", OR for "any").
 
 import pytest
 
+from database.tag_database import TagDatabase
 from identifier import generate_id
 
 APP = {"X-Application": "test_application"}
@@ -95,7 +96,7 @@ class TestTagGroupEndpoints:
         response = await client.get("/v2/tag-groups", headers={"X-Application": "nonexistent_app"})
         assert response.status_code == 404
 
-    async def test_patch_merges_localizations_per_language(self, client, test_database):
+    async def test_patch_replaces_sent_field_as_a_whole(self, client, test_database):
         group_id = await _create(
             client,
             "/v2/tag-groups",
@@ -104,13 +105,12 @@ class TestTagGroupEndpoints:
         tag_id = await _tag(client, "Member")
         await _add(client, group_id, tag_id)
 
-        response = await client.patch(
-            f"/v2/tag-groups/{group_id}", json={"title": {"en": "Tradition", "zh": "传统"}}, headers=APP
-        )
+        # Languages not sent are removed, like text and person PATCH; fields not sent are untouched.
+        response = await client.patch(f"/v2/tag-groups/{group_id}", json={"title": {"en": "Tradition"}}, headers=APP)
         assert response.status_code == 200, response.text
         assert response.json() == {
             "id": group_id,
-            "title": {"en": "Tradition", "bo": "ལུགས།", "zh": "传统"},
+            "title": {"en": "Tradition"},
             "description": {"en": "Old description"},
             "tag_ids": [tag_id],
         }
@@ -120,8 +120,8 @@ class TestTagGroupEndpoints:
         )
         assert response.status_code == 200, response.text
         group = (await _groups(client))[group_id]
-        assert group["title"] == {"en": "Tradition", "bo": "ལུགས།", "zh": "传统"}
-        assert group["description"] == {"en": "Old description", "bo": "ལུགས་སྲོལ།"}
+        assert group["title"] == {"en": "Tradition"}
+        assert group["description"] == {"bo": "ལུགས་སྲོལ།"}
         assert group["tag_ids"] == [tag_id]
 
     async def test_patch_adds_description_to_group_without_one(self, client, test_database):
@@ -130,36 +130,6 @@ class TestTagGroupEndpoints:
         response = await client.patch(f"/v2/tag-groups/{group_id}", json={"description": {"en": "New"}}, headers=APP)
         assert response.status_code == 200, response.text
         assert response.json()["description"] == {"en": "New"}
-
-    async def test_language_codes_are_stored_in_bcp47_casing(self, client, test_database):
-        group_id = await _create(
-            client,
-            "/v2/tag-groups",
-            {"title": {"EN-us": "Tradition", "BO": "ལུགས།"}, "description": {"ZH-hans": "传统"}},
-        )
-        group = (await _groups(client))[group_id]
-        assert group["title"] == {"en-US": "Tradition", "bo": "ལུགས།"}
-        assert group["description"] == {"zh-Hans": "传统"}
-
-        response = await client.patch(
-            f"/v2/tag-groups/{group_id}", json={"title": {"en-us": "Traditions", "Zh": "传统"}}, headers=APP
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["title"] == {"en-US": "Traditions", "bo": "ལུགས།", "zh": "传统"}
-
-    @pytest.mark.parametrize("field", ["title", "description"])
-    async def test_one_localization_per_language(self, client, test_database, field):
-        body = {"title": {"en": "Tradition"}, field: {"en-US": "One", "en-us": "Two"}}
-        response = await client.post("/v2/tag-groups", json=body, headers=APP)
-        assert response.status_code == 422
-
-        group_id = await _group(client, "Tradition")
-        response = await client.patch(
-            f"/v2/tag-groups/{group_id}", json={field: {"en": "One", "EN": "Two"}}, headers=APP
-        )
-        assert response.status_code == 422
-        assert "more than one localization for language 'en'" in response.text
-        assert (await _groups(client))[group_id]["title"] == {"en": "Tradition"}
 
     async def test_patch_title_must_stay_unique(self, client, test_database):
         group_id = await _group(client, "Tradition")
@@ -305,10 +275,20 @@ class TestGroupedTagFiltering:
         result = await _list_ids(client, [traditions[name] for name in selection])
         assert result == {traditions["texts"][name] for name in expected}
 
-    async def test_any_ors_the_groups(self, client, traditions):
+    async def test_any_ors_the_groups_without_looking_them_up(self, client, traditions, monkeypatch):
+        async def fail(*_args):
+            raise AssertionError("tag groups must not be resolved for tag_id_match=any")
+
+        monkeypatch.setattr(TagDatabase, "resolve_groups", staticmethod(fail))
         selection = [traditions["theravada"], traditions["mahayana"], traditions["chant"]]
+
         result = await _list_ids(client, selection, tag_id_match="any")
         assert result == set(traditions["texts"].values()) - {traditions["texts"]["untagged"]}
+        response = await client.get(
+            "/v2/texts/languages", params={"tag_id": ",".join(selection), "tag_id_match": "any"}
+        )
+        assert response.status_code == 200, response.text
+        assert {row["code"]: row["text_count"] for row in response.json()} == {"en": 5}
 
     async def test_ungrouping_restores_and_matching(self, client, traditions):
         for tag in ("theravada", "mahayana"):

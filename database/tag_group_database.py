@@ -5,7 +5,7 @@ from identifier import generate_id
 from models.tag import TagGroupOutput
 
 from .locking import lock_nodes
-from .nomen_database import NomenDatabase, merge_localizations
+from .nomen_database import NomenDatabase
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, AsyncSession
@@ -41,7 +41,7 @@ class TagGroupDatabase:
     {_RETURN}
     """
 
-    # Swap a group's title or description Nomen for one holding the merged localizations.
+    # Swap a group's title or description Nomen for one holding the sent localizations.
     REPLACE_TITLE_QUERY: LiteralString = """
         MATCH (g:TagGroup {id: $group_id})
         OPTIONAL MATCH (g)-[:HAS_TITLE]->(old:Nomen)
@@ -193,20 +193,17 @@ class TagGroupDatabase:
             # Application first, as in create, so title checks of concurrent creates and renames serialize.
             await lock_nodes(tx, "Application", [application])
             await lock_nodes(tx, "TagGroup", [group_id])
-            existing = await TagGroupDatabase._get_with_transaction(tx, group_id, application)
+            await TagGroupDatabase._get_with_transaction(tx, group_id, application)
 
-            # Merge per language: sent languages are added or replaced, the others kept, none removed.
+            # Like other PATCH endpoints, a sent localization map replaces the field as a whole.
             if patch.title is not None:
                 await TagGroupDatabase._validate_title_available(tx, application, patch.title.root, group_id)
-                title = merge_localizations(existing.title.root, patch.title.root)
-                nomen_id = await NomenDatabase.create_with_transaction(tx, title, None)
+                nomen_id = await NomenDatabase.create_with_transaction(tx, patch.title.root, None)
                 await (
                     await tx.run(TagGroupDatabase.REPLACE_TITLE_QUERY, group_id=group_id, nomen_id=nomen_id)
                 ).consume()
             if patch.description is not None:
-                existing_description = existing.description.root if existing.description else {}
-                description = merge_localizations(existing_description, patch.description.root)
-                nomen_id = await NomenDatabase.create_with_transaction(tx, description, None)
+                nomen_id = await NomenDatabase.create_with_transaction(tx, patch.description.root, None)
                 await (
                     await tx.run(TagGroupDatabase.REPLACE_DESCRIPTION_QUERY, group_id=group_id, nomen_id=nomen_id)
                 ).consume()

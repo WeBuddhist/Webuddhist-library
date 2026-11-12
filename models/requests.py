@@ -27,7 +27,13 @@ class AlignmentPaginationParams(AnnotationSegmentsPaginationParams):
 class TextFacetFilter(OpenPechaModel):
     category_id: str | None = None
     tag_id: str | None = Field(default=None, description="Comma-separated application tag IDs.")
-    tag_id_match: Literal["all", "any"] = Field(default="all", description="Match all or any listed tag IDs.")
+    tag_id_match: Literal["all", "any"] = Field(
+        default="all",
+        description=(
+            "How tag groups combine: `all` requires every group, `any` requires at least one. Tags in the same "
+            "group always match with OR, and a tag without a group counts as its own group."
+        ),
+    )
     author_id: str | None = None
     bdrc: str | None = None
     wiki: str | None = None

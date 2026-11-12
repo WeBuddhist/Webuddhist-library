@@ -1,6 +1,6 @@
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field
 
-from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel, normalize_localization_keys
+from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel
 
 
 class TagBase(OpenPechaModel):
@@ -18,24 +18,14 @@ class TagOutput(TagBase):
 
 
 class TagGroupInput(TagBase):
-    """Language codes are stored in standard BCP 47 casing, one localization per language."""
-
-    @field_validator("title", "description", mode="before")
-    @classmethod
-    def normalize_languages(cls, value: object, info: ValidationInfo) -> object:
-        return normalize_localization_keys(value, str(info.field_name))
+    pass
 
 
 class TagGroupPatch(PatchModel):
-    """Localizations are merged per language: sent languages are added or replaced, the rest are kept."""
+    """A sent `title` or `description` replaces that field's localizations as a whole."""
 
     title: LocalizedString | None = None
     description: LocalizedString | None = None
-
-    @field_validator("title", "description", mode="before")
-    @classmethod
-    def normalize_languages(cls, value: object, info: ValidationInfo) -> object:
-        return normalize_localization_keys(value, str(info.field_name))
 
 
 class TagGroupOutput(TagBase):

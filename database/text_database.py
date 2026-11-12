@@ -328,13 +328,19 @@ class TextDatabase:
     async def _filter_params(
         tx: AsyncManagedTransaction, filters: TextFacetFilter, language: str | None = None
     ) -> dict[str, Any]:
+        # With "any" a text only needs one requested tag, whatever the grouping, so one group of all tags matches
+        # the same texts without looking the groups up.
+        if filters.tag_id_match == "all":
+            tag_groups = await TagDatabase.resolve_groups(tx, filters.tag_ids)
+        else:
+            tag_groups = [filters.tag_ids] if filters.tag_ids else []
         return {
             "language": language,
             "language_base": language.split("-")[0] if language else None,
             "category_id": filters.category_id,
             "author_id": filters.author_id,
             "tag_ids": filters.tag_ids,
-            "tag_groups": await TagDatabase.resolve_groups(tx, filters.tag_ids),
+            "tag_groups": tag_groups,
             "tag_id_match": filters.tag_id_match,
             "bdrc": filters.bdrc,
             "wiki": filters.wiki,

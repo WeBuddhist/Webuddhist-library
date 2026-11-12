@@ -8,17 +8,6 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
 
-def merge_localizations(existing: dict[str, str], patch: dict[str, str]) -> dict[str, str]:
-    """Add or replace the patch's languages and keep every other existing language.
-
-    Language codes match case-insensitively, and the patch's spelling wins: patching ``en-us`` over
-    ``en-US`` leaves a single ``en-us`` entry.
-    """
-    replaced = {language.lower() for language in patch}
-    kept = {language: text for language, text in existing.items() if language.lower() not in replaced}
-    return kept | patch
-
-
 class NomenDatabase:
     CREATE_MANY_QUERY: LiteralString = """
     UNWIND $nomens AS data

@@ -546,7 +546,10 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_catalog_title_filter_ors_tags_within_a_group(catalog_client, catalog_search, test_database):
+async def test_catalog_title_filter_ors_tags_within_a_group(
+    catalog_client, catalog_search, test_database, monkeypatch
+):
+    from database.tag_database import TagDatabase
     from models.tag import TagGroupInput, TagInput
 
     db, client, search = test_database, catalog_client, catalog_search
@@ -576,6 +579,11 @@ async def test_catalog_title_filter_ors_tags_within_a_group(catalog_client, cata
     assert await text_search_ids(client, search, title=title, tag_ids=[theravada, mahayana, chant]) == {
         ids["theravada_chant"], ids["mahayana_chant"]
     }
+
+    async def fail(*_args):
+        raise AssertionError("tag groups must not be resolved for tag_id_match=any")
+
+    monkeypatch.setattr(TagDatabase, "resolve_groups", staticmethod(fail))
     assert await text_search_ids(
         client, search, title=title, tag_ids=[theravada, mahayana, chant], tag_id_match="any"
     ) == set(ids.values())
