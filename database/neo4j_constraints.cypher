@@ -103,6 +103,9 @@ CREATE CONSTRAINT category_id_unique IF NOT EXISTS FOR (c:Category) REQUIRE c.id
 // Tag nodes - each tag must have a unique ID
 CREATE CONSTRAINT tag_id_unique IF NOT EXISTS FOR (t:Tag) REQUIRE t.id IS UNIQUE;
 
+// TagGroup nodes - each tag group must have a unique ID
+CREATE CONSTRAINT tag_group_id_unique IF NOT EXISTS FOR (g:TagGroup) REQUIRE g.id IS UNIQUE;
+
 // Application nodes - each application must have a unique ID (slug)
 CREATE CONSTRAINT application_id_unique IF NOT EXISTS
 FOR (a:Application) REQUIRE a.id IS UNIQUE;

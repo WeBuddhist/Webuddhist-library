@@ -9,6 +9,7 @@ Tags are application-scoped labels that can be attached to texts and segments. T
 - Texts can be created or patched with `tag_ids`, and can also be tagged or untagged through dedicated endpoints.
 - Segment tags are attached directly to segment nodes.
 - Listing tags only returns tags for the requested application.
+- A tag can belong to at most one [tag group](#tag-groups) of its application. Text filters OR the tags inside a group.
 
 ## Authentication
 
@@ -37,10 +38,13 @@ Returns all tags that belong to the application in `X-Application`.
     },
     "description": {
       "en": "Texts related to philosophical systems"
-    }
+    },
+    "group_id": null
   }
 ]
 ```
+
+`group_id` is the ID of the tag's [tag group](#tag-groups), or `null` when the tag has no group.
 
 Example:
 
@@ -150,8 +154,8 @@ Texts can also be created or replaced with tag IDs:
 }
 ```
 
-Filter texts by tag. Pass comma-separated IDs in `tag_id`. The default `tag_id_match=all` requires every listed
-tag:
+Filter texts by tag. Pass comma-separated IDs in `tag_id`. Tags in the same [tag group](#tag-groups) are ORed;
+a tag without a group is a group of its own. The default `tag_id_match=all` requires every group:
 
 ```bash
 curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456" \
@@ -179,8 +183,110 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG123/tags/TAG123
   -H "X-API-Key: your_api_key"
 ```
 
+## Tag Groups
+
+A tag group says which tags are alternatives to each other, such as the traditions Theravāda, Mahāyāna and
+Vajrayāna. When texts are filtered by tag, a text matches a group if it has **any** of the group's selected tags.
+`tag_id_match` then combines the groups: `all` (default) requires every group, `any` requires at least one.
+A tag without a group is a group of its own, so applications that never create groups keep the plain
+all/any behavior.
+
+With Theravāda and Mahāyāna in a "Tradition" group and Chant ungrouped:
+
+| `tag_id` | Matches |
+|---|---|
+| `THERAVADA,MAHAYANA` | Texts tagged Theravāda or Mahāyāna |
+| `MAHAYANA,CHANT` | Mahāyāna chants |
+| `THERAVADA,MAHAYANA,CHANT` | Chants tagged Theravāda or Mahāyāna |
+
+Groups belong to one application and use the required `X-Application` header. A tag can be in at most one group,
+and only in a group of its own application.
+
+### List Tag Groups
+
+```http
+GET /v2/tag-groups
+```
+
+```json
+[
+  {
+    "id": "GROUP123",
+    "title": {"en": "Tradition"},
+    "description": {"en": "Buddhist traditions"},
+    "tag_ids": ["THERAVADA", "MAHAYANA", "VAJRAYANA"]
+  }
+]
+```
+
+### Create Tag Group
+
+```http
+POST /v2/tag-groups
+```
+
+Takes the same body as [Create Tag](#create-tag) and returns `{"id": "GROUP123"}` with `201 Created`. Duplicate
+titles in the same application are rejected with `422`.
+
+### Update Tag Group
+
+```http
+PATCH /v2/tag-groups/{group_id}
+```
+
+Adds or replaces `title` and/or `description` localizations and returns the updated group with `200 OK`.
+
+- Localizations merge per language: languages in the request are added or replace the existing text, and
+  languages not sent are kept. A group titled `{"en": "Tradition", "bo": "ལུགས་སྲོལ།"}` patched with
+  `{"title": {"mn": "Уламжлал"}}` keeps `en` and `bo` and gains `mn`.
+- A language cannot be removed once added.
+- Language codes are stored in standard BCP 47 casing: `EN` becomes `en`, `en-us` becomes `en-US`, and
+  `zh-hans` becomes `zh-Hans`. So sending `EN-us` replaces an existing `en-US`, and clients can always read
+  `title["en"]`.
+- Each language may appear only once per field: `{"title": {"en": "A", "EN": "B"}}` is rejected with `422`.
+- Both rules also apply when creating a group.
+- `null` values, an empty body, and unknown fields are rejected with `422`. A title already used by another group
+  of the application is rejected with `422`, and an unknown group returns `404`.
+
+```bash
+curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/tag-groups/GROUP123" \
+  -H "X-API-Key: your_api_key" \
+  -H "X-Application: webuddhist" \
+  -H "Content-Type: application/json" \
+  -d '{"title": {"mn": "Уламжлал"}}'
+```
+
+### Delete Tag Group
+
+```http
+DELETE /v2/tag-groups/{group_id}
+```
+
+Deletes an empty group and returns `204 No Content`. A group that still has tags is rejected with `409 Conflict`,
+because deleting it would change how filters combine those tags. Remove its tags first.
+
+### Add or Remove a Tag
+
+```http
+POST /v2/tag-groups/{group_id}/tags/{tag_id}
+DELETE /v2/tag-groups/{group_id}/tags/{tag_id}
+```
+
+Both return `204 No Content`. Adding a tag that is already in another group moves it to this group. Removing
+leaves the tag in place without a group. Unknown groups or tags, or ones from another application, return `404`.
+
+```bash
+curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/tag-groups/GROUP123/tags/THERAVADA" \
+  -H "X-API-Key: your_api_key" \
+  -H "X-Application: webuddhist"
+```
+
 ## Developer Notes
 
 The router lives in `routers/tags.py`; text and segment tagging endpoints are in `routers/texts.py` and `routers/segments.py`. The request and response models are `TagInput` and `TagOutput` in `models/tag.py`.
+
+Tag groups live in `routers/tag_groups.py` and `database/tag_group_database.py`, stored as
+`(:TagGroup)-[:BELONGS_TO]->(:Application)` with `(:Tag)-[:IN_GROUP]->(:TagGroup)`. Text filters resolve the
+requested tag IDs into groups with `TagDatabase.resolve_groups` for both the Neo4j list and catalog title search.
 
 Tag titles and descriptions use the same `LocalizedString` shape as categories. Empty localized strings, extra request fields, and missing required application headers are rejected by Pydantic/FastAPI validation.

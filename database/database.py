@@ -20,6 +20,7 @@ from .recording_database import RecordingDatabase
 from .segment_database import SegmentDatabase
 from .span_database import SpanDatabase
 from .tag_database import TagDatabase
+from .tag_group_database import TagGroupDatabase
 from .text_database import TextDatabase
 
 logger = getLogger(__name__)
@@ -50,6 +51,7 @@ class Database:
     language: LanguageDatabase
     category: CategoryDatabase
     tag: TagDatabase
+    tag_group: TagGroupDatabase
     span: SpanDatabase
 
     _driver: AsyncDriver
@@ -70,6 +72,7 @@ class Database:
         self.language = LanguageDatabase(db=self)
         self.category = CategoryDatabase(db=self)
         self.tag = TagDatabase(db=self)
+        self.tag_group = TagGroupDatabase(db=self)
         self.span = SpanDatabase()
 
     async def verify_connectivity(self) -> None:

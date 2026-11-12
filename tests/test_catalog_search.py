@@ -546,6 +546,42 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_catalog_title_filter_ors_tags_within_a_group(catalog_client, catalog_search, test_database):
+    from models.tag import TagGroupInput, TagInput
+
+    db, client, search = test_database, catalog_client, catalog_search
+    theravada, mahayana, chant = [
+        await db.tag.create(TagInput(title={"en": name}), "test_application")
+        for name in ("Theravada", "Mahayana", "Chant")
+    ]
+    tradition = await db.tag_group.create(TagGroupInput(title={"en": "Tradition"}), "test_application")
+    for tag in (theravada, mahayana):
+        await db.tag_group.add_tag(tradition, tag, "test_application")
+    ids = {}
+    for name, tags in {
+        "theravada_chant": [theravada, chant],
+        "mahayana_chant": [mahayana, chant],
+        "theravada": [theravada],
+        "chant": [chant],
+    }.items():
+        ids[name] = await db.text.create(
+            TextInput(title={"en": f"Grouped manuscript {name}"}, language="en", category_id="category", tag_ids=tags)
+        )
+    await publish_catalog(search, db)
+
+    title = "Grouped manuscript"
+    assert await text_search_ids(client, search, title=title, tag_ids=[theravada, mahayana]) == {
+        ids["theravada_chant"], ids["mahayana_chant"], ids["theravada"]
+    }
+    assert await text_search_ids(client, search, title=title, tag_ids=[theravada, mahayana, chant]) == {
+        ids["theravada_chant"], ids["mahayana_chant"]
+    }
+    assert await text_search_ids(
+        client, search, title=title, tag_ids=[theravada, mahayana, chant], tag_id_match="any"
+    ) == set(ids.values())
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_catalog_offset_and_has_more_count_only_live_matches(
     catalog_client, catalog_search, test_database, monkeypatch
 ):

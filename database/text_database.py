@@ -87,8 +87,12 @@ class TextDatabase:
         WHEN size($tag_ids) > 0 THEN {
             MATCH (e:Text)-[:TEXT_OF]->(w:Work)
             WHERE CASE $tag_id_match
-                WHEN 'all' THEN ALL(required_tag_id IN $tag_ids WHERE (w)-[:HAS_TAG]->(:Tag {id: required_tag_id}))
-                ELSE ANY(required_tag_id IN $tag_ids WHERE (w)-[:HAS_TAG]->(:Tag {id: required_tag_id}))
+                WHEN 'all' THEN ALL(
+                    tag_group IN $tag_groups WHERE EXISTS { (w)-[:HAS_TAG]->(t:Tag) WHERE t.id IN tag_group }
+                )
+                ELSE ANY(
+                    tag_group IN $tag_groups WHERE EXISTS { (w)-[:HAS_TAG]->(t:Tag) WHERE t.id IN tag_group }
+                )
             END
             RETURN e
         }
@@ -106,16 +110,17 @@ class TextDatabase:
       AND ($author_id IS NULL OR EXISTS {
           (e)-[:HAS_CONTRIBUTION]->(:Contribution)-[:BY]->(:Person {id: $author_id})
       })
+      // A text satisfies a tag group when it has any tag in it; tag_id_match combines the groups.
       AND (
-        size($tag_ids) = 0
+        size($tag_groups) = 0
         OR CASE $tag_id_match
             WHEN 'all' THEN ALL(
-                required_tag_id IN $tag_ids
-                WHERE (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(:Tag {id: required_tag_id})
+                tag_group IN $tag_groups
+                WHERE EXISTS { (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(t:Tag) WHERE t.id IN tag_group }
             )
             ELSE ANY(
-                required_tag_id IN $tag_ids
-                WHERE (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(:Tag {id: required_tag_id})
+                tag_group IN $tag_groups
+                WHERE EXISTS { (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(t:Tag) WHERE t.id IN tag_group }
             )
         END
       )
@@ -304,7 +309,7 @@ class TextDatabase:
                 offset=offset,
                 limit=limit,
                 application=application,
-                **TextDatabase._filter_params(filters, filters.language),
+                **await TextDatabase._filter_params(tx, filters, filters.language),
             )
             return [TextOutput.model_validate(record["text"]) for record in await result.data()]
 
@@ -313,20 +318,23 @@ class TextDatabase:
 
     async def get_languages(self, filters: TextFacetFilter) -> list[TextLanguageResponse]:
         async def read(tx: AsyncManagedTransaction) -> list[TextLanguageResponse]:
-            result = await tx.run(TextDatabase.GET_LANGUAGES_QUERY, **TextDatabase._filter_params(filters))
+            result = await tx.run(TextDatabase.GET_LANGUAGES_QUERY, **await TextDatabase._filter_params(tx, filters))
             return [TextLanguageResponse.model_validate(record) for record in await result.data()]
 
         async with self.session as session:
             return await session.execute_read(read)
 
     @staticmethod
-    def _filter_params(filters: TextFacetFilter, language: str | None = None) -> dict[str, Any]:
+    async def _filter_params(
+        tx: AsyncManagedTransaction, filters: TextFacetFilter, language: str | None = None
+    ) -> dict[str, Any]:
         return {
             "language": language,
             "language_base": language.split("-")[0] if language else None,
             "category_id": filters.category_id,
             "author_id": filters.author_id,
             "tag_ids": filters.tag_ids,
+            "tag_groups": await TagDatabase.resolve_groups(tx, filters.tag_ids),
             "tag_id_match": filters.tag_id_match,
             "bdrc": filters.bdrc,
             "wiki": filters.wiki,

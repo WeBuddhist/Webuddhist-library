@@ -26,8 +26,15 @@ class TagDatabase:
         description: CASE WHEN EXISTS {
             (t)-[:HAS_DESCRIPTION]->(:Nomen)-[:HAS_LOCALIZATION]->(:LocalizedText)
         } THEN apoc.map.fromPairs([(t)-[:HAS_DESCRIPTION]->(dn:Nomen)-[:HAS_LOCALIZATION]->(dlt:LocalizedText)
-            -[r:HAS_LANGUAGE]->(dl:Language) | [coalesce(r.bcp47, dl.code), dlt.text]]) ELSE null END
+            -[r:HAS_LANGUAGE]->(dl:Language) | [coalesce(r.bcp47, dl.code), dlt.text]]) ELSE null END,
+        group_id: [(t)-[:IN_GROUP]->(g:TagGroup) | g.id][0]
     } AS tag
+    """
+
+    RESOLVE_GROUPS_QUERY: LiteralString = """
+    UNWIND $tag_ids AS tag_id
+    OPTIONAL MATCH (:Tag {id: tag_id})-[:IN_GROUP]->(g:TagGroup)
+    RETURN tag_id, g.id AS group_id
     """
 
     CREATE_QUERY: LiteralString = """
@@ -236,6 +243,21 @@ class TagDatabase:
             application=application,
             replace=replace,
         )
+
+    @staticmethod
+    async def resolve_groups(tx: AsyncManagedTransaction, tag_ids: list[str]) -> list[list[str]]:
+        """Split tag IDs into filter groups: tags sharing a TagGroup form one group, every other tag its own.
+
+        Groups keep the order in which their first tag appears, so equal requests build equal queries.
+        """
+        if not tag_ids:
+            return []
+        result = await tx.run(TagDatabase.RESOLVE_GROUPS_QUERY, tag_ids=tag_ids)
+        groups: dict[tuple[str, str], list[str]] = {}
+        for record in await result.data():
+            key = ("group", record["group_id"]) if record["group_id"] else ("tag", record["tag_id"])
+            groups.setdefault(key, []).append(record["tag_id"])
+        return list(groups.values())
 
     async def _validate_not_exists_tx(
         self, tx: AsyncManagedTransaction, application: str, title: dict[str, str]

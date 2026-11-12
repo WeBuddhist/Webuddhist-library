@@ -32,6 +32,7 @@ from routers.languages import router as languages_router
 from routers.persons import router as persons_router
 from routers.recordings import router as recordings_router
 from routers.segments import router as segments_router
+from routers.tag_groups import router as tag_groups_router
 from routers.tags import router as tags_router
 from routers.texts import router as texts_router
 from search_client import create_search_client
@@ -198,6 +199,7 @@ def create_app(*, testing: bool = False) -> FastAPI:
     app.include_router(persons_router)
     app.include_router(categories_router)
     app.include_router(tags_router)
+    app.include_router(tag_groups_router)
     app.include_router(languages_router)
     app.include_router(alignments_router)
     app.include_router(paginations_router)

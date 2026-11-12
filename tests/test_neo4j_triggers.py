@@ -107,6 +107,14 @@ def _no_self_case(rel_type: str) -> str:
 
 def _custom_cases() -> dict[str, str]:
     return {
+        "enforce_tag_in_group_same_application": """
+            CREATE (app_a:Application {id: randomUUID(), name: 'Trigger app A'})
+            CREATE (app_b:Application {id: randomUUID(), name: 'Trigger app B'})
+            CREATE (tag:Tag {id: randomUUID()})-[:BELONGS_TO]->(app_a)
+            CREATE (tag_group:TagGroup {id: randomUUID()})-[:BELONGS_TO]->(app_b)
+            CREATE (tag)-[rel:IN_GROUP]->(tag_group)
+            RETURN [] AS createdNodes, [rel] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
         "enforce_toc_hierarchy": """
             CREATE (a:TableOfContentsSection {id: randomUUID()})
             CREATE (b:TableOfContentsSection {id: randomUUID()})
@@ -196,8 +204,9 @@ def _custom_cases() -> dict[str, str]:
         """,
         "enforce_text_title_unique": """
             CREATE (lang:Language {code: 'test-lang-' + randomUUID()})
-            CREATE (text_a:Text {id: randomUUID()})
-            CREATE (text_b:Text {id: randomUUID()})
+            // The rule compares titles of texts written in the same language, so both texts need HAS_LANGUAGE.
+            CREATE (text_a:Text {id: randomUUID()})-[:HAS_LANGUAGE]->(lang)
+            CREATE (text_b:Text {id: randomUUID()})-[:HAS_LANGUAGE]->(lang)
             CREATE (title_a:Nomen {id: randomUUID()})
             CREATE (title_b:Nomen {id: randomUUID()})
             CREATE (text_a)-[:HAS_TITLE]->(title_a)
@@ -267,9 +276,12 @@ TRIGGER_QUERY_BY_NAME = {trigger["name"]: trigger["query"] for trigger in TRIGGE
 async def test_each_trigger_rejects_intentional_invalid_data(test_database, case: TriggerCase) -> None:
     query = _query_with_metadata(case.setup_query, TRIGGER_QUERY_BY_NAME[case.name])
     async with test_database.get_session() as session:
-        with pytest.raises(ClientError, match=case.name):
+        with pytest.raises(ClientError, match=case.name) as excinfo:
             result = await session.run(query, trigger_query=TRIGGER_QUERY_BY_NAME[case.name])
             await result.consume()
+    # The trigger query itself must reject the data. A TransactionHookFailed comes from the installed triggers at
+    # commit, which can list this trigger's name without this trigger having rejected anything.
+    assert excinfo.value.code != "Neo.ClientError.Transaction.TransactionHookFailed", str(excinfo.value)[:500]
 
 
 @pytest.mark.asyncio(loop_scope="session")

@@ -5,6 +5,7 @@ from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from database.database_validator import DatabaseValidator
+from database.tag_database import TagDatabase
 from exceptions import DataNotFoundError
 from models.contribution import PersonContributionOutput
 from models.person import PersonOutput
@@ -68,15 +69,19 @@ class CatalogSearchService:
         limit: int,
         application: str | None = None,
     ) -> list[TextOutput]:
-        if filters.language:
+        tag_groups: list[list[str]] = []
+        if filters.language or filters.tag_ids:
             async with db.get_session() as session:
-                await session.execute_read(
-                    DatabaseValidator.validate_language_code_exists, filters.language.split("-")[0]
-                )
+                if filters.language:
+                    await session.execute_read(
+                        DatabaseValidator.validate_language_code_exists, filters.language.split("-")[0]
+                    )
+                if filters.tag_ids:
+                    tag_groups = await session.execute_read(TagDatabase.resolve_groups, filters.tag_ids)
         return await self._search(
             query,
             TEXT_DOCUMENT_TYPE,
-            _text_filters(filters),
+            _text_filters(filters, tag_groups),
             offset,
             limit,
             lambda ids: db.text.get_by_ids(ids, application=application),
@@ -402,7 +407,7 @@ def _person_filters(filters: PersonFilter) -> list[dict]:
     )
 
 
-def _text_filters(filters: TextFilter) -> list[dict]:
+def _text_filters(filters: TextFilter, tag_groups: list[list[str]]) -> list[dict]:
     filter_clauses = _optional_term_filters(
         {
             "category_id": filters.category_id,
@@ -415,11 +420,11 @@ def _text_filters(filters: TextFilter) -> list[dict]:
         if "-" not in language:
             language_filter = {"bool": {"should": [language_filter, {"prefix": {"language": language + "-"}}]}}
         filter_clauses.append(language_filter)
-    tag_ids = filters.tag_ids
+    # Each `terms` clause matches any tag in one group; `bool.filter` ANDs the groups for tag_id_match=all.
     if filters.tag_id_match == "all":
-        filter_clauses.extend({"term": {"tag_ids": tag_id}} for tag_id in tag_ids)
-    elif tag_ids:
-        filter_clauses.append({"terms": {"tag_ids": tag_ids}})
+        filter_clauses.extend({"terms": {"tag_ids": tag_group}} for tag_group in tag_groups)
+    elif filters.tag_ids:
+        filter_clauses.append({"terms": {"tag_ids": filters.tag_ids}})
     if filters.author_id:
         filter_clauses.append({"term": {"contributor_ids": filters.author_id}})
     return filter_clauses

@@ -33,7 +33,7 @@ def _required_rel_trigger(
         relationship deletion, using CALL () { UNION ALL } to collect affected nodes.
       - If cardinality is 'one', also includes a uniqueness trigger (at most one).
     """
-    triggers = [
+    triggers: list[dict] = [
         {
             "name": name,
             "description": description,
@@ -71,13 +71,18 @@ def _required_rel_trigger(
     ]
 
     if cardinality == "one":
-        cardinality_name = name + "_max_one"
-        triggers.append(
-            {
-                "name": cardinality_name,
-                "description": f"{source_label} must have at most one {rel_type}->{target_label}",
-                "phase": "before",
-                "query": f"""
+        triggers.append(_max_one_rel_trigger(name + "_max_one", source_label, rel_type, target_label))
+
+    return triggers
+
+
+def _max_one_rel_trigger(name: str, source_label: str, rel_type: str, target_label: str) -> dict:
+    """Generate a trigger + audit pair allowing at most one relationship, whether it is required or optional."""
+    return {
+        "name": name,
+        "description": f"{source_label} must have at most one {rel_type}->{target_label}",
+        "phase": "before",
+        "query": f"""
                 CALL () {{
                     UNWIND $createdNodes AS n
                     WITH n WHERE n:{source_label}
@@ -96,21 +101,18 @@ def _required_rel_trigger(
                 WHERE size(ids) > 0
                 CALL apoc.util.validate(
                     true,
-                    '{cardinality_name}: {source_label} must have at most one {rel_type}. IDs: %s',
+                    '{name}: {source_label} must have at most one {rel_type}. IDs: %s',
                     [string.join(ids, ', ')]
                 )
                 RETURN null
             """,
-                "audit": f"""
+        "audit": f"""
                 MATCH (n:{source_label})
                 WITH n, count {{ (n)-[:{rel_type}]->(:{target_label}) }} AS cnt
                 WHERE cnt > 1
                 RETURN coalesce(n.id, elementId(n)) AS violating_id
             """,
-            }
-        )
-
-    return triggers
+    }
 
 
 def _rel_target_type_trigger(
@@ -154,6 +156,8 @@ for name, source, relationship, target, cardinality in [
     ("enforce_work_has_category", "Work", "HAS_CATEGORY", "Category", "one"),
     ("enforce_tag_belongs_to", "Tag", "BELONGS_TO", "Application", "one"),
     ("enforce_tag_has_title", "Tag", "HAS_TITLE", "Nomen", "one"),
+    ("enforce_tag_group_belongs_to", "TagGroup", "BELONGS_TO", "Application", "one"),
+    ("enforce_tag_group_has_title", "TagGroup", "HAS_TITLE", "Nomen", "one"),
     ("enforce_category_belongs_to", "Category", "BELONGS_TO", "Application", "one"),
     ("enforce_category_has_title", "Category", "HAS_TITLE", "Nomen", "one"),
     ("enforce_text_has_text_of", "Text", "TEXT_OF", "Work", "one"),
@@ -205,6 +209,38 @@ TRIGGERS.append(
         "COMMENTARY_OF",
         "Text",
     )
+)
+
+# --- Tag: optional IN_GROUP to one TagGroup of the same application ---------
+TRIGGERS.append(
+    _rel_target_type_trigger("enforce_tag_in_group_target", "IN_GROUP must point to a TagGroup", "IN_GROUP", "TagGroup")
+)
+TRIGGERS.append(_max_one_rel_trigger("enforce_tag_in_group_max_one", "Tag", "IN_GROUP", "TagGroup"))
+TRIGGERS.append(
+    {
+        "name": "enforce_tag_in_group_same_application",
+        "description": "A Tag and its TagGroup must belong to the same Application",
+        "phase": "before",
+        "query": """
+        UNWIND $createdRelationships AS rel
+        WITH rel WHERE type(rel) = 'IN_GROUP'
+        WITH startNode(rel) AS tag, endNode(rel) AS tag_group
+        WHERE NOT EXISTS { (tag)-[:BELONGS_TO]->(:Application)<-[:BELONGS_TO]-(tag_group) }
+        WITH collect(coalesce(tag.id, elementId(tag))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            'enforce_tag_in_group_same_application: Tag and TagGroup belong to different applications. IDs: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
+        """,
+        "audit": """
+        MATCH (tag:Tag)-[:IN_GROUP]->(tag_group)
+        WHERE NOT EXISTS { (tag)-[:BELONGS_TO]->(:Application)<-[:BELONGS_TO]-(tag_group) }
+        RETURN coalesce(tag.id, elementId(tag)) AS violating_id
+        """,
+    }
 )
 
 TRIGGERS.append(

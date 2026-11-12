@@ -80,6 +80,30 @@ nodes:
         target: Nomen
         cardinality: one
         required: false
+      IN_GROUP:
+        target: TagGroup
+        cardinality: one
+        required: false
+
+  TagGroup:
+    properties:
+      id:
+        type: string
+        required: true
+        unique: true
+    relationships:
+      BELONGS_TO:
+        target: Application
+        cardinality: one
+        required: true
+      HAS_TITLE:
+        target: Nomen
+        cardinality: one
+        required: true
+      HAS_DESCRIPTION:
+        target: Nomen
+        cardinality: one
+        required: false
 
   Category:
     properties:

@@ -75,8 +75,8 @@ GET /v2/texts
 | `language`    | string  | query    | No       | -       | Filter by language code                                                                                |
 | `title`       | string  | query    | No       | -       | Search by title via catalog search: lenient, script-aware matching (diacritic-insensitive, Sanskrit and Tibetan phonetic) across both primary and alternative titles; minimum 2 characters. See [Catalog Search API](./catalog-search-api.md). |
 | `category_id` | string  | query    | No       | -       | Filter by category ID                                                                                  |
-| `tag_id`      | string  | query    | No       | -       | Comma-separated application tag IDs |
-| `tag_id_match` | string | query    | No       | `all`   | Tag matching mode: `all` requires every listed tag; `any` requires at least one |
+| `tag_id`      | string  | query    | No       | -       | Comma-separated application tag IDs. Tags in the same [tag group](./tags-api.md#tag-groups) match if the text has any of them |
+| `tag_id_match` | string | query    | No       | `all`   | How tag groups combine: `all` requires every group; `any` requires at least one. A tag without a group counts as its own group |
 | `author_id`   | string  | query    | No       | -       | Filter by contributing author person ID                                                                |
 | `bdrc`        | string  | query    | No       | -       | Filter by BDRC identifier                                                                              |
 | `wiki`        | string  | query    | No       | -       | Filter by Wikidata identifier                                                                          |
@@ -152,8 +152,9 @@ curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
-# Filter by every listed tag (default matching mode)
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456" \
+# Filter by every listed tag group (default matching mode).
+# With THERAVADA and MAHAYANA in one group: (THERAVADA OR MAHAYANA) AND CHANT
+curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=THERAVADA,MAHAYANA,CHANT" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
