@@ -11,6 +11,7 @@ from typing import LiteralString, cast
 
 import httpx
 from neo4j import AsyncGraphDatabase, GraphDatabase
+from neo4j.exceptions import ClientError
 import pytest
 import pytest_asyncio
 from testcontainers.core.container import DockerContainer
@@ -58,6 +59,28 @@ def load_constraints_file() -> list[str]:
     with open(constraints_path) as f:
         content = f.read()
     return [stmt.strip() for stmt in content.split(";") if stmt.strip()]
+
+
+async def wait_for_triggers(db: Database, timeout: float = 10) -> None:
+    """Wait until triggers reinstalled by install_triggers/migrate enforce writes again.
+
+    After a reinstall, writes can bypass triggers until APOC's next refresh (apoc.trigger.refresh),
+    so a single rejected probe is not enough: wait past one refresh, then confirm with a probe.
+    """
+    await asyncio.sleep(NEO4J_TRIGGER_REFRESH_SECONDS)
+    deadline = time.monotonic() + timeout
+    while True:
+        async with db.get_session() as session:
+            try:
+                await (await session.run("CREATE (:LocalizedText {text: 'trigger probe'})")).consume()
+            except ClientError as error:
+                if "enforce_localizedtext_has_language" in str(error):
+                    return
+                raise
+            await (await session.run("MATCH (n:LocalizedText {text: 'trigger probe'}) DELETE n")).consume()
+        if time.monotonic() > deadline:
+            raise TimeoutError("Neo4j triggers did not become active after reinstall")
+        await asyncio.sleep(0.1)
 
 
 
