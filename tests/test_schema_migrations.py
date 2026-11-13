@@ -11,6 +11,7 @@ from exceptions import DataValidationError
 from models.category import CategoryInput
 from models.tag import TagInput
 from models.text import TextInput, TextOutput, TextPatch
+from tests.conftest import wait_for_triggers
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -131,6 +132,7 @@ async def test_migration_is_repeatable_and_audited(test_database):
     await migrate(db._driver, db._database)
     await migrate(db._driver, db._database)
     assert await audit_schema(db._driver, db._database) == {}
+    await wait_for_triggers(db)
 
 
 @pytest.mark.parametrize("second_start", [4, 6])
@@ -168,6 +170,7 @@ async def test_failed_migration_can_resume(test_database, monkeypatch):
     monkeypatch.setattr(migrations, "install_triggers", install)
     await migrate(db._driver, db._database)
     assert await audit_schema(db._driver, db._database) == {}
+    await wait_for_triggers(db)
 
 
 async def test_updates_cannot_change_recording_role_or_toc_parent_bounds(test_database):
