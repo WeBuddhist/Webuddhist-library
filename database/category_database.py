@@ -10,9 +10,20 @@ from .nomen_database import NomenDatabase
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, AsyncSession
 
-    from models.category import CategoryInput
+    from models.category import CategoryInput, CategoryPatch
 
     from .database import Database
+
+
+def _merge_localizations(existing: dict[str, str], patch: dict[str, str]) -> dict[str, str]:
+    """Add or replace the patch's languages, matching language codes case-insensitively.
+
+    The patch's spelling of a language code replaces the existing one, so patching
+    ``en-us`` over ``en-US`` leaves a single ``en-us`` entry.
+    """
+    replaced = {language.lower() for language in patch}
+    kept = {language: text for language, text in existing.items() if language.lower() not in replaced}
+    return kept | patch
 
 
 class CategoryDatabase:
@@ -66,8 +77,9 @@ class CategoryDatabase:
         MATCH (app:Application {id: $application})
         UNWIND $titles AS title
         MATCH (c:Category)-[:BELONGS_TO]->(:Application {id: $application})
-        WHERE ($parent_id IS NULL AND NOT EXISTS { (c)-[:HAS_PARENT]->(:Category) })
-           OR (c)-[:HAS_PARENT]->(:Category {id: $parent_id})
+        WHERE (($parent_id IS NULL AND NOT EXISTS { (c)-[:HAS_PARENT]->(:Category) })
+           OR (c)-[:HAS_PARENT]->(:Category {id: $parent_id}))
+          AND ($category_id IS NULL OR c.id <> $category_id)
         MATCH (c)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
             -[r:HAS_LANGUAGE]->(lang:Language)
         WHERE toLower(coalesce(r.bcp47, lang.code)) = toLower(title.language)
@@ -80,6 +92,34 @@ class CategoryDatabase:
         RETURN EXISTS {
             (:Category {id: $parent_id})-[:BELONGS_TO]->(:Application {id: $application})
         } AS exists
+    """
+
+    DELETE_TITLE_QUERY: LiteralString = """
+    MATCH (c:Category {id: $category_id})-[:HAS_TITLE]->(n:Nomen)
+    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
+    DETACH DELETE n, lt
+    FINISH
+    """
+
+    LINK_TITLE_QUERY: LiteralString = """
+    MATCH (c:Category {id: $category_id})
+    MATCH (n:Nomen {id: $nomen_id})
+    CREATE (c)-[:HAS_TITLE]->(n)
+    FINISH
+    """
+
+    DELETE_DESCRIPTION_QUERY: LiteralString = """
+    MATCH (c:Category {id: $category_id})-[:HAS_DESCRIPTION]->(n:Nomen)
+    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
+    DETACH DELETE n, lt
+    FINISH
+    """
+
+    LINK_DESCRIPTION_QUERY: LiteralString = """
+    MATCH (c:Category {id: $category_id})
+    MATCH (n:Nomen {id: $nomen_id})
+    CREATE (c)-[:HAS_DESCRIPTION]->(n)
+    FINISH
     """
 
     DELETE_CHECK_QUERY: LiteralString = """
@@ -114,15 +154,18 @@ class CategoryDatabase:
         return self._db.get_session()
 
     async def get_by_id(self, category_id: str, application: str) -> CategoryOutput | None:
-        async def read(tx: AsyncManagedTransaction) -> CategoryOutput | None:
-            result = await tx.run(CategoryDatabase.GET_BY_ID_QUERY, category_id=category_id, application=application)
-            record = await result.single()
-            if record is None:
-                return None
-            return CategoryOutput.model_validate(record["category"])
-
         async with self.session as session:
-            return await session.execute_read(read)
+            return await session.execute_read(self.get_with_transaction, category_id, application)
+
+    @staticmethod
+    async def get_with_transaction(
+        tx: AsyncManagedTransaction, category_id: str, application: str
+    ) -> CategoryOutput | None:
+        result = await tx.run(CategoryDatabase.GET_BY_ID_QUERY, category_id=category_id, application=application)
+        record = await result.single()
+        if record is None:
+            return None
+        return CategoryOutput.model_validate(record["category"])
 
     async def get_all(self, application: str, parent_id: str | None = None) -> list[CategoryOutput]:
         async def read(tx: AsyncManagedTransaction) -> list[CategoryOutput]:
@@ -159,6 +202,37 @@ class CategoryDatabase:
         async with self.session as session:
             return str(await session.execute_write(create_transaction))
 
+    async def update(self, category_id: str, patch: CategoryPatch, application: str) -> CategoryOutput:
+        async def update_transaction(tx: AsyncManagedTransaction) -> CategoryOutput:
+            await lock_nodes(tx, "Category", [category_id])
+            existing = await self.get_with_transaction(tx, category_id, application)
+            if existing is None:
+                raise DataNotFoundError(f"Category '{category_id}' not found in application '{application}'")
+
+            if patch.title is not None:
+                await self._validate_not_exists_tx(
+                    tx, application, patch.title.root, existing.parent_id, category_id=category_id
+                )
+                title = _merge_localizations(existing.title.root, patch.title.root)
+                await tx.run(CategoryDatabase.DELETE_TITLE_QUERY, category_id=category_id)
+                nomen_id = await NomenDatabase.create_with_transaction(tx, title)
+                await tx.run(CategoryDatabase.LINK_TITLE_QUERY, category_id=category_id, nomen_id=nomen_id)
+
+            if patch.description is not None:
+                existing_description = existing.description.root if existing.description else {}
+                description = _merge_localizations(existing_description, patch.description.root)
+                await tx.run(CategoryDatabase.DELETE_DESCRIPTION_QUERY, category_id=category_id)
+                nomen_id = await NomenDatabase.create_with_transaction(tx, description)
+                await tx.run(CategoryDatabase.LINK_DESCRIPTION_QUERY, category_id=category_id, nomen_id=nomen_id)
+
+            updated = await self.get_with_transaction(tx, category_id, application)
+            if updated is None:
+                raise RuntimeError(f"Category '{category_id}' disappeared during update")
+            return updated
+
+        async with self.session as session:
+            return await session.execute_write(update_transaction)
+
     async def _validate_parent_exists_tx(self, tx: AsyncManagedTransaction, application: str, parent_id: str) -> None:
         result = await tx.run(
             CategoryDatabase.PARENT_EXISTS_QUERY,
@@ -170,13 +244,19 @@ class CategoryDatabase:
             raise DataNotFoundError(f"Parent category '{parent_id}' not found in application '{application}'")
 
     async def _validate_not_exists_tx(
-        self, tx: AsyncManagedTransaction, application: str, title: dict[str, str], parent_id: str | None
+        self,
+        tx: AsyncManagedTransaction,
+        application: str,
+        title: dict[str, str],
+        parent_id: str | None,
+        category_id: str | None = None,
     ) -> None:
         await lock_nodes(tx, "Application", [application])
         result = await tx.run(
             CategoryDatabase.FIND_EXISTING_QUERY,
             application=application,
             parent_id=parent_id,
+            category_id=category_id,
             titles=[{"language": language, "text": title_text} for language, title_text in title.items()],
         )
         record = await result.single()
