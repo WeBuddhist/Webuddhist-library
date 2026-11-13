@@ -25,7 +25,8 @@ TEXT_DOCUMENT_TYPE = "text"
 # "Devaśānti" -> [de, ba, sa, nti] are anagrams. Person lookups therefore match the
 # query as an ordered phrase, which keeps both syllable-neighbors and anagrams out.
 # Titles are free-form multi-word phrases, so they instead allow ~25% of tokens to
-# differ once past a 3-token query.
+# differ once past a 3-token query. Both also prefix-match the last word on the
+# word-tokenized folded labels, where a full name is never a prefix of an anagram.
 _TEXT_MINIMUM_SHOULD_MATCH = "3<75%"
 
 
@@ -362,8 +363,9 @@ def _search_body(*, query: str, document_type: str, limit: int, filters: list[di
 
 def _match_clauses(*, query: str, document_type: str, fields: list[str]) -> list[dict]:
     phrase = {"multi_match": {"query": query, "type": "phrase", "fields": fields, "boost": 4}}
+    prefix = {"match_phrase_prefix": {"search_labels_folded": query}}
     if document_type == PERSON_DOCUMENT_TYPE:
-        return [phrase]
+        return [phrase, prefix]
     return [
         phrase,
         {
@@ -374,6 +376,7 @@ def _match_clauses(*, query: str, document_type: str, fields: list[str]) -> list
                 "minimum_should_match": _TEXT_MINIMUM_SHOULD_MATCH,
             }
         },
+        prefix,
     ]
 
 

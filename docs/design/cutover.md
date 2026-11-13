@@ -19,10 +19,11 @@ Schema upgrades repeat idempotent steps without a version marker. Content backfi
 
 Deploy runs these steps in order:
 
-1. `python -m scripts.install_neo4j_triggers` installs the triggers and returns once the database runs them. APOC loads installed triggers only after its refresh interval (`apoc.trigger.refresh`, 60 seconds by default), so on a release that changes triggers this step can take that long. The API keeps serving meanwhile.
-2. The API stops. The old API must not edit content while recordings convert, because it would not move the cues of converted recordings.
-3. `python -m scripts.upgrade_recordings` creates the `audio_id_unique` constraint, then converts each recording that is still attached to an edition, one transaction per recording. It first checks every such recording and stops before changing any of them if one cannot be converted. When there is nothing to convert, it logs `Converted 0 legacy recording(s).` This is the case on every deploy after the first one.
-4. The API starts from the new checkout. It also starts when step 3 fails; the deploy then reports the failure. Recordings that were not converted stay hidden from the API until a rerun converts them, and their cues still move with content edits.
+1. `python -m scripts.install_neo4j_constraints` installs the constraints and indexes from `database/neo4j_constraints.cypher`, including `audio_id_unique`.
+2. `python -m scripts.install_neo4j_triggers` installs the triggers and returns once the database runs them. APOC loads installed triggers only after its refresh interval (`apoc.trigger.refresh`, 60 seconds by default), so on a release that changes triggers this step can take that long. The API keeps serving meanwhile.
+3. The API stops. The old API must not edit content while recordings convert, because it would not move the cues of converted recordings.
+4. `python -m scripts.upgrade_recordings` also creates the `audio_id_unique` constraint if it is missing, then converts each recording that is still attached to an edition, one transaction per recording. It first checks every such recording and stops before changing any of them if one cannot be converted. When there is nothing to convert, it logs `Converted 0 legacy recording(s).` This is the case on every deploy after the first one.
+5. The API starts from the new checkout. It also starts when step 4 fails; the deploy then reports the failure. Recordings that were not converted stay hidden from the API until a rerun converts them, and their cues still move with content edits.
 
 Before merging a release that converts recordings into an environment, run `python -m scripts.migrate` there (read-only). It reports pending recordings as a count, and recordings that cannot be converted as `legacy_recording_unconvertible`. Repair those first. `python -m scripts.migrate --apply` runs the same conversion.
 
