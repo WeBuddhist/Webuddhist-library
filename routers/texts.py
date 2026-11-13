@@ -150,7 +150,11 @@ async def create_edition(
 @router.patch(
     "/{text_id}",
     summary="Update a text",
-    description="Partially update a text with the provided data.",
+    description=(
+        "Partially update a text with the provided data. "
+        "`title` and `alt_titles` are replaced as a whole, not merged per language: "
+        "send every language you want to keep."
+    ),
 )
 async def update_text(
     request: Request,

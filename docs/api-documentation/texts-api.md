@@ -635,6 +635,8 @@ All fields are optional. Only include fields you want to update.
 
 **Note:** You cannot update `translation_of` or `commentary_of` via PATCH. These are set during creation. PATCH requires at least one field, rejects `null`, and rejects extra fields.
 
+`title` and `alt_titles` are replaced as a whole, not merged per language: sending `{"title": {"mn": "..."}}` leaves only the `mn` title, so include every language you want to keep. (This differs from `PATCH /v2/categories/{category_id}`, which merges localizations per language.)
+
 `contributions` replaces the text's whole contribution list. `tag_ids` replaces the Work tags within the authorized application scope, preserving tags owned by other applications; `[]` clears that scope. Category changes require ownership of both the existing and replacement category. Reassigning the same category is a no-op and does not require `expected_category_id`.
 
 **Response: 200 OK**
