@@ -901,11 +901,9 @@ for trigger in TRIGGERS:
 
 
 async def install_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -> None:
-    """Replace all installed triggers with TRIGGERS in one transaction. Idempotent — safe to call on every deploy."""
+    """Upsert TRIGGERS by name, then drop stale ones (APOC commits each call separately, so never drop all first)."""
 
     async def write(tx: AsyncManagedTransaction) -> None:
-        await tx.run("CALL apoc.trigger.dropAll($database)", database=database)
-
         for trigger in TRIGGERS:
             await tx.run(
                 "CALL apoc.trigger.install($database, $name, $statement, {phase: $phase})",
@@ -915,6 +913,10 @@ async def install_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -
                 phase=trigger["phase"],
             )
             logger.info("Installed trigger: %s — %s", trigger["name"], trigger["description"])
+
+        installed = await tx.run("CALL apoc.trigger.show($database) YIELD name", database=database)
+        for name in {record["name"] async for record in installed} - {trigger["name"] for trigger in TRIGGERS}:
+            await tx.run("CALL apoc.trigger.drop($database, $name)", database=database, name=name)
 
     async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
         await session.execute_write(write)
