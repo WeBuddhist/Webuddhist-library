@@ -453,9 +453,6 @@ async def create_through_api(client, path, data):
 
 async def text_search_ids(client, search, **filters):
     await search.index.refresh_index()
-    if "tag_ids" in filters:
-        tags = filters.pop("tag_ids")
-        filters["tag_id"] = ",".join(tags) if isinstance(tags, list) else tags
     response = await client.get("/v2/texts", params=filters)
     assert response.status_code == 200, response.text
     return {row["id"] for row in response.json()["items"]}
@@ -530,19 +527,19 @@ async def test_http_work_mutations_refresh_every_translation(catalog_client, cat
         json={"category_id": category, "expected_category_id": "category", "tag_ids": [tag]},
     )
     assert response.status_code == 200, response.text
-    assert await text_search_ids(client, search, title="Shared manuscript", category_id=category, tag_ids=tag) == texts
+    assert await text_search_ids(client, search, title="Shared manuscript", category_id=category, tag_id=tag) == texts
     assert await text_search_ids(client, search, title="Shared manuscript", category_id="category") == set()
     response = await client.patch(f"/v2/texts/{root}", headers=headers, json={"tag_ids": [other_tag]})
     assert response.status_code == 200, response.text
-    assert await text_search_ids(client, search, title="Shared manuscript", tag_ids=other_tag) == texts
-    assert await text_search_ids(client, search, title="Shared manuscript", tag_ids=tag) == set()
+    assert await text_search_ids(client, search, title="Shared manuscript", tag_id=other_tag) == texts
+    assert await text_search_ids(client, search, title="Shared manuscript", tag_id=tag) == set()
     translation = next(t for t in texts if t != root)
     assert (await client.post(f"/v2/texts/{translation}/tags/{tag}", headers=headers)).status_code == 204
-    assert await text_search_ids(client, search, title="Shared manuscript", tag_ids=tag) == texts
+    assert await text_search_ids(client, search, title="Shared manuscript", tag_id=tag) == texts
     assert (await client.delete(f"/v2/texts/{translation}/tags/{tag}", headers=headers)).status_code == 204
-    assert await text_search_ids(client, search, title="Shared manuscript", tag_ids=tag) == set()
+    assert await text_search_ids(client, search, title="Shared manuscript", tag_id=tag) == set()
     assert (await client.delete(f"/v2/tags/{other_tag}", headers=headers)).status_code == 204
-    assert await text_search_ids(client, search, title="Shared manuscript", tag_ids=other_tag) == set()
+    assert await text_search_ids(client, search, title="Shared manuscript", tag_id=other_tag) == set()
     assert await text_search_ids(client, search, title="Shared manuscript", category_id=category) == texts
 
 
@@ -568,14 +565,16 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
     from models.category import CategoryInput
 
     db, client, search = test_database, catalog_client, catalog_search
-    a, b = [await db.tag.create(TagInput(title={"en": name}), "test_application") for name in ("Tag A", "Tag B")]
+    a, b, c = [
+        await db.tag.create(TagInput(title={"en": name}), "test_application") for name in ("Tag A", "Tag B", "Tag C")
+    ]
     category = await db.category.create(CategoryInput(title={"en": "Other category"}), "test_application")
     ids = []
     for i, (tags, cat, bdrc, wiki) in enumerate(
         [
             ([a, b], "category", "W-match", "Q-match"),
             ([a], "category", "W-other", "Q-other"),
-            ([b], category, "W-third", "Q-third"),
+            ([b, c], category, "W-third", "Q-third"),
         ]
     ):
         ids.append(
@@ -591,17 +590,21 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
             )
         )
     await publish_catalog(search, db)
-    assert await text_search_ids(client, search, title="Filter manuscript", tag_ids=[a, b], tag_id_match="all") == {
-        ids[0]
-    }
-    assert await text_search_ids(client, search, title="Filter manuscript", tag_ids=[a, b], tag_id_match="any") == set(
-        ids
-    )
+    for tag_id, expected in [
+        ([a, b], {ids[0]}),
+        ([f"{a},{b}"], set(ids)),
+        ([f"{a},{c}", b], {ids[0], ids[2]}),
+        ([b, f"{a},{c}"], {ids[0], ids[2]}),
+        ([f"{a},{b}", c], {ids[2]}),
+        ([f"{a},missing"], set(ids[:2])),
+        ([a, "missing"], set()),
+    ]:
+        assert await text_search_ids(client, search, title="Filter manuscript", tag_id=tag_id) == expected, tag_id
     assert await text_search_ids(
-        client, search, title="Filter manuscript", tag_ids=[a, b], tag_id_match="any", category_id="category"
+        client, search, title="Filter manuscript", tag_id=f"{a},{b}", category_id="category"
     ) == set(ids[:2])
     assert await text_search_ids(
-        client, search, title="Filter manuscript", tag_ids=[a, b], tag_id_match="all", bdrc="W-match", wiki="Q-match"
+        client, search, title="Filter manuscript", tag_id=[a, b], bdrc="W-match", wiki="Q-match"
     ) == {ids[0]}
     assert await text_search_ids(client, search, title="Filter manuscript", bdrc="W-match", wiki="Q-other") == set()
 

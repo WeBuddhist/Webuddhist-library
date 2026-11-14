@@ -75,8 +75,7 @@ GET /v2/texts
 | `language`    | string  | query    | No       | -       | Filter by language code                                                                                |
 | `title`       | string  | query    | No       | -       | Search by title via catalog search: lenient, script-aware matching (diacritic-insensitive, Sanskrit and Tibetan phonetic) across both primary and alternative titles; minimum 2 characters. See [Catalog Search API](./catalog-search-api.md). |
 | `category_id` | string  | query    | No       | -       | Filter by category ID                                                                                  |
-| `tag_id`      | string  | query    | No       | -       | Comma-separated application tag IDs |
-| `tag_id_match` | string | query    | No       | `all`   | Tag matching mode: `all` requires every listed tag; `any` requires at least one |
+| `tag_id`      | string  | query    | No       | -       | Repeatable tag filter: repeated parameters are ANDed, comma-separated IDs within one are ORed, e.g. `tag_id=TAG123,TAG456&tag_id=TAG789`. See [Filter Texts by Tag](./tags-api.md#filter-texts-by-tag) |
 | `author_id`   | string  | query    | No       | -       | Filter by contributing author person ID                                                                |
 | `bdrc`        | string  | query    | No       | -       | Filter by BDRC identifier                                                                              |
 | `wiki`        | string  | query    | No       | -       | Filter by Wikidata identifier                                                                          |
@@ -112,7 +111,7 @@ GET /v2/texts
 **Error Responses:**
 
 - `401 Unauthorized`: Missing or invalid API key in deployed environments
-- `422 Validation Error`: Invalid `limit` or `offset`, or `title` shorter than 2 characters
+- `422 Validation Error`: Invalid `limit` or `offset`, `title` shorter than 2 characters, invalid `tag_id`, or an unsupported query parameter
 - `503 Service Unavailable`: `title` search was requested but catalog search is not configured
 - `500 Server Error`: Internal server error
 
@@ -152,13 +151,18 @@ curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
-# Filter by every listed tag (default matching mode)
+# Filter by every listed tag: TAG123 AND TAG456
+curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123&tag_id=TAG456" \
+  -H "X-API-Key: your_api_key" \
+  -H "X-Application: webuddhist"
+
+# Filter by any listed tag: TAG123 OR TAG456
 curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
-# Filter by any listed tag
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id_match=any" \
+# Combine: (TAG123 OR TAG456) AND TAG789
+curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id=TAG789" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 ```
@@ -177,7 +181,7 @@ GET /v2/texts/languages
 
 **Parameters:**
 
-Accepts the [List All Texts](#list-all-texts) filters except `language`, `title`, `limit`, and `offset`: `category_id`, `tag_id`, `tag_id_match`, `author_id`, `bdrc`, and `wiki`. The filters behave exactly as they do on `GET /v2/texts`; in particular, `category_id` matches only that category, not its subcategories.
+Accepts the [List All Texts](#list-all-texts) filters except `language`, `title`, `limit`, and `offset`: `category_id`, `tag_id`, `author_id`, `bdrc`, and `wiki`. The filters behave exactly as they do on `GET /v2/texts`; in particular, `category_id` matches only that category, not its subcategories.
 
 **Response: 200 OK**
 

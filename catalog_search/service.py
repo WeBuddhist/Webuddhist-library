@@ -418,11 +418,7 @@ def _text_filters(filters: TextFilter) -> list[dict]:
         if "-" not in language:
             language_filter = {"bool": {"should": [language_filter, {"prefix": {"language": language + "-"}}]}}
         filter_clauses.append(language_filter)
-    tag_ids = filters.tag_ids
-    if filters.tag_id_match == "all":
-        filter_clauses.extend({"term": {"tag_ids": tag_id}} for tag_id in tag_ids)
-    elif tag_ids:
-        filter_clauses.append({"terms": {"tag_ids": tag_ids}})
+    filter_clauses.extend({"terms": {"tag_ids": tag_group}} for tag_group in filters.tag_groups)
     if filters.author_id:
         filter_clauses.append({"term": {"contributor_ids": filters.author_id}})
     return filter_clauses

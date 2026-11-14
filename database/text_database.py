@@ -84,13 +84,8 @@ class TextDatabase:
         WHEN $category_id IS NOT NULL THEN {
             MATCH (e:Text)-[:TEXT_OF]->(:Work)-[:HAS_CATEGORY]->(:Category {id: $category_id}) RETURN e
         }
-        WHEN size($tag_ids) > 0 THEN {
-            MATCH (e:Text)-[:TEXT_OF]->(w:Work)
-            WHERE CASE $tag_id_match
-                WHEN 'all' THEN ALL(required_tag_id IN $tag_ids WHERE (w)-[:HAS_TAG]->(:Tag {id: required_tag_id}))
-                ELSE ANY(required_tag_id IN $tag_ids WHERE (w)-[:HAS_TAG]->(:Tag {id: required_tag_id}))
-            END
-            RETURN e
+        WHEN size($tag_groups) > 0 THEN {
+            MATCH (e:Text)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(t:Tag) WHERE t.id IN $tag_groups[0] RETURN DISTINCT e
         }
         WHEN $language IS NOT NULL THEN {
             MATCH (e:Text)-[:HAS_LANGUAGE]->(:Language {code: $language_base}) RETURN e
@@ -106,19 +101,9 @@ class TextDatabase:
       AND ($author_id IS NULL OR EXISTS {
           (e)-[:HAS_CONTRIBUTION]->(:Contribution)-[:BY]->(:Person {id: $author_id})
       })
-      AND (
-        size($tag_ids) = 0
-        OR CASE $tag_id_match
-            WHEN 'all' THEN ALL(
-                required_tag_id IN $tag_ids
-                WHERE (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(:Tag {id: required_tag_id})
-            )
-            ELSE ANY(
-                required_tag_id IN $tag_ids
-                WHERE (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(:Tag {id: required_tag_id})
-            )
-        END
-      )
+      AND ALL(tag_group IN $tag_groups WHERE EXISTS {
+          (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(t:Tag) WHERE t.id IN tag_group
+      })
       AND ($wiki IS NULL OR e.wiki = $wiki)
     """
 
@@ -326,8 +311,7 @@ class TextDatabase:
             "language_base": language.split("-")[0] if language else None,
             "category_id": filters.category_id,
             "author_id": filters.author_id,
-            "tag_ids": filters.tag_ids,
-            "tag_id_match": filters.tag_id_match,
+            "tag_groups": filters.tag_groups,
             "bdrc": filters.bdrc,
             "wiki": filters.wiki,
         }

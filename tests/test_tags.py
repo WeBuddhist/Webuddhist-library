@@ -17,7 +17,10 @@ Tests endpoints:
 import logging
 
 import pytest
+from pydantic import ValidationError
+
 from identifier import generate_id
+from models.requests import TextFacetFilter
 from models.tag import TagInput
 
 logger = logging.getLogger(__name__)
@@ -471,27 +474,52 @@ class TestTagFiltering:
         assert text_id_tagged in result_ids
         assert text_id_untagged not in result_ids
 
-    @pytest.mark.parametrize("match_mode", ["all", "any"])
-    async def test_filter_texts_by_tag_match_mode(self, client, test_database, match_mode):
+    async def test_filter_texts_by_tag_groups(self, client, test_database):
         await _seed_person(test_database)
-        tradition_id = await _create_tag(client, {"title": {"en": f"{match_mode} Tradition"}})
-        chant_id = await _create_tag(client, {"title": {"en": f"{match_mode} Chant"}})
+        tags = {
+            name: await _create_tag(client, {"title": {"en": name}})
+            for name in ("thera", "maha", "vajra", "chant")
+        }
+        texts = {
+            "thera_chant": await _create_text(client, tag_ids=[tags["thera"], tags["chant"]]),
+            "maha_chant": await _create_text(client, tag_ids=[tags["maha"], tags["chant"]]),
+            "vajra_chant": await _create_text(client, tag_ids=[tags["vajra"], tags["chant"]]),
+            "thera": await _create_text(client, tag_ids=[tags["thera"]]),
+            "maha": await _create_text(client, tag_ids=[tags["maha"]]),
+            "chant": await _create_text(client, tag_ids=[tags["chant"]]),
+            "thera_maha": await _create_text(client, tag_ids=[tags["thera"], tags["maha"]]),
+            "untagged": await _create_text(client),
+        }
+        cases = [
+            (["{thera}"], {"thera_chant", "thera", "thera_maha"}),
+            (["{thera}", "{chant}"], {"thera_chant"}),
+            (["{thera}", "{maha}"], {"thera_maha"}),
+            (["{thera},{maha}"], {"thera_chant", "maha_chant", "thera", "maha", "thera_maha"}),
+            (["{thera},{maha}", "{chant}"], {"thera_chant", "maha_chant"}),
+            (["{chant}", "{maha},{thera}"], {"thera_chant", "maha_chant"}),
+            (["{thera},{maha},{vajra}", "{chant}"], {"thera_chant", "maha_chant", "vajra_chant"}),
+            (["{thera},{maha}", "{maha},{vajra}"], {"maha_chant", "maha", "thera_maha"}),
+            ([" {thera} , {maha} ", " {chant} "], {"thera_chant", "maha_chant"}),
+            (["{thera},{thera}", "{chant}", "{chant}"], {"thera_chant"}),
+            (["{thera},missing"], {"thera_chant", "thera", "thera_maha"}),
+            (["{thera}", "missing"], set()),
+            (["missing,other"], set()),
+        ]
+        for groups, expected in cases:
+            tag_id = [group.format(**tags) for group in groups]
+            for extra in ({}, {"author_id": "test_person"}):
+                response = await client.get("/v2/texts/", params={"tag_id": tag_id, **extra})
+                assert response.status_code == 200, (groups, response.text)
+                result = {item["id"] for item in _items(response.json())}
+                assert result == {texts[name] for name in expected}, (groups, extra)
 
-        both_id = await _create_text(client, tag_ids=[tradition_id, chant_id])
-        tradition_only_id = await _create_text(client, tag_ids=[tradition_id])
-        chant_only_id = await _create_text(client, tag_ids=[chant_id])
-        untagged_id = await _create_text(client)
+        query = f"tag_id={tags['thera']}%2C{tags['maha']}&tag_id={tags['chant']}"
+        response = await client.get(f"/v2/texts/?{query}")
+        assert {item["id"] for item in _items(response.json())} == {texts["thera_chant"], texts["maha_chant"]}
 
-        params = {"tag_id": f"{tradition_id},{chant_id}"}
-        if match_mode != "all":
-            params["tag_id_match"] = match_mode
-        response = await client.get("/v2/texts/", params=params)
-
+        response = await client.get(f"/v2/texts/languages?{query}")
         assert response.status_code == 200
-        result_ids = {expr["id"] for expr in _items(response.json())}
-        expected_ids = {both_id} if match_mode == "all" else {both_id, tradition_only_id, chant_only_id}
-        assert result_ids == expected_ids
-        assert untagged_id not in result_ids
+        assert response.json() == [{"code": "bo", "name": "Tibetan", "text_count": 2}]
 
     async def test_filter_texts_by_nonexistent_tag_returns_empty(self, client, test_database):
         """Test filtering by non-existent tag_id returns empty list"""
@@ -504,15 +532,46 @@ class TestTagFiltering:
         assert data["limit"] == 20
         assert data["items"] == []
 
-    async def test_filter_texts_rejects_empty_tag_id(self, client):
-        response = await client.get("/v2/texts/", params={"tag_id": "tag-a,,tag-b"})
+    @pytest.mark.parametrize("path", ["/v2/texts/", "/v2/texts/languages"])
+    @pytest.mark.parametrize("tag_id", [[""], ["tag-a,,tag-b"], ["tag-a,"], [",tag-a"], ["tag-a", ""]])
+    async def test_filter_texts_rejects_empty_tag_id(self, client, path, tag_id):
+        response = await client.get(path, params={"tag_id": tag_id})
 
         assert response.status_code == 422
 
-    async def test_filter_texts_rejects_invalid_match_mode(self, client):
-        response = await client.get("/v2/texts/", params={"tag_id": "tag-a,tag-b", "tag_id_match": "some"})
+    async def test_filter_texts_rejects_removed_match_mode(self, client):
+        response = await client.get("/v2/texts/", params={"tag_id": "tag-a,tag-b", "tag_id_match": "any"})
 
         assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("tag_id", "groups"),
+    [
+        ([], []),
+        (["A"], [["A"]]),
+        (["A", "B"], [["A"], ["B"]]),
+        (["A,B"], [["A", "B"]]),
+        (["A,B", "C"], [["A", "B"], ["C"]]),
+        (["A,B,C", "D,E", "F"], [["A", "B", "C"], ["D", "E"], ["F"]]),
+        ([" A , B ", " C "], [["A", "B"], ["C"]]),
+        (["A,A,B", "C", "C"], [["A", "A", "B"], ["C"], ["C"]]),
+        (["A,B", "A,B"], [["A", "B"], ["A", "B"]]),
+        (["A|B"], [["A|B"]]),
+    ],
+)
+def test_tag_id_parses_into_groups(tag_id, groups):
+    assert TextFacetFilter(tag_id=tag_id).tag_groups == groups
+
+
+def test_tag_id_defaults_to_no_groups():
+    assert TextFacetFilter().tag_groups == []
+
+
+@pytest.mark.parametrize("tag_id", [[""], [" "], [","], ["A,"], [",A"], ["A,,B"], ["A, ,B"], ["A", ""], ["A", ","]])
+def test_tag_id_rejects_empty_ids(tag_id):
+    with pytest.raises(ValidationError, match="non-empty tag IDs"):
+        TextFacetFilter(tag_id=tag_id)
 
 
 @pytest.mark.asyncio(loop_scope="session")

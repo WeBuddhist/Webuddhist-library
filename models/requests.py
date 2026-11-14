@@ -1,4 +1,4 @@
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -26,25 +26,25 @@ class AlignmentPaginationParams(AnnotationSegmentsPaginationParams):
 
 class TextFacetFilter(OpenPechaModel):
     category_id: str | None = None
-    tag_id: str | None = Field(default=None, description="Comma-separated application tag IDs.")
-    tag_id_match: Literal["all", "any"] = Field(default="all", description="Match all or any listed tag IDs.")
+    tag_id: list[str] = Field(
+        default=[],
+        description="Application tag IDs. Repeat the parameter for groups that must all match; "
+        "within a group, comma-separated IDs are alternatives. `tag_id=A,B&tag_id=C` means (A or B) and C.",
+    )
     author_id: str | None = None
     bdrc: str | None = None
     wiki: str | None = None
 
     @field_validator("tag_id")
     @classmethod
-    def normalize_tag_ids(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        tag_ids = list(dict.fromkeys(tag_id.strip() for tag_id in value.split(",")))
-        if "" in tag_ids:
-            raise ValueError("tag_id must be a comma-separated list of non-empty tag IDs")
-        return ",".join(tag_ids)
+    def validate_tag_id(cls, value: list[str]) -> list[str]:
+        if any(not tag_id.strip() for group in value for tag_id in group.split(",")):
+            raise ValueError("each tag_id must be a comma-separated list of non-empty tag IDs")
+        return value
 
     @property
-    def tag_ids(self) -> list[str]:
-        return self.tag_id.split(",") if self.tag_id else []
+    def tag_groups(self) -> list[list[str]]:
+        return [[tag_id.strip() for tag_id in group.split(",")] for group in self.tag_id]
 
 
 class TextFilter(TextFacetFilter):
