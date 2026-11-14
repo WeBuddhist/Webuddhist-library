@@ -1,6 +1,6 @@
 # Content state and search: manual maintenance
 
-Ordinary deployment updates and restarts the API. Apart from the recording conversion described below, it does not run migrations or reindexing. Complete any required data upgrade before starting a release that depends on it. Content-edit request and response bodies stay unchanged; edition revisions remain internal.
+Ordinary deployment updates and restarts the API. It does not run migrations or reindexing. Complete any required data upgrade before starting a release that depends on it. Content-edit request and response bodies stay unchanged; edition revisions remain internal.
 
 ## What needs migration
 
@@ -15,17 +15,16 @@ Ordinary deployment updates and restarts the API. Apart from the recording conve
 
 Schema upgrades repeat idempotent steps without a version marker. Content backfill sets missing fields; reindexing reads current canonical records. Application ownership rules do not require rewriting valid Work relationships.
 
-### Recording conversion on deploy
+### Recording conversion
 
-Deploy runs these steps in order:
+`python -m scripts.migrate --apply` converts every recording still attached to an edition in one transaction, after the new triggers are live; either all convert or none do. Later runs find nothing to convert. The read-only `python -m scripts.migrate` reports pending recordings as a count, and recordings that cannot be converted as `legacy_recording_unconvertible`; repair those first.
 
-1. `python -m scripts.install_neo4j_constraints` installs the constraints and indexes from `database/neo4j_constraints.cypher`, including `audio_id_unique`.
-2. `python -m scripts.install_neo4j_triggers` installs the triggers and returns once the database runs them. APOC loads installed triggers only after its refresh interval (`apoc.trigger.refresh`, 60 seconds by default), so on a release that changes triggers this step can take that long. The API keeps serving meanwhile.
-3. The API stops. The old API must not edit content while recordings convert, because it would not move the cues of converted recordings.
-4. `python -m scripts.upgrade_recordings` also creates the `audio_id_unique` constraint if it is missing, then converts each recording that is still attached to an edition, one transaction per recording. It first checks every such recording and stops before changing any of them if one cannot be converted. When there is nothing to convert, it logs `Converted 0 legacy recording(s).` This is the case on every deploy after the first one.
-5. The API starts from the new checkout. It also starts when step 4 fails; the deploy then reports the failure. Recordings that were not converted stay hidden from the API until a rerun converts them, and their cues still move with content edits.
+The release that introduces `Audio` depends on this conversion: its API neither lists unconverted recordings nor moves their cues on content edits, and the previous API does the same for converted ones. So keep the API stopped from the conversion until the new release starts:
 
-Before merging a release that converts recordings into an environment, run `python -m scripts.migrate` there (read-only). It reports pending recordings as a count, and recordings that cannot be converted as `legacy_recording_unconvertible`. Repair those first. `python -m scripts.migrate --apply` runs the same conversion.
+1. Run `python -m scripts.migrate` (read-only) against the environment and repair what it reports.
+2. Stop the API (`sudo systemctl stop openpecha-api`).
+3. From the release checkout, run `python -m scripts.migrate --apply`.
+4. Merge the release; deploy installs it and starts the API.
 
 ## Prepare
 

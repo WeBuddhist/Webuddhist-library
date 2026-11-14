@@ -46,8 +46,8 @@ An Audio needs only its Text. The edition is optional and can come later, when c
 | `GET`, `PATCH`, `DELETE` | `/v2/audios/{audio_id}` | One Audio. The recited text cannot change. |
 | `POST`, `GET` | `/v2/audios/{audio_id}/recordings` | Upload a Recording (multipart, optional `edition_id`); list Recordings |
 | `GET`, `PATCH`, `DELETE` | `/v2/recordings/{recording_id}` | One Recording (version name, duration) |
-| `PUT` | `/v2/recordings/{recording_id}/follows/{edition_id}` | Follow an edition (R2, R4) |
-| `DELETE` | `/v2/recordings/{recording_id}/follows` | Stop following, and delete the cues |
+| `PUT` | `/v2/recordings/{recording_id}/edition/{edition_id}` | Follow an edition (R2, R4) |
+| `DELETE` | `/v2/recordings/{recording_id}/edition` | Stop following, and delete the cues |
 | `GET`, `PUT`, `DELETE` | `/v2/recordings/{recording_id}/cues` | Unchanged |
 | `GET` | `/v2/editions/{edition_id}/recordings` | The Recordings that follow an edition |
 
@@ -55,13 +55,13 @@ An Audio needs only its Text. The edition is optional and can come later, when c
 
 ## Existing recordings
 
-The first deploy converts each recording that is attached to an edition (`scripts/upgrade_recordings.py`, also part of `scripts.migrate --apply`):
+`python -m scripts.migrate --apply` converts each recording that is attached to an edition, with the API stopped, before the release starts:
 
 - A new Audio recites the edition's text and belongs to its Work. Title, language, license, date and contributions move to it. A missing language becomes the text's language; a missing license becomes `public`.
 - The Recording follows the same edition, keeps its cues, and records its existing file key in `audio_key`. No file is copied.
-- Each Recording converts in its own transaction. Later runs find nothing to convert.
+- All recordings convert in one transaction. Later runs find nothing to convert.
 
-The conversion waits until the new triggers are live, because the triggers they replace reject a Recording without `RECORDING_OF`. See [cutover.md](../design/cutover.md).
+The conversion runs after the new triggers are live, because the triggers they replace reject a Recording without `RECORDING_OF`. See [cutover.md](../design/cutover.md).
 
 ## Not in scope
 

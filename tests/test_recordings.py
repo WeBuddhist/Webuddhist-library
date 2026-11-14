@@ -9,8 +9,8 @@ Tests endpoints:
 - GET /v2/recordings/{recording_id}/audio
 - PATCH /v2/recordings/{recording_id}
 - DELETE /v2/recordings/{recording_id}
-- PUT /v2/recordings/{recording_id}/follows/{edition_id}
-- DELETE /v2/recordings/{recording_id}/follows
+- PUT /v2/recordings/{recording_id}/edition/{edition_id}
+- DELETE /v2/recordings/{recording_id}/edition
 - GET/PUT/DELETE /v2/recordings/{recording_id}/cues
 """
 
@@ -98,7 +98,7 @@ class RecordingHelpers:
     def _upload(metadata: dict, content_type: str = "audio/mpeg", audio: bytes = AUDIO_BYTES) -> dict:
         return {
             "data": {"metadata": json.dumps(metadata)},
-            "files": {"audio": ("reading.mp3", audio, content_type)},
+            "files": {"file": ("reading.mp3", audio, content_type)},
         }
 
     async def _post_recording(self, client, audio_id: str, metadata: dict, **kwargs):
@@ -294,7 +294,7 @@ class TestRecordingFollows(RecordingHelpers):
         edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
         recording_id = await self._create_recording(client, audio_id)
 
-        response = await client.put(f"/v2/recordings/{recording_id}/follows/{edition_id}")
+        response = await client.put(f"/v2/recordings/{recording_id}/edition/{edition_id}")
 
         assert response.status_code == 204
         assert (await client.get(f"/v2/recordings/{recording_id}")).json()["edition_id"] == edition_id
@@ -305,7 +305,7 @@ class TestRecordingFollows(RecordingHelpers):
         person_id = await self._create_person(test_database, "Other Author")
         other_edition = await self._create_edition(client, await self._create_text(test_database, person_id))
 
-        response = await client.put(f"/v2/recordings/{recording_id}/follows/{other_edition}")
+        response = await client.put(f"/v2/recordings/{recording_id}/edition/{other_edition}")
 
         assert response.status_code == 422
         assert "recites text" in response.text
@@ -314,15 +314,15 @@ class TestRecordingFollows(RecordingHelpers):
         edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
         recording_id = await self._create_recording(client, audio_id)
 
-        assert (await client.put(f"/v2/recordings/{recording_id}/follows/{generate_id()}")).status_code == 404
-        assert (await client.put(f"/v2/recordings/{generate_id()}/follows/{edition_id}")).status_code == 404
+        assert (await client.put(f"/v2/recordings/{recording_id}/edition/{generate_id()}")).status_code == 404
+        assert (await client.put(f"/v2/recordings/{generate_id()}/edition/{edition_id}")).status_code == 404
 
     async def test_following_the_same_edition_keeps_cues(self, client, test_database):
         edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
         recording_id = await self._create_recording(client, audio_id, {"edition_id": edition_id})
         await self._put_cues(client, recording_id, [_cue(0, 4, 0, 1200)])
 
-        assert (await client.put(f"/v2/recordings/{recording_id}/follows/{edition_id}")).status_code == 204
+        assert (await client.put(f"/v2/recordings/{recording_id}/edition/{edition_id}")).status_code == 204
 
         assert await self._cues(client, recording_id) == [_cue(0, 4, 0, 1200)]
 
@@ -333,7 +333,7 @@ class TestRecordingFollows(RecordingHelpers):
         recording_id = await self._create_recording(client, audio_id, {"edition_id": edition_id})
         await self._put_cues(client, recording_id, [_cue(0, 4, 0, 1200)])
 
-        assert (await client.put(f"/v2/recordings/{recording_id}/follows/{second_edition}")).status_code == 204
+        assert (await client.put(f"/v2/recordings/{recording_id}/edition/{second_edition}")).status_code == 204
 
         assert (await client.get(f"/v2/recordings/{recording_id}")).json()["edition_id"] == second_edition
         assert await self._cues(client, recording_id) == []
@@ -344,12 +344,12 @@ class TestRecordingFollows(RecordingHelpers):
         recording_id = await self._create_recording(client, audio_id, {"edition_id": edition_id})
         await self._put_cues(client, recording_id, [_cue(0, 4, 0, 1200)])
 
-        assert (await client.delete(f"/v2/recordings/{recording_id}/follows")).status_code == 204
+        assert (await client.delete(f"/v2/recordings/{recording_id}/edition")).status_code == 204
 
         recording = (await client.get(f"/v2/recordings/{recording_id}")).json()
         assert "edition_id" not in recording
         assert await self._count(test_database, "Cue") == 0
-        assert (await client.delete(f"/v2/recordings/{recording_id}/follows")).status_code == 204
+        assert (await client.delete(f"/v2/recordings/{recording_id}/edition")).status_code == 204
 
     async def test_database_rejects_moving_cues_to_another_edition(self, client, test_database):
         edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)

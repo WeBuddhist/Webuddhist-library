@@ -147,9 +147,8 @@ class SpanDatabase:
             <-[:SPAN_OF]-(span:Span)
         RETURN elementId(span) AS span_id, span.start AS span_start, span.end AS span_end
         UNION ALL
-        // RECORDING_OF covers recordings an interrupted upgrade has not converted yet.
         MATCH (m:Edition {id: $edition_id})
-            <-[:FOLLOWS|RECORDING_OF]-(:Recording)
+            <-[:FOLLOWS]-(:Recording)
             <-[:CUE_OF]-(entity:Cue)
             <-[:SPAN_OF]-(span:Span)
         RETURN elementId(span) AS span_id, span.start AS span_start, span.end AS span_end

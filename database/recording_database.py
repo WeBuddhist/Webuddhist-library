@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from exceptions import DataConflictError, DataNotFoundError, DataValidationError
+from exceptions import DataNotFoundError, DataValidationError
 from models.enums import AudioFormat
 from models.recording import RecordingCue, RecordingInput, RecordingOutput, RecordingPatch
 
@@ -217,8 +217,6 @@ class RecordingDatabase:
             record = await result.single()
             if record is None:
                 raise DataNotFoundError(f"Recording with ID '{recording_id}' not found")
-            if record["key"] is None:
-                raise DataValidationError(f"Recording '{recording_id}' requires the recording migration")
             return record["key"]
 
         async with self.session as session:
@@ -261,19 +259,14 @@ class RecordingDatabase:
 
     @staticmethod
     async def _lock(tx: AsyncManagedTransaction, recording_id: str, also: str | None = None) -> tuple[str, str | None]:
-        """Lock the followed edition (and `also`) before the recording, the order content edits use.
+        """Lock the recording, then the edition it follows (and `also`); return its audio and that edition.
 
-        FOLLOWS can change, or its edition be deleted, while this waits for a lock. Re-read after locking and
-        lock again until the edition followed is one already locked; return the audio and that edition.
+        Changing FOLLOWS or deleting the edition needs the recording's lock, so the edition read here stays put.
         """
-        for _ in range(3):
-            _, followed = await RecordingDatabase._get_links(tx, recording_id)
-            await lock_nodes(tx, "Edition", sorted({edition for edition in (followed, also) if edition}))
-            await lock_nodes(tx, "Recording", [recording_id])
-            audio_id, current = await RecordingDatabase._get_links(tx, recording_id)
-            if current == followed:
-                return audio_id, current
-        raise DataConflictError(f"Recording '{recording_id}' keeps changing its edition; retry the operation")
+        await lock_nodes(tx, "Recording", [recording_id])
+        audio_id, followed = await RecordingDatabase._get_links(tx, recording_id)
+        await lock_nodes(tx, "Edition", sorted({edition for edition in (followed, also) if edition}))
+        return audio_id, followed
 
     @staticmethod
     async def _lock_followed_edition(tx: AsyncManagedTransaction, recording_id: str) -> ContentState | None:
@@ -293,13 +286,7 @@ class RecordingDatabase:
             _, edition_id = await RecordingDatabase._get_links(tx, recording_id)
             if edition_id is None:
                 return []
-            try:
-                return await read_value(tx, edition_id, cues)
-            except DataNotFoundError:
-                # The edition was deleted after the links were read; the recording then follows nothing.
-                if (await RecordingDatabase._get_links(tx, recording_id))[1] is None:
-                    return []
-                raise
+            return await read_value(tx, edition_id, cues)
 
         async with self.session as session:
             return await session.execute_read(read)
@@ -394,7 +381,7 @@ class RecordingDatabase:
         audio_format: AudioFormat,
         size_bytes: int,
     ) -> str:
-        # Editions first, as everywhere else, so an edition delete cannot interleave with the FOLLOWS write.
+        # Locked before validating, so an edition delete cannot interleave with the FOLLOWS write.
         if recording.edition_id is not None:
             await lock_nodes(tx, "Edition", [recording.edition_id])
         await lock_nodes(tx, "Audio", [audio_id])

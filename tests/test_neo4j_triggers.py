@@ -167,12 +167,6 @@ def _custom_cases() -> dict[str, str]:
             CREATE (recording)-[:FOLLOWS]->(edition)
             RETURN [recording] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
-        "enforce_cue_cue_of_fixed": """
-            CREATE (first:Recording {id: randomUUID()}), (second:Recording {id: randomUUID()})
-            CREATE (cue:Cue {start_ms: 0, end_ms: 100})-[:CUE_OF]->(first)
-            CREATE (cue)-[moved:CUE_OF]->(second)
-            RETURN [] AS createdNodes, [moved] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
-        """,
         "enforce_cue_requires_follows": """
             CREATE (recording:Recording {id: randomUUID()})
             CREATE (:Cue {start_ms: 0, end_ms: 100})-[:CUE_OF]->(recording)

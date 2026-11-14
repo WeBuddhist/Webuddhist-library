@@ -85,10 +85,10 @@ async def get_recordings(
 async def post_recording(
     audio_id: Annotated[str, Path(description="The ID of the audio")],
     metadata: Annotated[str, Form(description="JSON-encoded recording metadata")],
-    audio: Annotated[UploadFile, File(description="Audio file")],
+    file: Annotated[UploadFile, File(description="Audio file")],
     _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> IdResponse:
     data = RecordingInput.model_validate_json(metadata)
-    return IdResponse(id=await create_recording(db, storage, audio_id, data, audio))
+    return IdResponse(id=await create_recording(db, storage, audio_id, data, file))

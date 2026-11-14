@@ -262,9 +262,7 @@ async def test_search_auth_configuration(monkeypatch, mode):
         assert "/ap-southeast-1/es/aws4_request" in headers["Authorization"]
         assert headers["X-Amz-Security-Token"] == "test-token"
     elif mode == "basic":
-        from aiohttp import BasicAuth
-
-        assert headers["Authorization"] == BasicAuth("reader", "password").encode()
+        assert headers["Authorization"] == "Basic cmVhZGVyOnBhc3N3b3Jk"
     else:
         assert "Authorization" not in headers
 

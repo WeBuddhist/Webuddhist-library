@@ -657,29 +657,6 @@ TRIGGERS.append(
     }
 )
 
-# Cue offsets belong to the edition its recording follows, so a cue cannot move to another recording.
-# __CREATED_NODES__ and __CREATED_RELATIONSHIPS__ stay the raw APOC event lists (see below).
-TRIGGERS.append(
-    {
-        "name": "enforce_cue_cue_of_fixed",
-        "description": "A Cue keeps the Recording it was created with",
-        "phase": "before",
-        "query": """
-        UNWIND __CREATED_RELATIONSHIPS__ AS rel
-        WITH rel
-        WHERE type(rel) = 'CUE_OF' AND NOT startNode(rel) IN __CREATED_NODES__
-        WITH collect(toString(startNode(rel).start_ms) + '-' + toString(startNode(rel).end_ms)) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_cue_cue_of_fixed: A Cue cannot move to another Recording. Cues: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-    }
-)
-
 TRIGGERS.extend(
     _required_rel_trigger(
         "enforce_cue_cue_of",
@@ -1111,8 +1088,6 @@ for trigger in TRIGGERS:
         trigger["query"]
         .replace("$createdNodes", _CHANGED_NODES)
         .replace("$createdRelationships", _CHANGED_RELATIONSHIPS)
-        .replace("__CREATED_NODES__", "$createdNodes")
-        .replace("__CREATED_RELATIONSHIPS__", "$createdRelationships")
     )
 
 

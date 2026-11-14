@@ -87,7 +87,6 @@ async def _legacy_recording(db, *, with_metadata: bool = True) -> tuple[str, str
 async def restore_triggers(test_database):
     yield
     await install_triggers(test_database._driver, test_database._database)
-    await wait_for_triggers(test_database._driver, test_database._database)
 
 
 @pytest.mark.usefixtures("restore_triggers")
@@ -197,9 +196,8 @@ async def test_unconvertible_recording_is_reported_and_stops_the_upgrade_untouch
 
     assert await unconvertible_recording_ids(db._driver, db._database) == [broken]
     assert (await audit_schema(db._driver, db._database)) == {"legacy_recording_unconvertible": [broken]}
-    await install_triggers(db._driver, db._database)
-    with pytest.raises(RuntimeError, match="cannot be converted"):
-        await upgrade_recordings(db._driver, db._database)
+    with pytest.raises(RuntimeError, match="Schema audit failed"):
+        await migrate(db._driver, db._database)
     assert sorted(await legacy_recording_ids(db._driver, db._database)) == sorted([broken, healthy])
 
 
@@ -219,34 +217,3 @@ async def test_wait_for_triggers_times_out_when_the_live_set_differs(test_databa
 
     with pytest.raises(TimeoutError, match="enforce_"):
         await wait_for_triggers(test_database._driver, test_database._database, wait_seconds=0.3, interval=0.1)
-
-
-async def test_upgrade_creates_the_audio_constraint(test_database):
-    db = test_database
-    async with db.get_session() as session:
-        await (await session.run("DROP CONSTRAINT audio_id_unique IF EXISTS")).consume()
-
-    assert await upgrade_recordings(db._driver, db._database) == 0
-
-    async with db.get_session() as session:
-        names = {r["name"] for r in await (await session.run("SHOW CONSTRAINTS")).data()}
-    assert "audio_id_unique" in names
-
-
-@pytest.mark.usefixtures("restore_triggers")
-async def test_deploy_script_converts_with_configured_database(test_database, _neo4j_container, monkeypatch):
-    from config import settings
-    from scripts import upgrade_recordings as script
-
-    db = test_database
-    _, _, recording_id = await _legacy_recording(db)
-    await install_triggers(db._driver, db._database)
-    monkeypatch.setattr(settings, "neo4j_uri", _neo4j_container["uri"])
-    monkeypatch.setattr(settings, "neo4j_username", "neo4j")
-    monkeypatch.setattr(settings, "neo4j_password", _neo4j_container["password"])
-    monkeypatch.setattr(settings, "neo4j_database", _neo4j_container["database"])
-
-    await script.main()
-
-    assert await legacy_recording_ids(db._driver, db._database) == []
-    assert (await db.recording.get(recording_id)).audio_id

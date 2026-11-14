@@ -30,7 +30,7 @@ Sent as `multipart/form-data` with two parts:
 | Part | Type | Required | Description |
 |------|------|----------|-------------|
 | `metadata` | string | Yes | JSON-encoded recording metadata |
-| `audio` | file | Yes | The audio file, with an audio content type |
+| `file` | file | Yes | The audio file, with an audio content type |
 
 The `metadata` part:
 
@@ -50,7 +50,7 @@ Every field is optional, so `{}` is valid. `title` names the version. `edition_i
 curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/audios/AUD123/recordings" \
   -H "X-API-Key: your_api_key" \
   -F 'metadata={"edition_id":"ED123"}' \
-  -F "audio=@chant.mp3;type=audio/mpeg"
+  -F "file=@chant.mp3;type=audio/mpeg"
 ```
 
 Response:
@@ -148,8 +148,8 @@ As everywhere else in the API, null values are rejected in `PATCH` and at least 
 ## Follow an Edition
 
 ```http
-PUT /v2/recordings/{recording_id}/follows/{edition_id}
-DELETE /v2/recordings/{recording_id}/follows
+PUT /v2/recordings/{recording_id}/edition/{edition_id}
+DELETE /v2/recordings/{recording_id}/edition
 ```
 
 `PUT` makes the recording follow an edition and returns `204 No Content`. The edition must be an edition of the text the audio recites; otherwise the request fails with `422`. Following the edition it already follows changes nothing. Following a different edition deletes the recording's cues, because their spans point into the old edition.

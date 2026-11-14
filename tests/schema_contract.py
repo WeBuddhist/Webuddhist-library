@@ -86,7 +86,6 @@ EXPECTED_TRIGGERS = frozenset(
         "enforce_recording_follows_max_one",
         "enforce_audio_has_title_max_one",
         "enforce_recording_has_title_max_one",
-        "enforce_cue_cue_of_fixed",
         "enforce_recording_follows_recited_text",
         "enforce_cue_requires_follows",
         "enforce_contribution_by",

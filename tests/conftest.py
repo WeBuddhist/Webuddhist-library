@@ -14,7 +14,7 @@ from neo4j import AsyncGraphDatabase, GraphDatabase
 import pytest
 import pytest_asyncio
 from testcontainers.core.container import DockerContainer
-from testcontainers.neo4j import Neo4jContainer
+from testcontainers.community.neo4j import Neo4jContainer
 
 from catalog_search import CatalogSearchService
 from content_search import ContentSearchService

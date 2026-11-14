@@ -94,7 +94,7 @@ async def delete_recording_cues(
 
 
 @router.put(
-    "/{recording_id}/follows/{edition_id}",
+    "/{recording_id}/edition/{edition_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Follow an edition",
     description=(
@@ -102,7 +102,7 @@ async def delete_recording_cues(
         "audio recites. Following a different edition deletes the existing cues."
     ),
 )
-async def set_recording_follows(
+async def set_recording_edition(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
     edition_id: Annotated[str, Path(description="The ID of the edition to follow")],
     _api_key: Annotated[str, Depends(get_api_key)],
@@ -112,12 +112,12 @@ async def set_recording_follows(
 
 
 @router.delete(
-    "/{recording_id}/follows",
+    "/{recording_id}/edition",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Stop following an edition",
     description="Remove the recording's link to its edition and delete its cues.",
 )
-async def delete_recording_follows(
+async def delete_recording_edition(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
     _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
