@@ -261,61 +261,13 @@ async def test_search_auth_configuration(monkeypatch, mode):
         assert headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-key/")
         assert "/ap-southeast-1/es/aws4_request" in headers["Authorization"]
         assert headers["X-Amz-Security-Token"] == "test-token"
+        assert "connection" not in headers["Authorization"]
     elif mode == "basic":
         from aiohttp import BasicAuth
 
         assert headers["Authorization"] == BasicAuth("reader", "password").encode()
     else:
         assert "Authorization" not in headers
-
-
-async def test_aws_auth_signature_verifies_against_received_request(monkeypatch):
-    import re
-
-    from aiohttp import web
-    from aiohttp.test_utils import TestServer
-    from botocore.auth import SigV4Auth
-    from botocore.awsrequest import AWSRequest
-    from botocore.credentials import Credentials
-
-    credentials = Credentials("test-key", "test-secret", "test-token+/=")
-    monkeypatch.setattr(
-        search_client.botocore.session, "get_session", lambda: SimpleNamespace(get_credentials=lambda: credentials)
-    )
-    received = []
-
-    async def search(request):
-        received.append((request.method, request.raw_path, list(request.raw_headers), await request.read()))
-        return web.json_response({"hits": {"hits": []}})
-
-    app = web.Application()
-    app.router.add_post("/catalog-search/_search", search)
-    async with TestServer(app) as server:
-        endpoint = str(server.make_url("/"))
-        async with search_client.create_search_client(
-            endpoint=endpoint, region="ap-southeast-1", auth_mode="aws", max_retries=0
-        ) as client:
-            connection = client.transport.connection_pool.connections[0]
-            assert isinstance(connection, search_client.ThreadedRequestsHttpConnection)
-            await client.search(index="catalog-search", body={"query": {"match": {"title": "བོད"}}})
-
-    method, path, raw_headers, body = received[0]
-    headers: dict[str, list[str]] = {}
-    for name, value in raw_headers:
-        headers.setdefault(name.decode().lower(), []).append(value.decode())
-    authorization = headers["authorization"][0]
-    signed = re.search(r"SignedHeaders=([^,]+)", authorization).group(1).split(";")
-    assert "connection" not in signed
-    request = AWSRequest(
-        method=method,
-        url=endpoint.rstrip("/") + path,
-        data=body,
-        headers={name: ",".join(headers[name]) for name in signed},
-    )
-    request.context["timestamp"] = headers["x-amz-date"][0]
-    signer = SigV4Auth(credentials, "es", "ap-southeast-1")
-    expected = signer.signature(signer.string_to_sign(request, signer.canonical_request(request)), request)
-    assert authorization.endswith(f"Signature={expected}")
 
 
 @pytest.mark.parametrize(

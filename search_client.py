@@ -1,9 +1,8 @@
-import asyncio
 import logging
-from collections.abc import AsyncGenerator, Collection, Iterable, Mapping
+from collections.abc import AsyncGenerator, Iterable
 
 import botocore.session
-from opensearchpy import AsyncHttpConnection, AsyncOpenSearch, AWSV4SignerAuth, RequestsHttpConnection
+from opensearchpy import AsyncHttpConnection, AsyncOpenSearch, AWSV4SignerAsyncAuth
 from opensearchpy.exceptions import OpenSearchException, RequestError
 from opensearchpy.helpers import async_bulk
 
@@ -26,16 +25,14 @@ def create_search_client(
     """Create a transport owned and closed by the calling lifespan/context."""
     if not endpoint:
         raise InvalidRequestError("OPENSEARCH_ENDPOINT is required")
-    connection_class: type = AsyncHttpConnection
-    http_auth: tuple[str, str] | AWSV4SignerAuth | None = None
+    http_auth: tuple[str, str] | AWSV4SignerAsyncAuth | None = None
     if auth_mode == "basic":
         http_auth = (username, password)
     elif auth_mode == "aws":
         credentials = botocore.session.get_session().get_credentials()
         if credentials is None:
             raise InvalidRequestError("AWS credentials are required for OpenSearch SigV4 auth")
-        http_auth = AWSV4SignerAuth(credentials, region, "es")
-        connection_class = ThreadedRequestsHttpConnection
+        http_auth = _AWSV4SignerAsyncAuth(credentials, region, "es")
     elif auth_mode not in {"none", ""}:
         raise InvalidRequestError(f"Unsupported OpenSearch auth mode: {auth_mode}")
 
@@ -43,7 +40,7 @@ def create_search_client(
         hosts=[endpoint.rstrip("/")],
         use_ssl=endpoint.startswith("https://"),
         verify_certs=True,
-        connection_class=connection_class,
+        connection_class=AsyncHttpConnection,
         http_auth=http_auth,
         timeout=request_timeout,
         max_retries=max_retries,
@@ -51,37 +48,12 @@ def create_search_client(
     )
 
 
-class ThreadedRequestsHttpConnection(RequestsHttpConnection):
-    """Async connection that sends SigV4-signed requests with ``requests`` in a worker thread.
+class _AWSV4SignerAsyncAuth(AWSV4SignerAsyncAuth):
+    """Leaves the hop-by-hop Connection header unsigned; proxies in front of AWS may rewrite it."""
 
-    Amazon OpenSearch Service rejects requests signed by ``AWSV4SignerAsyncAuth`` over aiohttp with
-    SignatureDoesNotMatch, while the same credentials signed by ``AWSV4SignerAuth`` over ``requests``
-    are accepted, so AWS-authenticated clients keep the async API but use the sync transport.
-    """
-
-    async def perform_request(  # type: ignore[override]  # noqa: PLR0917 - mirrors the transport's call signature
-        self,
-        method: str,
-        url: str,
-        params: Mapping[str, object] | None = None,
-        body: bytes | None = None,
-        timeout: float | None = None,  # noqa: ASYNC109 - per-request timeout passed in by the transport
-        ignore: Collection[int] = (),
-        headers: Mapping[str, str] | None = None,
-    ) -> tuple[int, Mapping[str, str], str]:
-        return await asyncio.to_thread(
-            super().perform_request,
-            method,
-            url,
-            params=params,
-            body=body,
-            timeout=timeout,
-            ignore=ignore,
-            headers=headers,
-        )
-
-    async def close(self) -> None:  # type: ignore[override]
-        await asyncio.to_thread(super().close)
+    def __call__(self, method: str, url: str, body: str | bytes | None = None, headers: dict | None = None) -> dict:
+        headers = {k: v for k, v in (headers or {}).items() if k.lower() != "connection"}
+        return super().__call__(method, url, body, headers)
 
 
 class SearchIndex:
