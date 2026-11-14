@@ -103,6 +103,8 @@ def _neo4j_container(_docker_runtime):
         .with_env("NEO4J_apoc_trigger_refresh", "1000")
         .with_env("NEO4J_dbms_security_procedures_unrestricted", "apoc.*")
         .with_env("NEO4J_dbms_security_procedures_allowlist", "apoc.*")
+        .with_env("NEO4J_internal_cypher_use__parameter__size", "false")
+        .with_env("NEO4J_dbms_cypher_min__replan__interval", "1000h")
     )
     try:
         container.start()
