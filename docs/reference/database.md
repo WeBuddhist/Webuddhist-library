@@ -48,7 +48,8 @@ Each attribute below provides operations for its domain.
 | **db.annotation** | [database.py](../../database/database.py) (AnnotationDatabase) | Access to the annotation modules listed below. |
 | **db.alignment** | [alignment_database.py](../../database/alignment_database.py) | Direct edition-pair segment alignment relationships. |
 | **db.segment** | [segment_database.py](../../database/segment_database.py) | Segment retrieval, related segments, tag context, and span lookup; segments are created through segmentation. |
-| **db.recording** | [recording_database.py](../../database/recording_database.py) | Recording metadata and edition associations. |
+| **db.audio** | [audio_database.py](../../database/audio_database.py) | Audio (one performance of a text): recited text, Work, title, language, license and performers. |
+| **db.recording** | [recording_database.py](../../database/recording_database.py) | Recording files of an audio, the edition each follows, and their cues. |
 | **db.person** | [person_database.py](../../database/person_database.py) | Person CRUD and listing with BDRC/wiki filters; name search uses the catalog search service. |
 | **db.language** | [language_database.py](../../database/language_database.py) | Language code creation, deletion, and listing. |
 | **db.category** | [category_database.py](../../database/category_database.py) | Application-owned categories and parent/child hierarchy. |

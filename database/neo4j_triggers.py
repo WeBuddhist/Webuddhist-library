@@ -1,6 +1,9 @@
+import asyncio
 import logging
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
+
+from models.enums import AUDIO_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,45 @@ def _rel_target_type_trigger(
     }
 
 
+def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: str) -> dict:
+    """Generate a trigger + audit pair limiting an optional relationship to at most one."""
+    return {
+        "name": name,
+        "description": f"{source_label} must have at most one {rel_type}->{target_label}",
+        "phase": "before",
+        "query": f"""
+        CALL () {{
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:{source_label}
+            RETURN n AS node
+          UNION ALL
+            UNWIND $createdRelationships AS rel
+            WITH rel WHERE type(rel) = '{rel_type}'
+            WITH startNode(rel) AS n
+            WHERE n:{source_label}
+            RETURN n AS node
+        }}
+        WITH DISTINCT node
+        WITH node, count {{ (node)-[:{rel_type}]->(:{target_label}) }} AS cnt
+        WHERE cnt > 1
+        WITH collect(coalesce(node.id, elementId(node))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            '{name}: {source_label} must have at most one {rel_type}. IDs: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
+        """,
+        "audit": f"""
+        MATCH (n:{source_label})
+        WITH n, count {{ (n)-[:{rel_type}]->(:{target_label}) }} AS cnt
+        WHERE cnt > 1
+        RETURN coalesce(n.id, elementId(n)) AS violating_id
+        """,
+    }
+
+
 TRIGGERS: list[dict] = []
 
 # Required outgoing relationships; the last field controls maximum cardinality.
@@ -174,9 +216,12 @@ for name, source, relationship, target, cardinality in [
     ("enforce_pagination_pagination_of", "Pagination", "PAGINATION_OF", "Edition", "one"),
     ("enforce_volume_volume_of", "Volume", "VOLUME_OF", "Pagination", "one"),
     ("enforce_page_page_of", "Page", "PAGE_OF", "Volume", "one"),
-    ("enforce_recording_recording_of", "Recording", "RECORDING_OF", "Edition", "one"),
-    ("enforce_recording_has_license", "Recording", "HAS_LICENSE", "LicenseType", "one"),
-    ("enforce_recording_has_contribution", "Recording", "HAS_CONTRIBUTION", "Contribution", "many"),
+    ("enforce_audio_audio_of", "Audio", "AUDIO_OF", "Work", "one"),
+    ("enforce_audio_recitation_of", "Audio", "RECITATION_OF", "Text", "one"),
+    ("enforce_audio_has_language", "Audio", "HAS_LANGUAGE", "Language", "one"),
+    ("enforce_audio_has_license", "Audio", "HAS_LICENSE", "LicenseType", "one"),
+    ("enforce_audio_has_contribution", "Audio", "HAS_CONTRIBUTION", "Contribution", "many"),
+    ("enforce_recording_rendition_of", "Recording", "RENDITION_OF", "Audio", "one"),
     ("enforce_contribution_with_role", "Contribution", "WITH_ROLE", "RoleType", "one"),
     ("enforce_person_has_name", "Person", "HAS_NAME", "Nomen", "one"),
     ("enforce_nomen_has_localization", "Nomen", "HAS_LOCALIZATION", "LocalizedText", "many"),
@@ -416,10 +461,115 @@ TRIGGERS.append(
 )
 
 
+_AUDIO_ROLE_LIST = "[" + ", ".join(f"'{role}'" for role in AUDIO_ROLES) + "]"
+
 TRIGGERS.append(
     {
-        "name": "enforce_recording_contribution_narrator",
-        "description": "Every Contribution on a Recording must have WITH_ROLE->RoleType {name: 'narrator'}",
+        "name": "enforce_audio_contribution_role",
+        "description": "Every Contribution on an Audio must have a performer role (narrator, singer or musician)",
+        "phase": "before",
+        "query": f"""
+        CALL () {{
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:Audio
+            RETURN n AS node
+          UNION ALL
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:Contribution
+            MATCH (node:Audio)-[:HAS_CONTRIBUTION]->(n)
+            RETURN node
+          UNION ALL
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:RoleType AND NOT coalesce(n.name, '') IN {_AUDIO_ROLE_LIST}
+            MATCH (node:Audio)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(n)
+            RETURN node
+        }}
+        WITH DISTINCT node
+        WHERE NOT (node IN $deletedNodes)
+          AND EXISTS {{
+            (node)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(rt:RoleType)
+            WHERE NOT coalesce(rt.name, '') IN {_AUDIO_ROLE_LIST}
+          }}
+        WITH collect(coalesce(node.id, elementId(node))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            'enforce_audio_contribution_role: Audio contributions must have role narrator, singer or musician. IDs: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
+    """,
+        "audit": f"""
+        MATCH (a:Audio)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(rt:RoleType)
+        WHERE NOT coalesce(rt.name, '') IN {_AUDIO_ROLE_LIST}
+        RETURN DISTINCT coalesce(a.id, elementId(a)) AS violating_id
+    """,
+    }
+)
+
+# --- Audio: the recited Text belongs to the Audio's Work --------------------
+TRIGGERS.append(
+    {
+        "name": "enforce_audio_recitation_in_work",
+        "description": "The Text an Audio recites must have TEXT_OF to the Audio's AUDIO_OF Work",
+        "phase": "before",
+        "query": """
+        CALL () {
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:Audio
+            RETURN n AS node
+          UNION ALL
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:Text
+            MATCH (node:Audio)-[:RECITATION_OF]->(n)
+            RETURN node
+          UNION ALL
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:Work
+            MATCH (node:Audio)-[:AUDIO_OF]->(n)
+            RETURN node
+        }
+        WITH DISTINCT node
+        WHERE NOT (node IN $deletedNodes)
+        MATCH (node)-[:RECITATION_OF]->(text:Text), (node)-[:AUDIO_OF]->(work:Work)
+        WITH node, text, work
+        WHERE NOT (text)-[:TEXT_OF]->(work)
+        WITH collect(DISTINCT coalesce(node.id, elementId(node))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            'enforce_audio_recitation_in_work: Audio must recite a Text of its own Work. IDs: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
+    """,
+        "audit": """
+        MATCH (a:Audio)-[:RECITATION_OF]->(text:Text), (a)-[:AUDIO_OF]->(work:Work)
+        WHERE NOT (text)-[:TEXT_OF]->(work)
+        RETURN DISTINCT coalesce(a.id, elementId(a)) AS violating_id
+    """,
+    }
+)
+
+# --- Recording: at most one FOLLOWS, and only to an edition of the recited Text --
+TRIGGERS.append(
+    _rel_target_type_trigger(
+        "enforce_follows_target",
+        "FOLLOWS must point to an Edition node",
+        "FOLLOWS",
+        "Edition",
+    )
+)
+for name, source, relationship, target in [
+    ("enforce_recording_follows_max_one", "Recording", "FOLLOWS", "Edition"),
+    ("enforce_audio_has_title_max_one", "Audio", "HAS_TITLE", "Nomen"),
+    ("enforce_recording_has_title_max_one", "Recording", "HAS_TITLE", "Nomen"),
+]:
+    TRIGGERS.append(_max_one_trigger(name, source, relationship, target))
+TRIGGERS.append(
+    {
+        "name": "enforce_recording_follows_recited_text",
+        "description": "The Edition a Recording follows must be an edition of the Text its Audio recites",
         "phase": "before",
         "query": """
         CALL () {
@@ -428,39 +578,80 @@ TRIGGERS.append(
             RETURN n AS node
           UNION ALL
             UNWIND $createdNodes AS n
-            WITH n WHERE n:Contribution
-            MATCH (node:Recording)-[:HAS_CONTRIBUTION]->(n)
+            WITH n WHERE n:Edition
+            MATCH (node:Recording)-[:FOLLOWS]->(n)
             RETURN node
           UNION ALL
             UNWIND $createdNodes AS n
-            WITH n WHERE n:RoleType
-            MATCH (node:Recording)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(n)
+            WITH n WHERE n:Audio
+            MATCH (node:Recording)-[:RENDITION_OF]->(n)
             RETURN node
-          UNION ALL
-            UNWIND $createdRelationships AS rel
-            WITH rel WHERE type(rel) = 'HAS_CONTRIBUTION'
-            WITH startNode(rel) AS n
-            WHERE n:Recording
-            RETURN n AS node
         }
         WITH DISTINCT node
         WHERE NOT (node IN $deletedNodes)
-          AND EXISTS {
-            (node)-[:HAS_CONTRIBUTION]->(c:Contribution)-[:WITH_ROLE]->(rt:RoleType)
-            WHERE rt.name IS NULL OR rt.name <> 'narrator'
-          }
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
+        MATCH (node)-[:FOLLOWS]->(edition:Edition)
+        WITH node, edition
+        WHERE NOT EXISTS {
+            (edition)-[:EDITION_OF]->(:Text)<-[:RECITATION_OF]-(:Audio)<-[:RENDITION_OF]-(node)
+        }
+        WITH collect(DISTINCT coalesce(node.id, elementId(node))) AS ids
         WHERE size(ids) > 0
         CALL apoc.util.validate(
             true,
-            'enforce_recording_contribution_narrator: Recording contributions must have role narrator. IDs: %s',
+            'enforce_recording_follows_recited_text: Recording must follow an edition of the recited Text. IDs: %s',
             [string.join(ids, ', ')]
         )
         RETURN null
     """,
         "audit": """
-        MATCH (r:Recording)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(rt:RoleType)
-        WHERE rt.name IS NULL OR rt.name <> 'narrator'
+        MATCH (r:Recording)-[:FOLLOWS]->(edition:Edition)
+        WHERE NOT EXISTS {
+            (edition)-[:EDITION_OF]->(:Text)<-[:RECITATION_OF]-(:Audio)<-[:RENDITION_OF]-(r)
+        }
+        RETURN DISTINCT coalesce(r.id, elementId(r)) AS violating_id
+    """,
+    }
+)
+
+# --- Cue: only on a Recording that follows an Edition, and never across a FOLLOWS change --
+TRIGGERS.append(
+    {
+        "name": "enforce_cue_requires_follows",
+        "description": "Cues require FOLLOWS; removing or replacing FOLLOWS requires deleting the cues",
+        "phase": "before",
+        "query": """
+        CALL () {
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:Recording
+            RETURN n AS node, false AS unfollowed
+          UNION ALL
+            UNWIND $createdNodes AS n
+            WITH n WHERE n:Cue
+            MATCH (n)-[:CUE_OF]->(node:Recording)
+            RETURN node, false AS unfollowed
+          UNION ALL
+            UNWIND $deletedRelationships AS rel
+            WITH rel WHERE type(rel) = 'FOLLOWS'
+            WITH startNode(rel) AS node
+            WHERE node:Recording
+            RETURN node, true AS unfollowed
+        }
+        WITH node, any(flag IN collect(unfollowed) WHERE flag) AS unfollowed
+        WHERE NOT (node IN $deletedNodes)
+          AND EXISTS { (:Cue)-[:CUE_OF]->(node) }
+          AND (unfollowed OR NOT (node)-[:FOLLOWS]->(:Edition))
+        WITH collect(coalesce(node.id, elementId(node))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            'enforce_cue_requires_follows: Cues need FOLLOWS and must be deleted when FOLLOWS changes. IDs: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
+    """,
+        "audit": """
+        MATCH (r:Recording)
+        WHERE EXISTS { (:Cue)-[:CUE_OF]->(r) } AND NOT (r)-[:FOLLOWS]->(:Edition)
         RETURN coalesce(r.id, elementId(r)) AS violating_id
     """,
     }
@@ -921,7 +1112,37 @@ async def install_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -
     async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
         await session.execute_write(write)
 
-    logger.info("All %d triggers installed.", len(TRIGGERS))
+    # Callers write right after installing; return only once the database runs the new rules.
+    await wait_for_triggers(driver, database)
+    logger.info("All %d triggers installed and live.", len(TRIGGERS))
+
+
+async def wait_for_triggers(
+    driver: AsyncDriver, database: str = DATABASE_NAME, wait_seconds: float = 120, interval: float = 1
+) -> None:
+    """Wait until the database runs TRIGGERS. APOC loads installed triggers only after its refresh interval.
+
+    Live triggers must match the installed ones by name and statement, so a trigger whose statement changed
+    under the same name also counts as pending.
+    """
+    names = {trigger["name"] for trigger in TRIGGERS}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_seconds
+    while True:
+        async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
+            result = await session.run("CALL apoc.trigger.show($database) YIELD name, query", database=database)
+            expected = {record["name"]: record["query"] async for record in result}
+        async with driver.session(database=database) as session:
+            result = await session.run("CALL apoc.trigger.list() YIELD name, query RETURN name, query")
+            live = {record["name"]: record["query"] async for record in result}
+        if live == expected and set(expected) == names:
+            return
+        if loop.time() >= deadline:
+            pending = names ^ set(expected) | {
+                n for n in expected.keys() | live.keys() if expected.get(n) != live.get(n)
+            }
+            raise TimeoutError(f"Triggers not live after {wait_seconds}s; pending: {sorted(pending)[:5]}")
+        await asyncio.sleep(interval)
 
 
 async def audit_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -> dict[str, list[str]]:

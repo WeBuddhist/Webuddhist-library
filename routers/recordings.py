@@ -93,10 +93,42 @@ async def delete_recording_cues(
     await db.recording.delete_cues(recording_id)
 
 
+@router.put(
+    "/{recording_id}/edition/{edition_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Follow an edition",
+    description=(
+        "Link a recording to the edition its cues point into. The edition must be an edition of the text the "
+        "audio recites. Following a different edition deletes the existing cues."
+    ),
+)
+async def set_recording_edition(
+    recording_id: Annotated[str, Path(description="The ID of the recording")],
+    edition_id: Annotated[str, Path(description="The ID of the edition to follow")],
+    _api_key: Annotated[str, Depends(get_api_key)],
+    db: Annotated[Database, Depends(get_db)],
+) -> None:
+    await db.recording.set_follows(recording_id, edition_id)
+
+
+@router.delete(
+    "/{recording_id}/edition",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Stop following an edition",
+    description="Remove the recording's link to its edition and delete its cues.",
+)
+async def delete_recording_edition(
+    recording_id: Annotated[str, Path(description="The ID of the recording")],
+    _api_key: Annotated[str, Depends(get_api_key)],
+    db: Annotated[Database, Depends(get_db)],
+) -> None:
+    await db.recording.remove_follows(recording_id)
+
+
 @router.patch(
     "/{recording_id}",
     summary="Update a recording",
-    description="Partially update a recording's metadata.",
+    description="Partially update a recording's version name or duration.",
     response_model_exclude_none=True,
 )
 async def update_recording(

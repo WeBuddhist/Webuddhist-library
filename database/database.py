@@ -12,6 +12,7 @@ from .annotation.segmentation_database import SegmentationDatabase
 from .annotation.table_of_contents_database import TableOfContentsDatabase
 from .api_key_database import ApiKeyDatabase
 from .application_database import ApplicationDatabase
+from .audio_database import AudioDatabase
 from .category_database import CategoryDatabase
 from .edition_database import EditionDatabase
 from .language_database import LanguageDatabase
@@ -45,6 +46,7 @@ class Database:
     annotation: AnnotationDatabase
     alignment: AlignmentDatabase
     segment: SegmentDatabase
+    audio: AudioDatabase
     recording: RecordingDatabase
     person: PersonDatabase
     language: LanguageDatabase
@@ -65,6 +67,7 @@ class Database:
         self.annotation = AnnotationDatabase(db=self)
         self.alignment = AlignmentDatabase(db=self)
         self.segment = SegmentDatabase(db=self)
+        self.audio = AudioDatabase(db=self)
         self.recording = RecordingDatabase(db=self)
         self.person = PersonDatabase(db=self)
         self.language = LanguageDatabase(db=self)

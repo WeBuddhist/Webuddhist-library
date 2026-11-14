@@ -69,7 +69,7 @@ Failure boundaries:
 - Edition creation, content edits, annotation/alignment changes, recording creation,
   and edition deletion each keep their graph changes in one transaction. Any error
   before commit rolls back all those changes, including internal revisions.
-- Text, person, and recording updates build and validate their returned model inside
+- Text, person, audio, and recording updates build and validate their returned model inside
   the write transaction, so a response-read failure also rolls back the changes.
 - Search runs after commit and is best-effort; a search failure does not undo the write.
 

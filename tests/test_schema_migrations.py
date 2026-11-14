@@ -170,21 +170,20 @@ async def test_failed_migration_can_resume(test_database, monkeypatch):
     assert await audit_schema(db._driver, db._database) == {}
 
 
-async def test_updates_cannot_change_recording_role_or_toc_parent_bounds(test_database):
+async def test_updates_cannot_change_audio_role_or_toc_parent_bounds(test_database):
     from models.annotation import TableOfContentsInput
+    from models.audio import AudioInput
     from models.edition import EditionInput
-    from models.enums import AudioFormat
-    from models.recording import RecordingInput
 
     db = test_database
     text = await db.text.create(TextInput(title={"en": "Mutable semantics"}, language="en", category_id="category"))
     edition = generate_id()
     await db.edition.create(EditionInput(type="critical"), edition, text, 20)
-    await db.recording.add(edition, RecordingInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]), generate_id(), AudioFormat.MP3, 10)
+    await db.audio.create(text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
     toc = TableOfContentsInput(sections=[{"title": {"en": "Parent"}, "span": {"start": 0, "end": 20}, "subsections": [{"title": {"en": "Child"}, "span": {"start": 5, "end": 10}}]}])
     await db.annotation.table_of_contents.add(edition, toc)
     async with db.get_session() as session:
-        with pytest.raises(ClientError, match="enforce_recording_contribution_narrator"):
+        with pytest.raises(ClientError, match="enforce_audio_contribution_role"):
             await (await session.run("MATCH (r:RoleType {name: 'narrator'}) SET r.name = 'unsupported-role'")).consume()
         with pytest.raises(ClientError, match="enforce_toc_hierarchy"):
             await (await session.run("MATCH (:TableOfContentsSection)-[:SUBSECTION_OF]->(parent)<-[:SPAN_OF]-(s:Span) SET s.end = 8")).consume()

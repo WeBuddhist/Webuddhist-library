@@ -2,9 +2,9 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, Path, Query, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request, status
 
-from content_service import create_recording, edit_content
+from content_service import edit_content
 from database.content_state import read_state
 from dependencies import get_api_key, get_db, get_storage
 from models.alignment import EditionAlignmentOutput
@@ -28,7 +28,7 @@ from models.annotation import (
 from models.content_operation import ContentOperation
 from models.edition import EditionOutput
 from models.enums import NoteType
-from models.recording import RecordingInput, RecordingOutput
+from models.recording import RecordingOutput
 from models.requests import AnnotationSegmentsPaginationParams
 from models.responses import IdResponse, PaginatedResponse, PresignedUrlResponse
 from search_updates import update_search
@@ -387,7 +387,7 @@ async def post_yigchung_annotations(
 @router.get(
     "/{edition_id}/recordings",
     summary="Get edition recordings",
-    description="Retrieve all audio recordings of an edition.",
+    description="Retrieve the recordings that follow an edition, for follow-along playback.",
     response_model_exclude_none=True,
 )
 async def get_recordings(
@@ -395,25 +395,7 @@ async def get_recordings(
     _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[RecordingOutput]:
-    return await db.recording.get_all(edition_id)
-
-
-@router.post(
-    "/{edition_id}/recordings",
-    status_code=status.HTTP_201_CREATED,
-    summary="Add edition recording",
-    description="Upload an audio recording of an edition, with its metadata as a JSON form field.",
-)
-async def post_recording(
-    edition_id: Annotated[str, Path(description="The ID of the edition")],
-    metadata: Annotated[str, Form(description="JSON-encoded recording metadata")],
-    audio: Annotated[UploadFile, File(description="Audio file")],
-    _api_key: Annotated[str, Depends(get_api_key)],
-    db: Annotated[Database, Depends(get_db)],
-    storage: Annotated[Storage, Depends(get_storage)],
-) -> IdResponse:
-    data = RecordingInput.model_validate_json(metadata)
-    return IdResponse(id=await create_recording(db, storage, edition_id, data, audio))
+    return await db.recording.get_all_by_edition(edition_id)
 
 
 @router.get(
@@ -434,7 +416,10 @@ async def get_related_editions(
     "/{edition_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete edition",
-    description="Delete edition metadata and associated database annotations.",
+    description=(
+        "Delete edition metadata and associated database annotations. Recordings that follow the edition stay; "
+        "the request is rejected while any of them has cues."
+    ),
 )
 async def delete_edition(
     request: Request,

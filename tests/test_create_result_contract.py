@@ -32,6 +32,7 @@ from database.edition_database import EditionDatabase
 from database.language_database import LanguageDatabase
 from database.nomen_database import NomenDatabase
 from database.person_database import PersonDatabase
+from database.audio_database import AudioDatabase
 from database.recording_database import RecordingDatabase
 from database.tag_database import TagDatabase
 from database.text_database import TextDatabase
@@ -443,33 +444,40 @@ async def test_edition_create_strictly_returns_neo4j_id(monkeypatch):
 
 
 async def test_recording_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(DatabaseValidator, "validate_edition_exists", AsyncMock())
-    monkeypatch.setattr(
-        DatabaseValidator,
-        "validate_contribution_references",
-        AsyncMock(),
-    )
+    monkeypatch.setattr(RecordingDatabase, "validate_target_with_transaction", AsyncMock())
     create_result = TrackingResult({"recording_id": "neo4j-recording-id"})
     tx = FakeTransaction({RecordingDatabase.CREATE_QUERY: create_result})
-    recording = SimpleNamespace(
-        title=None,
-        language=None,
-        duration_ms=None,
-        date=None,
-        license=SimpleNamespace(value="public"),
-        contributions=[],
-    )
+    recording = SimpleNamespace(title=None, duration_ms=None, edition_id=None)
 
     returned_id = await RecordingDatabase.add_with_transaction(
         tx,
-        "edition-id",
+        "audio-id",
         recording,
         "submitted-recording-id",
+        "objects/submitted-recording-id",
         AudioFormat.MP3,
         10,
     )
 
     assert_strict_neo4j_id(create_result, returned_id, "recording_id")
+
+
+async def test_audio_create_strictly_returns_neo4j_id(monkeypatch):
+    monkeypatch.setattr(AudioDatabase, "_validate_text_exists", AsyncMock())
+    monkeypatch.setattr(DatabaseValidator, "validate_contribution_references", AsyncMock())
+    create_result = TrackingResult({"audio_id": "neo4j-audio-id"})
+    tx = FakeTransaction({AudioDatabase.CREATE_QUERY: create_result})
+    audio = SimpleNamespace(
+        title=None,
+        language=None,
+        date=None,
+        license=SimpleNamespace(value="public"),
+        contributions=[],
+    )
+
+    returned_id = await AudioDatabase.create_with_transaction(tx, "text-id", audio, "submitted-audio-id")
+
+    assert_strict_neo4j_id(create_result, returned_id, "audio_id")
 
 
 async def test_application_create_strictly_returns_neo4j_id():

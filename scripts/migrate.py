@@ -8,7 +8,7 @@ from contextlib import AsyncExitStack
 from config import settings
 from database import Database
 from database.content_migration import migrate_content
-from database.migrations import audit_schema, migrate
+from database.migrations import audit_schema, legacy_recording_ids, migrate
 from storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,9 @@ async def run(*, apply: bool, content: bool = False) -> None:
                 logger.error("%s (%d): %s", name, len(ids), ids[:20])
             if violations:
                 raise SystemExit(1)
+            pending = await legacy_recording_ids(driver, settings.neo4j_database)
+            if pending:
+                logger.info("%d legacy recording(s) will be converted by --apply: %s", len(pending), pending[:20])
             logger.info("Schema audit passed")
         if content:
             storage = Storage(settings.aws_s3_bucket, settings.aws_region)
