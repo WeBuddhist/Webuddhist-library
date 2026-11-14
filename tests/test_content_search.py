@@ -30,7 +30,6 @@ async def test_non_testing_startup_allows_missing_opensearch_endpoint(monkeypatc
     search = Mock(side_effect=AssertionError("Search must stay disabled"))
     monkeypatch.setattr(main, "create_search_client", search)
     monkeypatch.setattr(main, "setup_telemetry", Mock())
-    monkeypatch.setattr(main, "shutdown_telemetry", Mock())
     app = create_app(testing=False)
     async with app.router.lifespan_context(app):
         db.verify_connectivity.assert_awaited_once()

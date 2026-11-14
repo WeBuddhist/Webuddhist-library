@@ -76,7 +76,8 @@ jobs:
           OPENSEARCH_PASSWORD=${{ secrets.OPENSEARCH_PASSWORD }}
           ENVIRONMENT=${{ vars.ENVIRONMENT }}
           OTEL_ENABLED=${{ vars.OTEL_ENABLED || 'false' }}
-          OTEL_SERVICE_NAME=${{ vars.OTEL_SERVICE_NAME }}
+          OTEL_SERVICE_NAME=${{ vars.OTEL_SERVICE_NAME || 'openpecha-api' }}
+          OTEL_RESOURCE_ATTRIBUTES=deployment.environment=${{ vars.ENVIRONMENT }}
           OTEL_EXPORTER_OTLP_ENDPOINT=${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
           OTEL_EXPORTER_OTLP_HEADERS=${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
           ENV_EOF

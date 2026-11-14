@@ -27,8 +27,6 @@ class Settings(BaseSettings):
 
     environment: str = ""
     otel_enabled: bool = False
-    otel_service_name: str = "openpecha-api"
-    otel_exporter_otlp_endpoint: str = ""
 
 
 settings = Settings()

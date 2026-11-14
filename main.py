@@ -16,7 +16,7 @@ from config import settings
 from content_search import ContentSearchService
 from database import Database
 from exceptions import InvalidRequestError, OpenPechaError
-from observability import setup_telemetry, shutdown_telemetry
+from observability import setup_telemetry
 from routers.alignments import router as alignments_router
 from routers.annotation.bibliographic import router as bibliographic_router
 from routers.annotation.durchens import router as durchens_router
@@ -38,6 +38,8 @@ from search_client import create_search_client
 from storage import Storage
 
 logger = logging.getLogger(__name__)
+
+_UNTRACED_PATHS = frozenset({"/__/health", "/docs", "/redoc", "/openapi.json"})
 
 
 def _map_neo4j_client_error(exc: Neo4jClientError) -> tuple[int, str]:
@@ -71,8 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     logger.info("Starting OpenPecha API")
 
     async with AsyncExitStack() as stack:
-        stack.callback(shutdown_telemetry)
-        setup_telemetry(app)
+        setup_telemetry()
 
         if not app.state.testing and settings.neo4j_uri:
             db = Database(
@@ -123,11 +124,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 def create_app(*, testing: bool = False) -> FastAPI:
     app = FastAPI(
         title="OpenPecha API v2",
-        version="2.14.0",
+        version="2.15.0",
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
+        telemetry={
+            "auto_configure": settings.otel_enabled,
+            "exclude": lambda scope: scope["path"] in _UNTRACED_PATHS,
+        },
     )
 
     app.state.testing = testing
