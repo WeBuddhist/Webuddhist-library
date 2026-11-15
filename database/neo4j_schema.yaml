@@ -208,12 +208,54 @@ nodes:
         cardinality: one
         required: false
 
+  Audio:
+    properties:
+      id:
+        type: string
+        required: true
+        unique: true
+      date:
+        type: string
+        required: false
+    relationships:
+      AUDIO_OF:
+        target: Work
+        cardinality: one
+        required: true
+      RECITATION_OF:
+        target: Text
+        cardinality: one
+        required: true
+      HAS_TITLE:
+        target: Nomen
+        cardinality: one
+        required: false
+      HAS_LANGUAGE:
+        target: Language
+        cardinality: one
+        required: true
+        properties:
+          bcp47:
+            type: string
+            required: false
+      HAS_LICENSE:
+        target: LicenseType
+        cardinality: one
+        required: true
+      HAS_CONTRIBUTION:
+        target: Contribution
+        cardinality: many
+        required: true
+
   Recording:
     properties:
       id:
         type: string
         required: true
         unique: true
+      audio_key:
+        type: string
+        required: true
       format:
         type: string
         required: true
@@ -229,34 +271,19 @@ nodes:
       duration_ms:
         type: integer
         required: false
-      date:
-        type: string
-        required: false
     relationships:
-      RECORDING_OF:
-        target: Edition
+      RENDITION_OF:
+        target: Audio
         cardinality: one
         required: true
+      FOLLOWS:
+        target: Edition
+        cardinality: one
+        required: false
       HAS_TITLE:
         target: Nomen
         cardinality: one
         required: false
-      HAS_LANGUAGE:
-        target: Language
-        cardinality: one
-        required: false
-        properties:
-          bcp47:
-            type: string
-            required: false
-      HAS_LICENSE:
-        target: LicenseType
-        cardinality: one
-        required: true
-      HAS_CONTRIBUTION:
-        target: Contribution
-        cardinality: many
-        required: true
 
   Cue:
     properties:
@@ -693,3 +720,5 @@ nodes:
           - translator
           - scholar
           - narrator
+          - singer
+          - musician

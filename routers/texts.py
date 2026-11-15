@@ -7,6 +7,7 @@ from catalog_search import CatalogSearchService
 from content_service import create_edition as publish_edition
 from dependencies import OptionalAppHeader, get_api_key, get_catalog_search, get_db, get_storage
 from exceptions import ServiceUnavailableError
+from models.audio import AudioInput, AudioOutput
 from models.edition import EditionOutput
 from models.requests import EditionRequestModel, EditionsQueryParams, TextFacetFilter, TextsQueryParams
 from models.responses import IdResponse, PaginatedResponse, TextLanguageResponse
@@ -147,6 +148,39 @@ async def create_edition(
     return IdResponse(id=edition_id)
 
 
+@router.get(
+    "/{text_id}/audios",
+    summary="List audios for a text",
+    description="Retrieve every audio (performance) that recites a text.",
+    response_model_exclude_none=True,
+)
+async def get_audios(
+    text_id: Annotated[str, Path(description="The ID of the text")],
+    _api_key: Annotated[str, Depends(get_api_key)],
+    db: Annotated[Database, Depends(get_db)],
+) -> list[AudioOutput]:
+    return await db.audio.get_all(text_id)
+
+
+@router.post(
+    "/{text_id}/audios",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an audio",
+    description=(
+        "Create an audio (one performance) that recites a text. It belongs to the text's Work. "
+        "Upload its recordings with POST /v2/audios/{audio_id}/recordings."
+    ),
+)
+async def create_audio(
+    text_id: Annotated[str, Path(description="The ID of the recited text")],
+    data: AudioInput,
+    _api_key: Annotated[str, Depends(get_api_key)],
+    db: Annotated[Database, Depends(get_db)],
+) -> IdResponse:
+    logger.info("Creating audio for text %s", text_id)
+    return IdResponse(id=await db.audio.create(text_id, data))
+
+
 @router.patch(
     "/{text_id}",
     summary="Update a text",
@@ -172,7 +206,7 @@ async def update_text(
     "/{text_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete text",
-    description="Delete a text if it has no editions or incoming text relationships.",
+    description="Delete a text if it has no editions, audios or incoming text relationships.",
 )
 async def delete_text(
     request: Request,

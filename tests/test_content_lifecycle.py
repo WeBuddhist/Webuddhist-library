@@ -9,6 +9,7 @@ from database.content_state import read_state
 from exceptions import DataConflictError, DataValidationError
 from identifier import generate_id
 from models.annotation import NoteInput, PaginationInput
+from models.audio import AudioInput, AudioOutput, AudioPatch
 from models.content_operation import ContentOperation
 from models.enums import AudioFormat
 from models.person import PersonInput, PersonOutput, PersonPatch
@@ -173,17 +174,21 @@ async def test_failed_edition_deletion_restores_annotations(test_database, monke
 @pytest.mark.parametrize("kind,output,patch", [
     ("person", PersonOutput, PersonPatch(name={"en": "Changed"}, wiki="Q-changed")),
     ("text", TextOutput, TextPatch(title={"en": "Changed"}, wiki="Q-changed")),
-    ("recording", RecordingOutput, RecordingPatch(title={"en": "Changed"}, date="2026")),
+    ("audio", AudioOutput, AudioPatch(title={"en": "Changed"}, date="2026")),
+    ("recording", RecordingOutput, RecordingPatch(title={"en": "Changed"}, duration_ms=7)),
 ])
 async def test_failed_update_response_rolls_back_metadata(test_database, monkeypatch, kind, output, patch):
     db = test_database
     _, entity_id, _, edition = await fixture(db)
     if kind == "person":
         entity_id = await db.person.create(PersonInput(name={"en": "Original"}))
+    elif kind == "audio":
+        entity_id = await db.audio.create(entity_id, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
     elif kind == "recording":
+        audio_id = await db.audio.create(entity_id, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
+        recording_id = generate_id()
         entity_id = await db.recording.add(
-            edition, RecordingInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]),
-            generate_id(), AudioFormat.MP3, 5,
+            audio_id, RecordingInput(), recording_id, f"objects/{recording_id}", AudioFormat.MP3, 5,
         )
     repository = getattr(db, kind)
     original = await repository.get(entity_id)
@@ -322,16 +327,17 @@ async def test_recording_upload_failure_and_empty_audio_never_publish_metadata(t
     from starlette.datastructures import Headers
 
     db = test_database
-    storage, _, _, edition = await fixture(db)
-    metadata = RecordingInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}])
+    storage, text, _, edition = await fixture(db)
+    audio_id = await db.audio.create(text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
+    metadata = RecordingInput(edition_id=edition)
     audio = UploadFile(BytesIO(b"audio"), size=5, headers=Headers({"content-type": "audio/mpeg"}))
     storage.before_put = AsyncMock(side_effect=OSError("upload interrupted"))
     with pytest.raises(OSError, match="interrupted"):
-        await content_service.create_recording(db, storage, edition, metadata, audio)
-    assert await db.recording.get_all(edition) == []
+        await content_service.create_recording(db, storage, audio_id, metadata, audio)
+    assert await db.recording.get_all_by_audio(audio_id) == []
     audio = UploadFile(BytesIO(), size=0, headers=Headers({"content-type": "audio/mpeg"}))
     with pytest.raises(DataValidationError, match="empty"):
-        await content_service.create_recording(db, storage, edition, metadata, audio)
+        await content_service.create_recording(db, storage, audio_id, metadata, audio)
     storage.before_put.assert_awaited_once()
 
 
@@ -339,26 +345,33 @@ async def test_recording_database_failure_rolls_back_metadata_after_upload(test_
     from io import BytesIO
     from fastapi import UploadFile
     from starlette.datastructures import Headers
-    from database.contribution_database import ContributionDatabase
+    from database.recording_database import RecordingDatabase
 
     db = test_database
-    storage, _, _, edition = await fixture(db)
-    create = ContributionDatabase.create_with_transaction
+    storage, text, _, edition = await fixture(db)
+    audio_id = await db.audio.create(text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
+    original = RecordingDatabase.CREATE_QUERY
     before = await snapshot_graph(db)
 
-    async def fail_after_contribution(*args):
-        await create(*args)
-        raise RuntimeError("after contribution")
+    async def fail_after_create(tx, query, **params):
+        result = await run(tx, query, **params)
+        if query == original:
+            await result.consume()
+            raise RuntimeError("after recording")
+        return result
 
-    monkeypatch.setattr(ContributionDatabase, "create_with_transaction", fail_after_contribution)
+    from neo4j import AsyncManagedTransaction
+
+    run = AsyncManagedTransaction.run
+    monkeypatch.setattr(AsyncManagedTransaction, "run", fail_after_create)
     audio = UploadFile(BytesIO(b"audio"), size=5, headers=Headers({"content-type": "audio/mpeg"}))
-    metadata = RecordingInput(title={"en": "Reading"}, contributions=[{"type": "ai", "id": "tts", "role": "narrator"}])
-    with pytest.raises(RuntimeError, match="after contribution"):
-        await content_service.create_recording(db, storage, edition, metadata, audio)
+    metadata = RecordingInput(title={"en": "Reading"}, edition_id=edition)
+    with pytest.raises(RuntimeError, match="after recording"):
+        await content_service.create_recording(db, storage, audio_id, metadata, audio)
     assert await snapshot_graph(db) == before
-    assert await db.recording.get_all(edition) == []
+    assert await db.recording.get_all_by_audio(audio_id) == []
     async with db.get_session() as session:
-        result = await session.run("MATCH (n) WHERE n:Contribution OR n:AI RETURN count(n) AS count")
+        result = await session.run("MATCH (n) WHERE n:Recording OR (n:Nomen AND NOT (n)<--()) RETURN count(n) AS count")
         assert (await result.single())["count"] == 0
     assert len(storage.objects) == 2  # The uploaded audio is unused, not published.
 

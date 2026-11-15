@@ -7,7 +7,7 @@ Editions are concrete versions of a text. The metadata lives in Neo4j and the ba
 - **Diplomatic edition**: A transcription of a source. Requires `metadata.type = "diplomatic"`, a `bdrc` value, and a `pagination` annotation at creation. May also include `segmentation`.
 - **Critical edition**: A scholarly edition. Must not include `bdrc`, and requires a `segmentation` annotation at creation.
 - **Collated edition**: Accepted by the metadata enum, but the create request does not enforce initial pagination or segmentation for this type.
-- **Content operations**: Insert, delete, and replace operations update stored base text and adjust stored spans for annotations on the edition, including the cues of its recordings.
+- **Content operations**: Insert, delete, and replace operations update stored base text and adjust stored spans for annotations on the edition, including the cues of the recordings that follow it.
 - **Related editions**: Discovered from alignment and text relationship data.
 
 ## Authentication
@@ -147,7 +147,8 @@ Deletes the edition metadata and associated annotation data handled by the datab
 Delete behavior:
 
 - Deletes the `Edition` node and its incipit title `Nomen` and `LocalizedText` subgraphs.
-- Cascade-deletes segmentations, alignments, pagination, table of contents, bibliographic metadata, durchen notes, footnotes, yigchung marks, recordings, spans, segments, pages, volumes, and table of contents sections associated with the edition, including annotations added after edition creation.
+- Cascade-deletes segmentations, alignments, pagination, table of contents, bibliographic metadata, durchen notes, footnotes, yigchung marks, spans, segments, pages, volumes, and table of contents sections associated with the edition, including annotations added after edition creation.
+- Never deletes audio. Recordings that follow the edition stop following it and stay, together with their audio.
 - Deletes the edition's `HAS_SOURCE` relationship, but preserves the `Source` node.
 - Does not delete the parent `Text`, underlying `Work`, categories, tags, contributors, or lookup/type nodes.
 - Does not delete stored base text, recording audio files, or other non-database side effects.
@@ -155,6 +156,7 @@ Delete behavior:
 Error responses:
 
 - `404 Not Found`: Edition does not exist.
+- `409 Conflict`: A recording with cues follows the edition. Remove its cues or its follow first; see [recordings-api.md](recordings-api.md#follow-an-edition).
 - `401 Unauthorized`: Missing or invalid API key in deployed environments.
 
 ## List Editions for a Text
@@ -552,10 +554,9 @@ DELETE /v2/editions/{edition_id}/footnotes
 
 ```http
 GET /v2/editions/{edition_id}/recordings
-POST /v2/editions/{edition_id}/recordings
 ```
 
-Audio readings of the edition, each crediting its narrator through the same `contributions` shape used by texts. Recordings are not annotations: they carry no spans, and creation is a `multipart/form-data` upload rather than a JSON body. An edition can have any number of them. See [recordings-api.md](recordings-api.md).
+Returns the recordings that follow the edition: the audio files whose cues point into its content, used for follow-along playback. Recordings are created under an audio with `POST /v2/audios/{audio_id}/recordings`, not under an edition. See [recordings-api.md](recordings-api.md) and [audios-api.md](audios-api.md).
 
 ## Related Editions
 

@@ -208,12 +208,19 @@ class TextDatabase:
     RETURN w.id AS work_id
     """
 
+    LOCK_WITH_WORK_QUERY: LiteralString = """
+    MATCH (e:Text {id: $id})-[:TEXT_OF]->(w:Work)
+    CALL apoc.lock.nodes([w, e])
+    FINISH
+    """
+
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (e:Text {id: $text_id})-[:TEXT_OF]->(w:Work)
     RETURN w.id AS work_id,
            count { (e)<-[:EDITION_OF]-(:Edition) } AS edition_count,
            count { (e)<-[:TRANSLATION_OF]-(:Text) } AS translation_count,
-           count { (e)<-[:COMMENTARY_OF]-(:Text) } AS commentary_count
+           count { (e)<-[:COMMENTARY_OF]-(:Text) } AS commentary_count,
+           count { (e)<-[:RECITATION_OF]-(:Audio) } AS audio_count
     """
 
     DELETE_QUERY: LiteralString = """
@@ -325,6 +332,8 @@ class TextDatabase:
 
     async def delete(self, text_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
+            # Audio creation takes the same locks, so a new recitation cannot slip past this check.
+            await TextDatabase.lock_with_work(tx, text_id)
             result = await tx.run(TextDatabase.DELETE_CHECK_QUERY, text_id=text_id)
             record = await result.single()
             if record is None:
@@ -337,6 +346,8 @@ class TextDatabase:
                 blockers.append(f"{record['translation_count']} translation(s)")
             if record["commentary_count"]:
                 blockers.append(f"{record['commentary_count']} commentary/commentaries")
+            if record["audio_count"]:
+                blockers.append(f"{record['audio_count']} audio(s)")
             if blockers:
                 raise DataConflictError(f"Text '{text_id}' cannot be deleted because it has {', '.join(blockers)}")
 
@@ -395,17 +406,13 @@ class TextDatabase:
         return created_text_id
 
     @staticmethod
+    async def lock_with_work(tx: AsyncManagedTransaction, text_id: str) -> None:
+        """Lock a text and its Work, Work first, as every text mutation does."""
+        await (await tx.run(TextDatabase.LOCK_WITH_WORK_QUERY, id=text_id)).consume()
+
+    @staticmethod
     async def _get_for_update(tx: AsyncManagedTransaction, text_id: str) -> Record | None:
-        await (
-            await tx.run(
-                """
-            MATCH (e:Text {id: $id})-[:TEXT_OF]->(w:Work)
-            CALL apoc.lock.nodes([w, e])
-            FINISH
-        """,
-                id=text_id,
-            )
-        ).consume()
+        await TextDatabase.lock_with_work(tx, text_id)
         return await (await tx.run(TextDatabase.GET_QUERY, id=text_id, application=None)).single()
 
     @staticmethod

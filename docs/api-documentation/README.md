@@ -65,7 +65,7 @@ The running application exposes its complete route inventory at `GET /openapi.js
 |------|-------|
 | Texts and their relationships | [Texts](texts-api.md), [Relations](relations-api.md) |
 | Editions and annotations | [Editions](editions-api.md), [Annotations and alignments](annotations-api.md) |
-| Segments and recordings | [Segments](segments-api.md), [Recordings](recordings-api.md) |
+| Segments and audio | [Segments](segments-api.md), [Audios](audios-api.md), [Recordings](recordings-api.md) |
 | Search | [Content search](content-search-api.md), [Catalog search](catalog-search-api.md) |
 | People and languages | [Persons](persons-api.md), [Languages](languages-api.md) |
 | Application taxonomy | [Applications](applications-api.md), [Categories](categories-api.md), [Tags](tags-api.md) |

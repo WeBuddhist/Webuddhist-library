@@ -148,7 +148,7 @@ class SpanDatabase:
         RETURN elementId(span) AS span_id, span.start AS span_start, span.end AS span_end
         UNION ALL
         MATCH (m:Edition {id: $edition_id})
-            <-[:RECORDING_OF]-(:Recording)
+            <-[:FOLLOWS]-(:Recording)
             <-[:CUE_OF]-(entity:Cue)
             <-[:SPAN_OF]-(span:Span)
         RETURN elementId(span) AS span_id, span.start AS span_start, span.end AS span_end

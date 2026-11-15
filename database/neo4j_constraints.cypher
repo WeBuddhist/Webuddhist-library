@@ -44,6 +44,9 @@ CREATE CONSTRAINT bibliographic_id_unique IF NOT EXISTS FOR (b:BibliographicMeta
 // Attribute nodes - each attribute must have a unique ID
 CREATE CONSTRAINT attribute_id_unique IF NOT EXISTS FOR (a:Attribute) REQUIRE a.id IS UNIQUE;
 
+// Audio nodes - each audio must have a unique ID
+CREATE CONSTRAINT audio_id_unique IF NOT EXISTS FOR (a:Audio) REQUIRE a.id IS UNIQUE;
+
 // Recording nodes - each recording must have a unique ID
 CREATE CONSTRAINT recording_id_unique IF NOT EXISTS FOR (r:Recording) REQUIRE r.id IS UNIQUE;
 

@@ -14,6 +14,7 @@ from content_service import create_edition, create_recording, edit_content
 from database.content_state import read_at_revision
 from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from models.annotation import NoteInput
+from models.audio import AudioInput
 from models.recording import RecordingInput
 from tests.test_content_lifecycle import fixture, state, insert
 from tests.test_graph_scenarios import graph_edition, align
@@ -45,6 +46,8 @@ async def test_managed_transaction_replay_does_not_repeat_upload_or_change_ident
         from models.text import TextInput
 
         text = await db.text.create(TextInput(title={"en": "Replay edition"}, language="en", category_id="category"))
+    elif kind == "recording":
+        audio_id = await db.audio.create(text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
     with monkeypatch.context() as patch:
         patch.setattr(AsyncSession, "execute_write", replay_once)
         if kind == "edition":
@@ -54,8 +57,8 @@ async def test_managed_transaction_replay_does_not_repeat_upload_or_change_ident
             result = await create_recording(
                 db,
                 storage,
-                edition,
-                RecordingInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]),
+                audio_id,
+                RecordingInput(edition_id=edition),
                 audio,
             )
         else:
@@ -66,7 +69,7 @@ async def test_managed_transaction_replay_does_not_repeat_upload_or_change_ident
         assert [e.id for e in await db.edition.get_all(text)] == [result]
         assert (await state(db, result)).object_key == uploads.await_args.args[0]
     elif kind == "recording":
-        assert [r.id for r in await db.recording.get_all(edition)] == [result]
+        assert [r.id for r in await db.recording.get_all_by_audio(audio_id)] == [result]
         assert result in uploads.await_args.args[0]
     else:
         current = await state(db, edition)

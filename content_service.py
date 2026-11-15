@@ -73,16 +73,18 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
 
 
 async def create_recording(
-    db: Database, storage: Storage, edition_id: str, metadata: RecordingInput, audio: UploadFile
+    db: Database, storage: Storage, audio_id: str, metadata: RecordingInput, file: UploadFile
 ) -> str:
-    audio_format = AudioFormat.from_content_type(audio.content_type)
+    audio_format = AudioFormat.from_content_type(file.content_type)
     if audio_format is None:
-        raise DataValidationError(f"Unsupported audio content type '{audio.content_type}'")
-    size = audio.size
+        raise DataValidationError(f"Unsupported audio content type '{file.content_type}'")
+    size = file.size
     if not size:
         raise DataValidationError("Audio file is empty or its size is unavailable")
-    await audio.seek(0)
+    # Reject a missing Audio or a wrong edition before uploading, so a bad request leaves no object behind.
+    await db.recording.validate_target(audio_id, metadata.edition_id)
+    await file.seek(0)
     recording_id = generate_id()
-    key = f"recordings/{edition_id}/{recording_id}.{audio_format.value}"
-    await storage.put_immutable(key, audio.file, audio_format.content_type)
-    return await db.recording.add(edition_id, metadata, recording_id, audio_format, size)
+    key = f"objects/{recording_id}"
+    await storage.put_immutable(key, file.file, audio_format.content_type)
+    return await db.recording.add(audio_id, metadata, recording_id, key, audio_format, size)

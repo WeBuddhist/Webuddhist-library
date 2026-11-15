@@ -1,3 +1,4 @@
+import base64
 import logging
 from collections.abc import AsyncGenerator, Iterable
 
@@ -25,9 +26,10 @@ def create_search_client(
     """Create a transport owned and closed by the calling lifespan/context."""
     if not endpoint:
         raise InvalidRequestError("OPENSEARCH_ENDPOINT is required")
-    http_auth: tuple[str, str] | AWSV4SignerAsyncAuth | None = None
+    http_auth: AWSV4SignerAsyncAuth | None = None
+    headers = {}
     if auth_mode == "basic":
-        http_auth = (username, password)
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
     elif auth_mode == "aws":
         credentials = botocore.session.get_session().get_credentials()
         if credentials is None:
@@ -42,6 +44,7 @@ def create_search_client(
         verify_certs=True,
         connection_class=AsyncHttpConnection,
         http_auth=http_auth,
+        headers=headers,
         timeout=request_timeout,
         max_retries=max_retries,
         retry_on_timeout=True,
