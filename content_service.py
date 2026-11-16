@@ -87,4 +87,6 @@ async def create_recording(
     recording_id = generate_id()
     key = f"objects/{recording_id}"
     await storage.put_immutable(key, file.file, audio_format.content_type)
-    return await db.recording.add(audio_id, metadata, recording_id, key, audio_format, size)
+    return await db.recording.add(
+        audio_id, metadata, recording_id, audio_key=key, audio_format=audio_format, size_bytes=size
+    )

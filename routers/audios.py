@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Depends, File, Form, Path, UploadFile, status
 
 from content_service import create_recording
-from dependencies import get_api_key, get_db, get_storage
+from dependencies import get_db, get_storage
 from models.audio import AudioOutput, AudioPatch
 from models.recording import RecordingInput, RecordingOutput
 from models.responses import IdResponse
@@ -26,7 +26,6 @@ router = APIRouter(prefix="/v2/audios", tags=["Audios"])
 )
 async def get_audio(
     audio_id: Annotated[str, Path(description="The ID of the audio")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> AudioOutput:
     return await db.audio.get(audio_id)
@@ -41,7 +40,6 @@ async def get_audio(
 async def update_audio(
     audio_id: Annotated[str, Path(description="The ID of the audio")],
     data: AudioPatch,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> AudioOutput:
     logger.info("Updating audio %s with: %s", audio_id, data.model_dump_json())
@@ -56,7 +54,6 @@ async def update_audio(
 )
 async def delete_audio(
     audio_id: Annotated[str, Path(description="The ID of the audio")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.audio.delete(audio_id)
@@ -70,7 +67,6 @@ async def delete_audio(
 )
 async def get_recordings(
     audio_id: Annotated[str, Path(description="The ID of the audio")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[RecordingOutput]:
     return await db.recording.get_all_by_audio(audio_id)
@@ -86,7 +82,6 @@ async def post_recording(
     audio_id: Annotated[str, Path(description="The ID of the audio")],
     metadata: Annotated[str, Form(description="JSON-encoded recording metadata")],
     file: Annotated[UploadFile, File(description="Audio file")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> IdResponse:

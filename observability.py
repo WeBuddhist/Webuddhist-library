@@ -119,7 +119,7 @@ def _instrument_neo4j_driver() -> None:
     if _state["neo4j_patched"]:
         return
 
-    AsyncSession.run = _traced_session_run  # ty: ignore[invalid-assignment]
+    AsyncSession.run = _traced_session_run
     AsyncManagedTransaction.run = _traced_tx_run  # ty: ignore[invalid-assignment]
 
     AsyncSession.execute_read = _trace_transaction("read", AsyncSession.execute_read)  # ty: ignore[invalid-assignment]

@@ -188,7 +188,12 @@ async def test_failed_update_response_rolls_back_metadata(test_database, monkeyp
         audio_id = await db.audio.create(entity_id, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
         recording_id = generate_id()
         entity_id = await db.recording.add(
-            audio_id, RecordingInput(), recording_id, f"objects/{recording_id}", AudioFormat.MP3, 5,
+            audio_id,
+            RecordingInput(),
+            recording_id,
+            audio_key=f"objects/{recording_id}",
+            audio_format=AudioFormat.MP3,
+            size_bytes=5,
         )
     repository = getattr(db, kind)
     original = await repository.get(entity_id)

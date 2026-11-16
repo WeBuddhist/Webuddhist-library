@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 
 from content_search.service import MAX_QUERY_CHARS, ContentSearchService
 from database import Database
-from dependencies import get_api_key, get_content_search, get_db
+from dependencies import get_content_search, get_db
 from models.content_search import ContentSearchResult
 
 logger = logging.getLogger(__name__)
@@ -20,8 +20,8 @@ router = APIRouter(prefix="/v2/content-search", tags=["Content Search"])
 )
 async def search_content(
     query: Annotated[str, Query(description="Search query", min_length=1, max_length=MAX_QUERY_CHARS)],
+    *,
     db: Annotated[Database, Depends(get_db)],
-    _api_key: Annotated[str, Depends(get_api_key)],
     content_search: Annotated[ContentSearchService, Depends(get_content_search)],
     search_type: Annotated[Literal["exact", "similar"], Query(description="Type of content search")] = "exact",
     limit: Annotated[int, Query(ge=1, le=100, description="Maximum number of results")] = 10,

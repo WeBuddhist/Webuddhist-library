@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from database.content_state import read_at_revision
-from dependencies import OptionalAppHeader, get_api_key, get_db, get_storage
+from dependencies import OptionalAppHeader, get_db, get_storage
 from exceptions import DataNotFoundError
 from models.annotation import SegmentWithContextOutput
 from models.requests import DirectRelatedSegmentsQueryParams
@@ -30,7 +30,6 @@ router = APIRouter(prefix="/v2/segments", tags=["Segments"])
 async def get_related(
     segment_id: Annotated[str, Path(description="The ID of the segment")],
     params: Annotated[DirectRelatedSegmentsQueryParams, Query()],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: OptionalAppHeader = None,
 ) -> PaginatedResponse[SegmentWithContextOutput]:
@@ -58,7 +57,6 @@ async def get_related(
 )
 async def get_segment_content(
     segment_id: Annotated[str, Path(description="The ID of the segment")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     storage: Annotated[Storage, Depends(get_storage)],
     x_application: OptionalAppHeader = None,
@@ -95,7 +93,6 @@ async def get_segment_content(
 async def tag_segment(
     segment_id: Annotated[str, Path(description="The ID of the segment")],
     tag_id: Annotated[str, Path(description="The ID of the tag")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: OptionalAppHeader = None,
 ) -> None:
@@ -112,7 +109,6 @@ async def tag_segment(
 async def untag_segment(
     segment_id: Annotated[str, Path(description="The ID of the segment")],
     tag_id: Annotated[str, Path(description="The ID of the tag")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: OptionalAppHeader = None,
 ) -> None:
@@ -128,7 +124,6 @@ async def untag_segment(
 )
 async def get_segment(
     segment_id: Annotated[str, Path(description="The ID of the segment")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: OptionalAppHeader = None,
 ) -> SegmentWithContextOutput:

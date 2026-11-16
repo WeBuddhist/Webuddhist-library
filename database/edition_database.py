@@ -160,6 +160,7 @@ class EditionDatabase:
         edition_id: str,
         text_id: str,
         content_length: int,
+        *,
         text: TextInput | None = None,
         pagination: PaginationInput | None = None,
         segmentation: SegmentationInput | None = None,
@@ -170,7 +171,7 @@ class EditionDatabase:
                 await TextDatabase.create_with_transaction(tx, text, text_id)
 
             created_edition_id = await self.create_with_transaction(
-                tx, edition, text_id, edition_id, content_length, content_key
+                tx, edition, text_id, edition_id, content_length, content_key=content_key
             )
 
             if segmentation is not None:
@@ -215,6 +216,7 @@ class EditionDatabase:
         text_id: str,
         edition_id: str,
         content_length: int,
+        *,
         content_key: str | None = None,
     ) -> str:
         await lock_nodes(tx, "Text", [text_id])

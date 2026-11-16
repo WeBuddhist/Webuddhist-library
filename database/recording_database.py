@@ -356,6 +356,7 @@ class RecordingDatabase:
         audio_id: str,
         recording: RecordingInput,
         recording_id: str,
+        *,
         audio_key: str,
         audio_format: AudioFormat,
         size_bytes: int,
@@ -366,9 +367,9 @@ class RecordingDatabase:
                 audio_id,
                 recording,
                 recording_id,
-                audio_key,
-                audio_format,
-                size_bytes,
+                audio_key=audio_key,
+                audio_format=audio_format,
+                size_bytes=size_bytes,
             )
 
     @staticmethod
@@ -377,6 +378,7 @@ class RecordingDatabase:
         audio_id: str,
         recording: RecordingInput,
         recording_id: str,
+        *,
         audio_key: str,
         audio_format: AudioFormat,
         size_bytes: int,

@@ -27,6 +27,7 @@ def _required_rel_trigger(
     source_label: str,
     rel_type: str,
     target_label: str,
+    *,
     cardinality: str = "one",
 ) -> list[dict]:
     """Generate trigger + audit pairs for a required relationship.
@@ -229,7 +230,7 @@ for name, source, relationship, target, cardinality in [
 ]:
     TRIGGERS.extend(
         _required_rel_trigger(
-            name, f"{source} requires {relationship}->{target}", source, relationship, target, cardinality
+            name, f"{source} requires {relationship}->{target}", source, relationship, target, cardinality=cardinality
         )
     )
 
@@ -1079,10 +1080,11 @@ _CHANGED_NODES = """($createdNodes
     + reduce(nodes = [], label IN keys($removedLabels) | nodes + $removedLabels[label]
         + reduce(neighbors = [], node IN [n IN $removedLabels[label] WHERE NOT n IN $deletedNodes] |
             neighbors + [(node)--(neighbor) | neighbor]))
-    + reduce(nodes = [], rel IN $createdRelationships + $deletedRelationships |
-        nodes + [startNode(rel), endNode(rel)]))"""
-_CHANGED_NODES = f"[node IN {_CHANGED_NODES} WHERE NOT node IN $deletedNodes]"
-_CHANGED_RELATIONSHIPS = f"[rel IN {_CHANGED_RELATIONSHIPS} WHERE NOT rel IN $deletedRelationships]"
+    + [rel IN $createdRelationships + $deletedRelationships | startNode(rel)]
+    + [rel IN $createdRelationships + $deletedRelationships | endNode(rel)])"""
+# Hash-set subtraction also dedupes; list concatenation in reduce and `IN` filters are quadratic on large changes.
+_CHANGED_NODES = f"apoc.coll.subtract({_CHANGED_NODES}, $deletedNodes)"
+_CHANGED_RELATIONSHIPS = f"apoc.coll.subtract({_CHANGED_RELATIONSHIPS}, $deletedRelationships)"
 for trigger in TRIGGERS:
     trigger["query"] = (
         trigger["query"]

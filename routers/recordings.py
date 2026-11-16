@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Body, Depends, Path, status
 from fastapi.responses import RedirectResponse
 
-from dependencies import get_api_key, get_db, get_storage
+from dependencies import get_db, get_storage
 from models.recording import RecordingCue, RecordingCues, RecordingOutput, RecordingPatch
 
 if TYPE_CHECKING:
@@ -24,7 +24,6 @@ router = APIRouter(prefix="/v2/recordings", tags=["Recordings"])
 )
 async def get_recording(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> RecordingOutput:
     """Fetch a recording by ID."""
@@ -40,7 +39,6 @@ async def get_recording(
 )
 async def get_recording_audio(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> RedirectResponse:
@@ -57,7 +55,6 @@ async def get_recording_audio(
 )
 async def get_recording_cues(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[RecordingCue]:
     return await db.recording.get_cues(recording_id)
@@ -72,7 +69,6 @@ async def get_recording_cues(
 async def replace_recording_cues(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
     data: Annotated[RecordingCues, Body(min_length=1)],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     logger.info("Replacing %d cues for recording %s", len(data), recording_id)
@@ -87,7 +83,6 @@ async def replace_recording_cues(
 )
 async def delete_recording_cues(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.recording.delete_cues(recording_id)
@@ -105,7 +100,6 @@ async def delete_recording_cues(
 async def set_recording_edition(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
     edition_id: Annotated[str, Path(description="The ID of the edition to follow")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.recording.set_follows(recording_id, edition_id)
@@ -119,7 +113,6 @@ async def set_recording_edition(
 )
 async def delete_recording_edition(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.recording.remove_follows(recording_id)
@@ -134,7 +127,6 @@ async def delete_recording_edition(
 async def update_recording(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
     data: RecordingPatch,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> RecordingOutput:
     """Update a recording's metadata. The audio file itself is replaced by deleting and re-uploading."""
@@ -150,7 +142,6 @@ async def update_recording(
 )
 async def delete_recording(
     recording_id: Annotated[str, Path(description="The ID of the recording")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     """Delete a recording."""

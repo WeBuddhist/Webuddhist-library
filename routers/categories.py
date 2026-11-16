@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
-from dependencies import RequiredAppHeader, get_api_key, get_db
+from dependencies import RequiredAppHeader, get_db
 from exceptions import DataNotFoundError
 from models.category import CategoryInput, CategoryOutput, CategoryPatch
 from models.responses import IdResponse
@@ -22,7 +22,6 @@ router = APIRouter(prefix="/v2/categories", tags=["Categories"])
     description="Retrieve categories for an application.",
 )
 async def get_categories(
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
     parent_id: Annotated[str | None, Query(description="Filter by parent category ID")] = None,
@@ -41,7 +40,6 @@ async def get_categories(
 )
 async def get_category_by_id(
     category_id: str,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
 ) -> CategoryOutput:
@@ -64,7 +62,6 @@ async def get_category_by_id(
 )
 async def create_category(
     data: CategoryInput,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
 ) -> IdResponse:
@@ -87,7 +84,6 @@ async def create_category(
 async def update_category(
     category_id: Annotated[str, Path(description="The ID of the category")],
     data: CategoryPatch,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
 ) -> CategoryOutput:
@@ -107,7 +103,6 @@ async def update_category(
 )
 async def delete_category(
     category_id: Annotated[str, Path(description="The ID of the category")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
 ) -> None:

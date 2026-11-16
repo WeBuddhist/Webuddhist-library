@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, Path, status
 
-from dependencies import get_api_key, get_db
+from dependencies import get_db
 from models.requests import LanguageCreateRequest
 from models.responses import LanguageResponse
 
@@ -21,7 +21,6 @@ router = APIRouter(prefix="/v2/languages", tags=["Languages"])
     description="Retrieve all available languages.",
 )
 async def get_all_languages(
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[LanguageResponse]:
     """List all available languages."""
@@ -36,7 +35,6 @@ async def get_all_languages(
 )
 async def create_language(
     data: LanguageCreateRequest,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> LanguageResponse:
     """Create a new language."""
@@ -52,7 +50,6 @@ async def create_language(
 )
 async def delete_language(
     code: Annotated[str, Path(description="The language code")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     """Delete an unused language."""

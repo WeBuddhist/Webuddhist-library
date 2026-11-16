@@ -612,7 +612,12 @@ class TestRecordingConsistency(RecordingHelpers):
 
         added, deleted = await asyncio.gather(
             test_database.recording.add(
-                audio_id, RecordingInput(), recording_id, f"objects/{recording_id}", AudioFormat.MP3, 5
+                audio_id,
+                RecordingInput(),
+                recording_id,
+                audio_key=f"objects/{recording_id}",
+                audio_format=AudioFormat.MP3,
+                size_bytes=5,
             ),
             test_database.audio.delete(audio_id),
             return_exceptions=True,

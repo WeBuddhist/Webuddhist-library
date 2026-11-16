@@ -35,7 +35,7 @@ OPENSEARCH_JAVA_OPTS = "-Xms256m -Xmx256m"
 OPENSEARCH_STARTUP_TIMEOUT_SECONDS = 240
 OPENSEARCH_TIBETAN_PLUGIN_ENV = "OPENSEARCH_TIBETAN_PLUGIN_ZIP"
 OPENSEARCH_BDRC_PLUGIN_ENV = "OPENSEARCH_BDRC_PLUGIN_ZIP"
-NEO4J_TRIGGER_REFRESH_SECONDS = 2
+NEO4J_TRIGGER_REFRESH_SECONDS = 0.5
 NEO4J_TEST_DATABASE = "openpecha-test"
 
 
@@ -100,7 +100,7 @@ def _neo4j_container(_docker_runtime):
         .with_env("NEO4J_initial_dbms_default__database", NEO4J_TEST_DATABASE)
         .with_env("NEO4J_PLUGINS", '["apoc"]')
         .with_env("NEO4J_apoc_trigger_enabled", "true")
-        .with_env("NEO4J_apoc_trigger_refresh", "1000")
+        .with_env("NEO4J_apoc_trigger_refresh", "100")
         .with_env("NEO4J_dbms_security_procedures_unrestricted", "apoc.*")
         .with_env("NEO4J_dbms_security_procedures_allowlist", "apoc.*")
         .with_env("NEO4J_internal_cypher_use__parameter__size", "false")

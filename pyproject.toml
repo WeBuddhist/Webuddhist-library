@@ -52,6 +52,7 @@ ignore = [
     "PLR0911", # Too many return statements
     "PLR0913",  # Too many arguments in function definition
     "PLR0915",  # Too many statements
+    "CPY001",  # Missing copyright notice
     "N999",  # Invalid module name (false positive from hyphenated repo name)
 ]
 

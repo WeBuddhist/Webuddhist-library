@@ -42,7 +42,7 @@ async def rebuild(
     await client.indices.create(index=names[content_alias], body=content_mapping())
     catalog = CatalogSearchService(client=client, index_name=names[catalog_alias])
     content = ContentSearchService(client=client, index_name=names[content_alias])
-    counts = await _populate(db, storage, catalog, content, catalog_alias, content_alias)
+    counts = await _populate(db, storage, catalog, content, catalog_alias=catalog_alias, content_alias=content_alias)
     for alias, index in names.items():
         await client.indices.refresh(index=index)
         actual = (await client.count(index=index))["count"]
@@ -64,6 +64,7 @@ async def _populate(
     storage: Storage,
     catalog: CatalogSearchService,
     content: ContentSearchService,
+    *,
     catalog_alias: str,
     content_alias: str,
 ) -> dict[str, int]:

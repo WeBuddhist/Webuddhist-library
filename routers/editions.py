@@ -2,11 +2,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request, status
+from fastapi import APIRouter, Body, Depends, Path, Query, status
 
 from content_service import edit_content
 from database.content_state import read_state
-from dependencies import get_api_key, get_db, get_storage
+from dependencies import get_db, get_storage
 from models.alignment import EditionAlignmentOutput
 from models.annotation import (
     BibliographicMetadataInput,
@@ -31,7 +31,7 @@ from models.enums import NoteType
 from models.recording import RecordingOutput
 from models.requests import AnnotationSegmentsPaginationParams
 from models.responses import IdResponse, PaginatedResponse, PresignedUrlResponse
-from search_updates import update_search
+from search_updates import SearchUpdatesDep
 
 if TYPE_CHECKING:
     from database import Database
@@ -51,7 +51,6 @@ CONTENT_URL_EXPIRATION_SECONDS = 3600
 )
 async def get_metadata(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> EditionOutput:
     """Fetch metadata for an edition."""
@@ -66,7 +65,6 @@ async def get_metadata(
 )
 async def get_content(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     storage: Annotated[Storage, Depends(get_storage)],
     span_start: Annotated[int | None, Query(description="Start position for text slice")] = None,
@@ -90,7 +88,6 @@ async def get_content(
 )
 async def get_content_url(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> PresignedUrlResponse:
@@ -113,7 +110,6 @@ async def get_content_url(
 )
 async def get_segmentation_annotation(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> SegmentationOutput:
     return await db.annotation.segmentation.get_by_edition(edition_id)
@@ -126,16 +122,14 @@ async def get_segmentation_annotation(
     description="Add the edition's segmentation.",
 )
 async def post_segmentation_annotation(
-    request: Request,
-    background_tasks: BackgroundTasks,
+    search: SearchUpdatesDep,
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: SegmentationInput,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> IdResponse:
     """Add a segmentation annotation to an edition."""
     annotation_id = await db.annotation.segmentation.add(edition_id, data)
-    background_tasks.add_task(update_search, request, "edition", edition_id)
+    search.schedule("edition", edition_id)
     return IdResponse(id=annotation_id)
 
 
@@ -148,7 +142,6 @@ async def post_segmentation_annotation(
 async def get_segmentation_segments(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     params: Annotated[AnnotationSegmentsPaginationParams, Query()],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> PaginatedResponse[SegmentOutput]:
     segments = await db.annotation.segmentation.get_segments_by_edition(
@@ -166,14 +159,12 @@ async def get_segmentation_segments(
     description="Delete the edition's segmentation.",
 )
 async def delete_segmentation_annotation(
-    request: Request,
-    background_tasks: BackgroundTasks,
+    search: SearchUpdatesDep,
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.annotation.segmentation.delete_by_edition(edition_id)
-    background_tasks.add_task(update_search, request, "edition", edition_id)
+    search.schedule("edition", edition_id)
 
 
 @router.get(
@@ -183,7 +174,6 @@ async def delete_segmentation_annotation(
 )
 async def get_alignment_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[EditionAlignmentOutput]:
     return await db.alignment.get_all_for_edition(edition_id)
@@ -196,7 +186,6 @@ async def get_alignment_annotations(
 )
 async def get_pagination_annotation(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> PaginationOutput | None:
     return await db.annotation.pagination.get_all(edition_id)
@@ -211,7 +200,6 @@ async def get_pagination_annotation(
 async def post_pagination_annotation(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: PaginationInput,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> IdResponse:
     """Add a pagination annotation to an edition."""
@@ -227,7 +215,6 @@ async def post_pagination_annotation(
 )
 async def get_table_of_contents_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[TableOfContentsOutput]:
     return await db.annotation.table_of_contents.get_all(edition_id)
@@ -242,7 +229,6 @@ async def get_table_of_contents_annotations(
 async def post_table_of_contents_annotation(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: TableOfContentsInput,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> IdResponse:
     annotation_id = await db.annotation.table_of_contents.add(edition_id, data)
@@ -256,7 +242,6 @@ async def post_table_of_contents_annotation(
 )
 async def get_bibliographic_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[BibliographicMetadataOutput]:
     return await db.annotation.bibliographic.get_all(edition_id)
@@ -271,7 +256,6 @@ async def get_bibliographic_annotations(
 async def post_bibliographic_annotation(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: BibliographicMetadataInput,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> IdResponse:
     annotation_id = await db.annotation.bibliographic.add(edition_id, data)
@@ -285,7 +269,6 @@ async def post_bibliographic_annotation(
 )
 async def get_durchen_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[NoteOutput]:
     return await db.annotation.note.get_all(edition_id, NoteType.DURCHEN)
@@ -300,7 +283,6 @@ async def get_durchen_annotations(
 async def post_durchen_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: Annotated[list[NoteInput], Body(min_length=1)],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[IdResponse]:
     annotation_ids = await db.annotation.note.add_durchens(edition_id, data)
@@ -314,7 +296,6 @@ async def post_durchen_annotations(
 )
 async def get_footnote_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[FootnoteOutput]:
     notes = await db.annotation.note.get_all(edition_id, NoteType.FOOTNOTE)
@@ -334,7 +315,6 @@ async def get_footnote_annotations(
 async def post_footnote_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: Annotated[list[FootnoteInput], Body(min_length=1)],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[IdResponse]:
     annotation_ids = await db.annotation.note.add_footnotes(edition_id, data)
@@ -349,7 +329,6 @@ async def post_footnote_annotations(
 )
 async def delete_footnote_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.annotation.note.delete_all_footnotes(edition_id)
@@ -362,7 +341,6 @@ async def delete_footnote_annotations(
 )
 async def get_yigchung_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[MarkOutput]:
     return await db.annotation.mark.get_all(edition_id)
@@ -377,7 +355,6 @@ async def get_yigchung_annotations(
 async def post_yigchung_annotations(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: Annotated[list[MarkInput], Body(min_length=1)],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[IdResponse]:
     annotation_ids = await db.annotation.mark.add_yigchungs(edition_id, data)
@@ -392,7 +369,6 @@ async def post_yigchung_annotations(
 )
 async def get_recordings(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[RecordingOutput]:
     return await db.recording.get_all_by_edition(edition_id)
@@ -405,7 +381,6 @@ async def get_recordings(
 )
 async def get_related_editions(
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> list[EditionOutput]:
     logger.info("Finding related editions for edition ID: %s", edition_id)
@@ -422,15 +397,13 @@ async def get_related_editions(
     ),
 )
 async def delete_edition(
-    request: Request,
-    background_tasks: BackgroundTasks,
+    search: SearchUpdatesDep,
     edition_id: Annotated[str, Path(description="The ID of the edition")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     logger.info("Deleting edition with edition ID: %s", edition_id)
     await db.edition.delete(edition_id)
-    background_tasks.add_task(update_search, request, "edition", edition_id)
+    search.schedule("edition", edition_id)
 
 
 @router.patch(
@@ -440,13 +413,11 @@ async def delete_edition(
     description="Apply a text operation (INSERT, DELETE, or REPLACE) to the edition's content.",
 )
 async def patch_content(
-    request: Request,
-    background_tasks: BackgroundTasks,
+    search: SearchUpdatesDep,
     edition_id: Annotated[str, Path(description="The ID of the edition")],
     data: ContentOperation,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> None:
     await edit_content(db, storage, edition_id, data)
-    background_tasks.add_task(update_search, request, "edition", edition_id)
+    search.schedule("edition", edition_id)

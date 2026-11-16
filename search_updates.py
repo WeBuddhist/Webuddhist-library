@@ -1,14 +1,28 @@
 """Optional updates after an HTTP mutation. Failures are logged; manual reindexing repairs misses."""
 
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import Request
+from fastapi import BackgroundTasks, Depends, Request
 
 logger = logging.getLogger(__name__)
 
+type SearchKind = Literal["person", "text", "work", "edition"]
 
-async def update_search(request: Request, kind: Literal["person", "text", "work", "edition"], entity_id: str) -> None:
+
+class SearchUpdates:
+    def __init__(self, request: Request, background_tasks: BackgroundTasks) -> None:
+        self._request = request
+        self._background_tasks = background_tasks
+
+    def schedule(self, kind: SearchKind, entity_id: str) -> None:
+        self._background_tasks.add_task(update_search, self._request, kind, entity_id)
+
+
+SearchUpdatesDep = Annotated[SearchUpdates, Depends()]
+
+
+async def update_search(request: Request, kind: SearchKind, entity_id: str) -> None:
     state = request.app.state
     try:
         if kind == "edition":

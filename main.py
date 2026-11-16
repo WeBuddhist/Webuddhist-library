@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from neo4j.exceptions import ClientError as Neo4jClientError
@@ -15,6 +15,7 @@ from catalog_search import CatalogSearchService
 from config import settings
 from content_search import ContentSearchService
 from database import Database
+from dependencies import get_api_key
 from exceptions import InvalidRequestError, OpenPechaError
 from observability import setup_telemetry
 from routers.alignments import router as alignments_router
@@ -176,7 +177,7 @@ def create_app(*, testing: bool = False) -> FastAPI:
     @app.exception_handler(Exception)
     async def general_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
         """Handle all other exceptions."""
-        logger.exception("Exception occurred: %s - %s", type(exc).__name__, str(exc))
+        logger.error("Exception occurred: %s - %s", type(exc).__name__, str(exc), exc_info=exc)
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
     @app.middleware("http")
@@ -199,24 +200,27 @@ def create_app(*, testing: bool = False) -> FastAPI:
         """Health check endpoint."""
         return {"status": "healthy"}
 
-    app.include_router(texts_router)
-    app.include_router(editions_router)
-    app.include_router(persons_router)
-    app.include_router(categories_router)
-    app.include_router(tags_router)
-    app.include_router(languages_router)
-    app.include_router(alignments_router)
-    app.include_router(paginations_router)
-    app.include_router(table_of_contents_router)
-    app.include_router(bibliographic_router)
-    app.include_router(durchens_router)
-    app.include_router(footnotes_router)
-    app.include_router(yigchungs_router)
-    app.include_router(applications_router)
-    app.include_router(content_search_router)
-    app.include_router(segments_router)
-    app.include_router(audios_router)
-    app.include_router(recordings_router)
+    for router in (
+        texts_router,
+        editions_router,
+        persons_router,
+        categories_router,
+        tags_router,
+        languages_router,
+        alignments_router,
+        paginations_router,
+        table_of_contents_router,
+        bibliographic_router,
+        durchens_router,
+        footnotes_router,
+        yigchungs_router,
+        applications_router,
+        content_search_router,
+        segments_router,
+        audios_router,
+        recordings_router,
+    ):
+        app.include_router(router, dependencies=[Depends(get_api_key)])
 
     return app
 

@@ -130,6 +130,7 @@ class SegmentDatabase:
         self,
         edition_id: str,
         spans: list[tuple[int, int]],
+        *,
         application: str | None = None,
         max_depth: int = 5,
         offset: int = 0,
@@ -233,6 +234,7 @@ class SegmentDatabase:
     async def _resolve_segment_page(
         self,
         tx: AsyncManagedTransaction,
+        *,
         segment_ids: list[str],
         application: str | None,
         offset: int,

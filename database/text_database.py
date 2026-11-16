@@ -395,7 +395,9 @@ class TextDatabase:
         work_id = str(record["work_id"])
 
         if text.category_id is not None:
-            await TextDatabase._set_category(tx, work_id, None, text.category_id, application, None)
+            await TextDatabase._set_category(
+                tx, work_id, None, text.category_id, application=application, expected=None
+            )
 
         for contribution in text.contributions:
             await ContributionDatabase.create_with_transaction(tx, TEXT_LABEL, created_text_id, contribution)
@@ -466,8 +468,8 @@ class TextDatabase:
                     record["work_id"],
                     record["text"]["category_id"],
                     patch.category_id,
-                    application,
-                    patch.expected_category_id,
+                    application=application,
+                    expected=patch.expected_category_id,
                 )
 
             if patch.contributions is not None:
@@ -494,6 +496,7 @@ class TextDatabase:
         work_id: str,
         current: str | None,
         category_id: str,
+        *,
         application: str | None,
         expected: str | None,
     ) -> None:

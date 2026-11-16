@@ -454,9 +454,9 @@ async def test_recording_create_strictly_returns_neo4j_id(monkeypatch):
         "audio-id",
         recording,
         "submitted-recording-id",
-        "objects/submitted-recording-id",
-        AudioFormat.MP3,
-        10,
+        audio_key="objects/submitted-recording-id",
+        audio_format=AudioFormat.MP3,
+        size_bytes=10,
     )
 
     assert_strict_neo4j_id(create_result, returned_id, "recording_id")

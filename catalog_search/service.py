@@ -56,7 +56,12 @@ class CatalogSearchService:
         self, *, db: Database, query: str, filters: PersonFilter, offset: int, limit: int
     ) -> list[PersonOutput]:
         return await self._search(
-            query, PERSON_DOCUMENT_TYPE, _person_filters(filters), offset, limit, db.person.get_by_ids
+            query,
+            PERSON_DOCUMENT_TYPE,
+            _person_filters(filters),
+            offset=offset,
+            limit=limit,
+            hydrate=db.person.get_by_ids,
         )
 
     async def search_texts(
@@ -78,9 +83,9 @@ class CatalogSearchService:
             query,
             TEXT_DOCUMENT_TYPE,
             _text_filters(filters),
-            offset,
-            limit,
-            lambda ids: db.text.get_by_ids(ids, application=application),
+            offset=offset,
+            limit=limit,
+            hydrate=lambda ids: db.text.get_by_ids(ids, application=application),
         )
 
     async def _search[T: (PersonOutput, TextOutput)](
@@ -88,6 +93,7 @@ class CatalogSearchService:
         query: str,
         kind: str,
         filters: list[dict],
+        *,
         offset: int,
         limit: int,
         hydrate: Callable[[list[str]], Awaitable[list[T]]],
