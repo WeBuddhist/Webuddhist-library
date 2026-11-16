@@ -12,6 +12,7 @@ This document provides comprehensive documentation for all Categories-related en
    - [List Categories](#list-categories)
    - [Get Category by ID](#get-category-by-id)
    - [Create New Category](#create-new-category)
+   - [Update Category Localizations](#update-category-localizations)
 ---
 
 ## Overview
@@ -290,6 +291,90 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/categories" \
     }
   }'
 ```
+
+---
+
+### Update Category Localizations
+
+Add or replace title and description localizations of a category. Languages sent are added or replaced; languages not sent are kept.
+
+**Endpoint:**
+```
+PATCH /v2/categories/{category_id}
+```
+
+**Headers:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `X-API-Key` | string | Yes | API authentication key |
+| `X-Application` | string | Yes | Application context for the category |
+
+**Request Body:**
+
+```json
+{
+  "title": {
+    "mn": "Уран зохиол"
+  },
+  "description": {
+    "mn": "Уран зохиолын бүтээлүүд"
+  }
+}
+```
+
+**Optional Fields (at least one is required):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | object | Title localizations to add or replace (language code → text mapping) |
+| `description` | object | Description localizations to add or replace (language code → text mapping) |
+
+**Response: 200 OK**
+
+Returns the updated category with all of its localizations.
+
+```json
+{
+  "id": "CAT12345678",
+  "title": {
+    "en": "Literature",
+    "bo": "རྩོམ་རིག",
+    "mn": "Уран зохиол"
+  },
+  "description": {
+    "mn": "Уран зохиолын бүтээлүүд"
+  },
+  "parent_id": null,
+  "children": []
+}
+```
+
+**Error Responses:**
+- `400 Bad Request`: The base language of a language code (the part before the first `-`, e.g. `en` for `en-US`) is not listed in `/v2/languages`. Region and script tags are not checked, so `en-US` is accepted when `en` is listed.
+- `401 Unauthorized`: Missing or invalid API key in deployed environments
+- `404 Not Found`: Application or category does not exist in the requested application
+- `422 Validation Error`: Missing `X-Application` header, empty or `null` body fields, or a title that duplicates a sibling category's title in the same language
+
+**Example Usage:**
+
+```bash
+curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/categories/CAT12345678" \
+  -H "X-API-Key: your_api_key" \
+  -H "X-Application: webuddhist" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": {
+      "mn": "Уран зохиол"
+    }
+  }'
+```
+
+**Update Behavior:**
+- Localizations are merged per language: languages in the request overwrite existing ones, other languages are left unchanged.
+- Language codes are matched case-insensitively. Sending `en-us` replaces an existing `en-US` entry, and the stored code takes the spelling from the request.
+- Localizations cannot be removed through this endpoint.
+- `parent_id` cannot be changed through this endpoint.
 
 ---
 
