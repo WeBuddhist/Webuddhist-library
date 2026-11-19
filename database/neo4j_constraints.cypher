@@ -44,6 +44,9 @@ CREATE CONSTRAINT bibliographic_id_unique IF NOT EXISTS FOR (b:BibliographicMeta
 // Attribute nodes - each attribute must have a unique ID
 CREATE CONSTRAINT attribute_id_unique IF NOT EXISTS FOR (a:Attribute) REQUIRE a.id IS UNIQUE;
 
+// Audio nodes - each audio must have a unique ID
+CREATE CONSTRAINT audio_id_unique IF NOT EXISTS FOR (a:Audio) REQUIRE a.id IS UNIQUE;
+
 // Recording nodes - each recording must have a unique ID
 CREATE CONSTRAINT recording_id_unique IF NOT EXISTS FOR (r:Recording) REQUIRE r.id IS UNIQUE;
 
@@ -115,3 +118,10 @@ CREATE CONSTRAINT api_key_id_unique IF NOT EXISTS FOR (ak:ApiKey) REQUIRE ak.id 
 
 // ApiKey hash must be unique (used for validation on every API request)
 CREATE CONSTRAINT api_key_hash_unique IF NOT EXISTS FOR (ak:ApiKey) REQUIRE ak.api_key_hash IS UNIQUE;
+CREATE CONSTRAINT ai_id_unique IF NOT EXISTS FOR (n:AI) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT volume_id_unique IF NOT EXISTS FOR (n:Volume) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT page_id_unique IF NOT EXISTS FOR (n:Page) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT bibliography_type_name_unique IF NOT EXISTS FOR (n:BibliographyType) REQUIRE n.name IS UNIQUE;
+CREATE CONSTRAINT note_type_name_unique IF NOT EXISTS FOR (n:NoteType) REQUIRE n.name IS UNIQUE;
+CREATE CONSTRAINT attribute_type_name_unique IF NOT EXISTS FOR (n:AttributeType) REQUIRE n.name IS UNIQUE;
+CREATE INDEX localized_text_text IF NOT EXISTS FOR (n:LocalizedText) ON (n.text);

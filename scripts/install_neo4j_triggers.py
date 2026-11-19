@@ -4,9 +4,7 @@ Usage:
     python -m scripts.install_neo4j_triggers
 
 Requires environment variables (via .env or shell):
-    NEO4J_URI       — bolt://... or neo4j+s://...
-    NEO4J_USERNAME  — default: neo4j
-    NEO4J_PASSWORD
+    NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE (default: neo4j)
 """
 
 import asyncio
@@ -22,20 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    uri = settings.neo4j_uri
-    username = settings.neo4j_username
-    password = settings.neo4j_password
-
-    if not uri or not password:
+    if not settings.neo4j_uri or not settings.neo4j_password:
         logger.error("NEO4J_URI and NEO4J_PASSWORD must be set (via .env or environment)")
         sys.exit(1)
 
-    driver = AsyncGraphDatabase.driver(uri, auth=(username, password))
+    driver = AsyncGraphDatabase.driver(settings.neo4j_uri, auth=(settings.neo4j_username, settings.neo4j_password))
     try:
         await driver.verify_connectivity()
-        logger.info("Connected to %s", uri)
+        logger.info("Connected to %s", settings.neo4j_uri)
 
-        await install_triggers(driver)
+        await install_triggers(driver, settings.neo4j_database)
         logger.info("Neo4j triggers installed successfully.")
     finally:
         await driver.close()

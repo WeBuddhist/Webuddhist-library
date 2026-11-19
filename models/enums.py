@@ -9,6 +9,12 @@ class ContributorRole(StrEnum):
     AUTHOR = "author"
     SCHOLAR = "scholar"
     NARRATOR = "narrator"
+    SINGER = "singer"
+    MUSICIAN = "musician"
+
+
+# Roles that credit the people or AI performing an Audio.
+AUDIO_ROLES = (ContributorRole.NARRATOR, ContributorRole.SINGER, ContributorRole.MUSICIAN)
 
 
 class AudioFormat(StrEnum):
@@ -49,6 +55,7 @@ class EditionType(StrEnum):
     DIPLOMATIC = "diplomatic"
     CRITICAL = "critical"
     COLLATED = "collated"
+    EXCERPT = "excerpt"
 
 
 class LicenseType(StrEnum):
@@ -67,6 +74,7 @@ class LicenseType(StrEnum):
 
 class NoteType(StrEnum):
     DURCHEN = "durchen"
+    FOOTNOTE = "footnote"
 
 
 class MarkType(StrEnum):

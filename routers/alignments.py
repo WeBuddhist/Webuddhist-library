@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
-from dependencies import OptionalAppHeader, get_api_key, get_db
+from dependencies import OptionalAppHeader, get_db
 from models.alignment import EditionAlignmentInput, EditionAlignmentPairOutput
 from models.requests import AlignmentPaginationParams
 from models.responses import PaginatedResponse
@@ -26,7 +26,6 @@ async def replace_edition_pair_alignments(
     source_edition_id: Annotated[str, Path(description="The source edition ID")],
     target_edition_id: Annotated[str, Path(description="The target edition ID")],
     data: EditionAlignmentInput,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.alignment.replace(source_edition_id, target_edition_id, data)
@@ -42,7 +41,6 @@ async def get_edition_pair_alignments(
     source_edition_id: Annotated[str, Path(description="The source edition ID")],
     target_edition_id: Annotated[str, Path(description="The target edition ID")],
     params: Annotated[AlignmentPaginationParams, Query()],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: OptionalAppHeader = None,
 ) -> PaginatedResponse[EditionAlignmentPairOutput]:
@@ -65,7 +63,6 @@ async def get_edition_pair_alignments(
 async def delete_edition_pair_alignments(
     source_edition_id: Annotated[str, Path(description="The source edition ID")],
     target_edition_id: Annotated[str, Path(description="The target edition ID")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.alignment.delete(source_edition_id, target_edition_id)

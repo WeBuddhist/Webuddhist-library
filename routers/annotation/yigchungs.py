@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, Path, status
 
-from dependencies import get_api_key, get_db
+from dependencies import get_db
 from models.annotation import MarkOutput
 
 if TYPE_CHECKING:
@@ -18,7 +18,6 @@ router = APIRouter(prefix="/v2/yigchungs", tags=["Annotations"])
 )
 async def get_yigchung(
     yigchung_id: Annotated[str, Path(description="The ID of the yigchung annotation")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> MarkOutput:
     return await db.annotation.mark.get(yigchung_id)
@@ -32,7 +31,6 @@ async def get_yigchung(
 )
 async def delete_yigchung(
     yigchung_id: Annotated[str, Path(description="The ID of the yigchung annotation")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
 ) -> None:
     await db.annotation.mark.delete(yigchung_id)

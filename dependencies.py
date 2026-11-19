@@ -1,14 +1,14 @@
 import logging
 from typing import Annotated
 
-from fastapi import Header, Request, Security
+from fastapi import Depends, Header, Request, Security
 from fastapi.security import APIKeyHeader
 
 from catalog_search import CatalogSearchService
 from config import settings
 from content_search import ContentSearchService
 from database import Database
-from exceptions import UnauthorizedError
+from exceptions import ForbiddenError, ServiceUnavailableError, UnauthorizedError
 from storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,24 @@ APPLICATION_HEADER = "X-Application"
 
 api_key_header = APIKeyHeader(name=API_KEY_HEADER, auto_error=False)
 
-OptionalAppHeader = Annotated[str | None, Header(alias="X-Application")]
 RequiredAppHeader = Annotated[str, Header(alias="X-Application")]
+
+
+def get_optional_application(
+    request: Request,
+    x_application: Annotated[str | None, Header(alias="X-Application")] = None,
+) -> str | None:
+    """The X-Application header, or a bound key's own application when the header is left out.
+
+    Runs after get_api_key (a router dependency), which has already rejected a header that
+    names a different application.
+    """
+    if x_application is not None:
+        return x_application
+    return getattr(request.state, "api_key_info", {}).get("bound_application_id")
+
+
+OptionalAppHeader = Annotated[str | None, Depends(get_optional_application)]
 
 
 def get_db(request: Request) -> Database:
@@ -34,12 +50,15 @@ def get_storage(request: Request) -> Storage:
 
 def get_content_search(request: Request) -> ContentSearchService:
     """Dependency that provides the content search service from app.state."""
-    return request.app.state.content_search
+    service = getattr(request.app.state, "content_search", None)
+    if service is None:
+        raise ServiceUnavailableError("Content search is unavailable")
+    return service
 
 
-def get_catalog_search(request: Request) -> CatalogSearchService:
+def get_catalog_search(request: Request) -> CatalogSearchService | None:
     """Dependency that provides the catalog search service from app.state."""
-    return request.app.state.catalog_search
+    return getattr(request.app.state, "catalog_search", None)
 
 
 async def get_api_key(
@@ -66,8 +85,8 @@ async def get_api_key(
 
     request.state.api_key_info = result
 
-    # A bound key already names its application, so a missing X-Application is
-    # accepted; only a different application is rejected.
+    # A bound key already names its application, so a missing X-Application is accepted
+    # (get_optional_application then scopes the request to it); a different one is rejected.
     bound_application_id = result.get("bound_application_id")
     if bound_application_id is not None:
         x_application = request.headers.get(APPLICATION_HEADER)
@@ -80,3 +99,9 @@ async def get_api_key(
             raise UnauthorizedError("API key not authorized for this application")
 
     return x_api_key
+
+
+def get_admin_key(request: Request, api_key: Annotated[str, Depends(get_api_key)]) -> str:
+    if getattr(request.state, "api_key_info", {}).get("bound_application_id") is not None:
+        raise ForbiddenError("Application administration requires an unbound API key")
+    return api_key

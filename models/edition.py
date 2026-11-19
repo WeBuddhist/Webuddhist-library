@@ -1,9 +1,26 @@
+from itertools import pairwise
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
+from .annotation import Span
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, _dedupe
 from .enums import EditionType
+
+
+class ExcerptSource(OpenPechaModel):
+    """Spans of one edition, in that edition's positions, joined in order to make up an excerpt edition."""
+
+    edition_id: NonEmptyStr
+    spans: list[Span] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_spans(self) -> Self:
+        if any(span.start == span.end for span in self.spans):
+            raise ValueError("a span must cover at least one character")
+        if any(b.start < a.end for a, b in pairwise(sorted(self.spans, key=lambda span: span.start))):
+            raise ValueError("spans must not overlap")
+        return self
 
 
 class EditionBase(OpenPechaModel):
@@ -39,3 +56,4 @@ class EditionInput(EditionBase):
 class EditionOutput(EditionBase):
     id: NonEmptyStr
     text_id: NonEmptyStr
+    excerpt_of: ExcerptSource | None = None

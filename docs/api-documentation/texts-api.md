@@ -10,13 +10,14 @@ This document provides comprehensive documentation for all Texts-related endpoin
 2. [Authentication](#authentication)
 3. [Text Endpoints](#text-endpoints)
   - [List All Texts](#list-all-texts)
+  - [List Text Languages](#list-text-languages)
   - [Get Text by ID](#get-text-by-id)
   - [Create New Text](#create-new-text)
   - [Update Text](#update-text)
 
 ## Overview
 
-Texts (also known as Expressions in FRBR terminology) represent the intellectual content of a work independent of any specific physical edition. A text can have multiple editions (editions), translations, and commentaries.
+Texts (also known as Expressions in FRBR terminology) represent the intellectual content of a work independent of any specific physical edition. A text can have multiple editions, translations, and commentaries.
 
 ### Key Concepts
 
@@ -33,7 +34,7 @@ Texts (also known as Expressions in FRBR terminology) represent the intellectual
 Development: https://api-l25bgmwqoa-uc.a.run.app
 Production: https://api-aq25662yyq-uc.a.run.app
 Test: https://api-kwgjscy6gq-uc.a.run.app
-Local: http://127.0.0.1:5001/pecha-backend-test-3a4d0/us-central1/api
+Local: http://127.0.0.1:8000
 ```
 
 ---
@@ -74,8 +75,7 @@ GET /v2/texts
 | `language`    | string  | query    | No       | -       | Filter by language code                                                                                |
 | `title`       | string  | query    | No       | -       | Search by title via catalog search: lenient, script-aware matching (diacritic-insensitive, Sanskrit and Tibetan phonetic) across both primary and alternative titles; minimum 2 characters. See [Catalog Search API](./catalog-search-api.md). |
 | `category_id` | string  | query    | No       | -       | Filter by category ID                                                                                  |
-| `tag_id`      | string  | query    | No       | -       | Comma-separated application tag IDs |
-| `tag_id_match` | string | query    | No       | `all`   | Tag matching mode: `all` requires every listed tag; `any` requires at least one |
+| `tag_id`      | string  | query    | No       | -       | Repeatable tag filter: repeated parameters are ANDed, comma-separated IDs within one are ORed, e.g. `tag_id=TAG123,TAG456&tag_id=TAG789`. See [Filter Texts by Tag](./tags-api.md#filter-texts-by-tag) |
 | `author_id`   | string  | query    | No       | -       | Filter by contributing author person ID                                                                |
 | `bdrc`        | string  | query    | No       | -       | Filter by BDRC identifier                                                                              |
 | `wiki`        | string  | query    | No       | -       | Filter by Wikidata identifier                                                                          |
@@ -89,7 +89,7 @@ GET /v2/texts
     {
       "id": "ABC12345678",
       "title": {
-        "en": "Sample Expression",
+        "en": "Sample Text",
         "bo": "དཔེ་མཚོན་ཚིག་སྒྲུབ།"
       },
       "language": "bo",
@@ -111,7 +111,7 @@ GET /v2/texts
 **Error Responses:**
 
 - `401 Unauthorized`: Missing or invalid API key in deployed environments
-- `422 Validation Error`: Invalid `limit` or `offset`, or `title` shorter than 2 characters
+- `422 Validation Error`: Invalid `limit` or `offset`, `title` shorter than 2 characters, invalid `tag_id`, or an unsupported query parameter
 - `503 Service Unavailable`: `title` search was requested but catalog search is not configured
 - `500 Server Error`: Internal server error
 
@@ -151,15 +151,68 @@ curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
-# Filter by every listed tag (default matching mode)
+# Filter by every listed tag: TAG123 AND TAG456
+curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123&tag_id=TAG456" \
+  -H "X-API-Key: your_api_key" \
+  -H "X-Application: webuddhist"
+
+# Filter by any listed tag: TAG123 OR TAG456
 curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
-# Filter by any listed tag
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id_match=any" \
+# Combine: (TAG123 OR TAG456) AND TAG789
+curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id=TAG789" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
+```
+
+---
+
+### List Text Languages
+
+List the languages that texts matching the filters are available in, with a count per language. Use it to build a language picker that only offers languages with results, for example the languages of texts in one category.
+
+**Endpoint:**
+
+```
+GET /v2/texts/languages
+```
+
+**Parameters:**
+
+Accepts the [List All Texts](#list-all-texts) filters except `language`, `title`, `limit`, and `offset`: `category_id`, `tag_id`, `author_id`, `bdrc`, and `wiki`. The filters behave exactly as they do on `GET /v2/texts`; in particular, `category_id` matches only that category, not its subcategories.
+
+**Response: 200 OK**
+
+```json
+[
+  { "code": "bo", "name": "Tibetan", "text_count": 42 },
+  { "code": "en", "name": "English", "text_count": 3 }
+]
+```
+
+- Languages are ordered by `code` and only appear when at least one text matches.
+- `code` is the base language code: texts tagged `en-US` count under `en`. Passing a returned `code` as `language` to `GET /v2/texts` with the same filters returns `text_count` texts.
+- Translations share the category of the text they translate, so they are counted in that category.
+- No pagination; an unknown `category_id` returns `[]`.
+
+**Error Responses:**
+
+- `401 Unauthorized`: Missing or invalid API key in deployed environments
+- `422 Validation Error`: Unsupported query parameter (such as `language`) or invalid `tag_id`
+- `500 Server Error`: Internal server error
+
+**Example Usage:**
+
+```bash
+# Languages of texts in a category
+curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/languages?category_id=CAT12345678" \
+  -H "X-API-Key: your_api_key"
+
+# Then list the texts in one of those languages
+curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?category_id=CAT12345678&language=bo" \
+  -H "X-API-Key: your_api_key"
 ```
 
 ---
@@ -188,7 +241,7 @@ GET /v2/texts/{text_id}
 {
   "id": "T12345678",
   "title": {
-    "en": "Sample Expression",
+    "en": "Sample Text",
     "bo": "དཔེ་མཚོན་ཚིག་སྒྲུབ།"
   },
   "language": "bo",
@@ -203,6 +256,7 @@ GET /v2/texts/{text_id}
   "license": "public",
   "commentaries": ["C12345678"],
   "translations": ["TR12345678"],
+  "parts": ["PT12345678"],
   "editions": ["M12345678"]
 }
 ```
@@ -293,7 +347,7 @@ POST /v2/texts
 | --------------- | ------ | ---------------------------------------------- |
 | `title`         | object | Localized title (language code → text mapping) |
 | `language`      | string | Primary language code (e.g., "bo", "en")       |
-| `category_id`   | string | Category ID this text belongs to               |
+| `category_id`   | string | Required for original texts/commentaries; forbidden for translations |
 
 
 **Optional Fields:**
@@ -308,6 +362,7 @@ POST /v2/texts
 | `alt_titles`     | array  | Alternative localized titles                       |
 | `translation_of` | string | Text ID this is a translation of                   |
 | `commentary_of`  | string | Text ID this is a commentary of                    |
+| `part_of`        | string | Text ID of the larger text this text is a part of, such as one chapter of it |
 | `license`        | string | License type (see [License Types](#license-types)) |
 | `tag_ids`        | array  | Tag IDs to attach to the work behind this text |
 
@@ -315,6 +370,9 @@ POST /v2/texts
 
 - `title` must contain a localized title for the text language or its base language. For example, language `bo-x-ewts` can use a `bo` title.
 - A text cannot set both `translation_of` and `commentary_of`.
+- A part (`part_of`) is an original text with its own Work, category, tags and translations, so it cannot also set `translation_of` or `commentary_of`. Its content usually comes from an [excerpt edition](editions-api.md#excerpt-editions) of the whole text's edition. The whole text lists its parts in `parts`.
+- Translations inherit their Work category. Supplying `category_id`, including `null` or the inherited value, returns `422`.
+- Creation-time tags are added to the shared Work and must belong to the authorized application.
 - `contributions` may be omitted or empty when attribution is unknown. Each entry must include either `type` with `id` or `bdrc_id` depending on contribution type.
 - Extra fields are rejected.
 
@@ -369,7 +427,6 @@ To create a translation, include the `translation_of` field with the source text
     "en": "English Translation"
   },
   "language": "en",
-  "category_id": "CAT12345678",
   "translation_of": "ABC12345678",
   "contributions": [
     {
@@ -412,7 +469,6 @@ For AI-generated translations:
     "en": "AI English Translation"
   },
   "language": "en",
-  "category_id": "CAT12345678",
   "translation_of": "ABC12345678",
   "contributions": [
     {
@@ -471,7 +527,6 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts" \
       "en": "Heart Sutra - English Translation"
     },
     "language": "en",
-    "category_id": "CAT12345678",
     "translation_of": "T12345678",
     "contributions": [
       {
@@ -487,7 +542,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts" \
 
 ### Delete Text
 
-Delete a text when it has no editions and no incoming translation/commentary relationships.
+Delete a text when it has no editions, no audios, and no incoming translation/commentary relationships.
 
 **Endpoint:**
 
@@ -502,7 +557,7 @@ No response body is returned.
 **Error Responses:**
 
 - `404 Not Found`: Text does not exist
-- `409 Conflict`: Text has editions, translations, or commentaries pointing to it
+- `409 Conflict`: Text has editions, audios, translations, commentaries, or parts pointing to it
 - `401 Unauthorized`: Missing or invalid API key in deployed environments
 
 **Example Usage:**
@@ -515,6 +570,7 @@ curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
 **Delete Behavior:**
 - Deletes the `Text`, title/alternative-title `Nomen` and `LocalizedText` subgraphs, and contribution nodes attached to the text.
 - Blocks if any edition belongs to the text.
+- Blocks if any audio recites the text. Audios of a text are created and listed with `POST` and `GET /v2/texts/{text_id}/audios`; see [audios-api.md](audios-api.md).
 - Blocks if another text points to this text through `TRANSLATION_OF` or `COMMENTARY_OF`.
 - Deletes the underlying `Work` only when no other text still points to that work.
 - If the work is preserved because other texts still use it, existing `HAS_TAG` relationships on the work are preserved.
@@ -554,6 +610,7 @@ All fields are optional. Only include fields you want to update.
   "date": "1250",
   "language": "bo",
   "category_id": "CAT87654321",
+  "expected_category_id": "CAT12345678",
   "alt_titles": [
     {
       "en": "Alternative Title",
@@ -574,18 +631,19 @@ All fields are optional. Only include fields you want to update.
 | `title`         | object | Localized title (language code → text)        |
 | `alt_titles`    | array  | Alternative localized titles                  |
 | `language`      | string | Primary language code                         |
-| `category_id`   | string | Category ID                                   |
+| `category_id`   | string | New category for the shared Work and all its translations |
+| `expected_category_id` | string | Current category, required when changing it; stale or missing values return `409` |
 | `bdrc`          | string | BDRC identifier                               |
 | `wiki`          | string | Wikidata identifier                           |
 | `date`          | string | Date of composition                           |
 | `license`       | string | License type                                  |
 | `contributions` | array  | Replaces the text's current contributions     |
-| `tag_ids`       | array  | Replaces the text's current tag IDs           |
+| `tag_ids`       | array  | Replaces only the authorized application's Work tags; other applications' tags remain |
 
 
-**Note:** You cannot update `translation_of` or `commentary_of` via PATCH. These are set during creation. PATCH requires at least one field, rejects `null`, and rejects extra fields.
+**Note:** You cannot update `translation_of`, `commentary_of`, or `part_of` via PATCH. These are set during creation. PATCH requires at least one field, rejects `null`, and rejects extra fields.
 
-`contributions` and `tag_ids` replace the whole set rather than appending to it: send the full list you want the text to end up with, or `[]` to remove all of them.
+`contributions` replaces the text's whole contribution list. `tag_ids` replaces the Work tags within the authorized application scope, preserving tags owned by other applications; `[]` clears that scope. Category changes require ownership of both the existing and replacement category. Reassigning the same category is a no-op and does not require `expected_category_id`.
 
 **Response: 200 OK**
 

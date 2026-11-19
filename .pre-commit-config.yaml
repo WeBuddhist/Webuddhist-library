@@ -1,15 +1,15 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.8
+    rev: v0.17.5
     hooks:
-      - id: ruff
+      - id: ruff-check
         types: [python]
         args: ["--fix"]
       - id: ruff-format
         types: [python]
 
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.408
+    rev: v1.1.414
     hooks:
       - id: pyright
         types: [python]

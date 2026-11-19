@@ -4,8 +4,9 @@ from neo4j.exceptions import ConstraintError
 
 from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from identifier import generate_id
-from models.requests import TextFilter
-from models.text import TextInput, TextOutput, TextPatch
+from models.requests import TextFacetFilter, TextFilter
+from models.responses import TextLanguageResponse
+from models.text import TextBase, TextInput, TextOutput, TextPatch
 
 from .contribution_database import ContributionDatabase, contributions_return
 from .database_validator import DatabaseValidator
@@ -13,7 +14,7 @@ from .nomen_database import NomenDatabase
 from .tag_database import TagDatabase
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
+    from neo4j import AsyncManagedTransaction, AsyncSession, Record
 
     from .database import Database
 
@@ -36,8 +37,10 @@ class TextDatabase:
         wiki: e.wiki,
         commentary_of: [(e)-[:COMMENTARY_OF]->(c_target:Text) | c_target.id][0],
         translation_of: [(e)-[:TRANSLATION_OF]->(t_target:Text) | t_target.id][0],
+        part_of: [(e)-[:PART_OF]->(whole:Text) | whole.id][0],
         commentaries: [(e)<-[:COMMENTARY_OF]-(c_child:Text) | c_child.id],
         translations: [(e)<-[:TRANSLATION_OF]-(t_child:Text) | t_child.id],
+        parts: [(e)<-[:PART_OF]-(part:Text) | part.id],
         contributions: """
         + contributions_return("e")
         + """,
@@ -60,8 +63,8 @@ class TextDatabase:
     )
 
     GET_QUERY: LiteralString = f"""
-    MATCH (e:Text {{id: $id}})
-    RETURN {_TEXT_RETURN}
+    MATCH (e:Text {{id: $id}})-[:TEXT_OF]->(w:Work)
+    RETURN {_TEXT_RETURN}, w.id AS work_id
     """
 
     GET_BY_IDS_QUERY: LiteralString = f"""
@@ -72,52 +75,51 @@ class TextDatabase:
     RETURN {_TEXT_RETURN}
     """
 
-    GET_ALL_QUERY: LiteralString = f"""
-    CALL () {{
-        WHEN $bdrc IS NOT NULL THEN {{ MATCH (e:Text {{bdrc: $bdrc}}) RETURN e }}
-        WHEN $wiki IS NOT NULL THEN {{ MATCH (e:Text {{wiki: $wiki}}) RETURN e }}
-        WHEN $author_id IS NOT NULL THEN {{
-            MATCH (e:Text)-[:HAS_CONTRIBUTION]->(:Contribution)-[:BY]->(:Person {{id: $author_id}})
+    _FILTERED_TEXTS: LiteralString = """
+    CALL () {
+        WHEN $bdrc IS NOT NULL THEN { MATCH (e:Text {bdrc: $bdrc}) RETURN e }
+        WHEN $wiki IS NOT NULL THEN { MATCH (e:Text {wiki: $wiki}) RETURN e }
+        WHEN $author_id IS NOT NULL THEN {
+            MATCH (e:Text)-[:HAS_CONTRIBUTION]->(:Contribution)-[:BY]->(:Person {id: $author_id})
             RETURN DISTINCT e
-        }}
-        WHEN $category_id IS NOT NULL THEN {{
-            MATCH (e:Text)-[:TEXT_OF]->(:Work)-[:HAS_CATEGORY]->(:Category {{id: $category_id}}) RETURN e
-        }}
-        WHEN size($tag_ids) > 0 THEN {{
-            MATCH (e:Text)-[:TEXT_OF]->(w:Work)
-            WHERE CASE $tag_id_match
-                WHEN 'all' THEN ALL(required_tag_id IN $tag_ids WHERE (w)-[:HAS_TAG]->(:Tag {{id: required_tag_id}}))
-                ELSE ANY(required_tag_id IN $tag_ids WHERE (w)-[:HAS_TAG]->(:Tag {{id: required_tag_id}}))
-            END
-            RETURN e
-        }}
-        WHEN $language IS NOT NULL THEN {{
-            MATCH (e:Text)-[:HAS_LANGUAGE]->(:Language {{code: $language}}) RETURN e
-        }}
-        ELSE {{ MATCH (e:Text) RETURN e }}
-    }}
+        }
+        WHEN $category_id IS NOT NULL THEN {
+            MATCH (e:Text)-[:TEXT_OF]->(:Work)-[:HAS_CATEGORY]->(:Category {id: $category_id}) RETURN e
+        }
+        WHEN size($tag_groups) > 0 THEN {
+            MATCH (e:Text)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(t:Tag) WHERE t.id IN $tag_groups[0] RETURN DISTINCT e
+        }
+        WHEN $language IS NOT NULL THEN {
+            MATCH (e:Text)-[:HAS_LANGUAGE]->(:Language {code: $language_base}) RETURN e
+        }
+        ELSE { MATCH (e:Text) RETURN e }
+    }
     WITH e
-    WHERE ($language IS NULL OR (e)-[:HAS_LANGUAGE]->(:Language {{code: $language}}))
-      AND ($category_id IS NULL OR (e)-[:TEXT_OF]->(:Work)-[:HAS_CATEGORY]->(:Category {{id: $category_id}}))
-      AND ($author_id IS NULL OR EXISTS {{
-          (e)-[:HAS_CONTRIBUTION]->(:Contribution)-[:BY]->(:Person {{id: $author_id}})
-      }})
-      AND (
-        size($tag_ids) = 0
-        OR CASE $tag_id_match
-            WHEN 'all' THEN ALL(
-                required_tag_id IN $tag_ids
-                WHERE (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(:Tag {{id: required_tag_id}})
-            )
-            ELSE ANY(
-                required_tag_id IN $tag_ids
-                WHERE (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(:Tag {{id: required_tag_id}})
-            )
-        END
-      )
+    WHERE ($language IS NULL OR EXISTS {
+          (e)-[r:HAS_LANGUAGE]->(lang:Language {code: $language_base})
+          WHERE NOT $language CONTAINS '-' OR toLower(coalesce(r.bcp47, lang.code)) = $language
+      })
+      AND ($category_id IS NULL OR (e)-[:TEXT_OF]->(:Work)-[:HAS_CATEGORY]->(:Category {id: $category_id}))
+      AND ($author_id IS NULL OR EXISTS {
+          (e)-[:HAS_CONTRIBUTION]->(:Contribution)-[:BY]->(:Person {id: $author_id})
+      })
+      AND ALL(tag_group IN $tag_groups WHERE EXISTS {
+          (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(t:Tag) WHERE t.id IN tag_group
+      })
       AND ($wiki IS NULL OR e.wiki = $wiki)
+    """
+
+    GET_ALL_QUERY: LiteralString = f"""
+    {_FILTERED_TEXTS}
     ORDER BY e.id SKIP $offset LIMIT $limit
     RETURN {_TEXT_RETURN}
+    """
+
+    GET_LANGUAGES_QUERY: LiteralString = f"""
+    {_FILTERED_TEXTS}
+    MATCH (e)-[:HAS_LANGUAGE]->(l:Language)
+    RETURN l.code AS code, l.name AS name, count(DISTINCT e) AS text_count
+    ORDER BY code
     """
 
     UPDATE_LICENSE_QUERY: LiteralString = """
@@ -141,18 +143,17 @@ class TextDatabase:
     """
 
     UPDATE_CATEGORY_QUERY: LiteralString = """
-    MATCH (e:Text {id: $text_id})-[:TEXT_OF]->(w:Work)
+    MATCH (w:Work {id: $work_id}), (cat:Category {id: $category_id})
     OPTIONAL MATCH (w)-[r:HAS_CATEGORY]->()
     DELETE r
-    WITH w
-    MATCH (cat:Category {id: $category_id})
+    WITH w, cat
     MERGE (w)-[:HAS_CATEGORY]->(cat)
     RETURN w.id as work_id
     """
 
     UPDATE_PROPERTIES_QUERY: LiteralString = """
     MATCH (e:Text {id: $text_id})
-    SET e.bdrc = $bdrc, e.wiki = $wiki, e.date = $date
+    SET e += $properties
     RETURN e.id as text_id
     """
 
@@ -177,13 +178,15 @@ class TextDatabase:
     MERGE (e)-[:HAS_LANGUAGE {bcp47: $bcp47_tag}]->(l)
     MERGE (e)-[:HAS_TITLE]->(n)
     MERGE (e)-[:HAS_LICENSE]->(license)
-    RETURN e.id as text_id
+    RETURN e.id AS text_id, w.id AS work_id
     """
 
     CREATE_STANDALONE_QUERY: LiteralString = f"""
+    OPTIONAL MATCH (whole:Text {{id: $target_id}})
     CREATE (w:Work {{id: $work_id}})
     CREATE (e:Text {{id: $text_id, bdrc: $bdrc, wiki: $wiki, date: $date}})
     MERGE (e)-[:TEXT_OF {{original: $original}}]->(w)
+    CALL (*) {{ WHEN whole IS NOT NULL THEN {{ CREATE (e)-[:PART_OF]->(whole) }} }}
     {_CREATE_TEXT_LINKS}
     """
 
@@ -204,26 +207,14 @@ class TextDatabase:
     {_CREATE_TEXT_LINKS}
     """
 
-    UPDATE_TAGS_QUERY: LiteralString = """
-    MATCH (e:Text {id: $text_id})-[:TEXT_OF]->(w:Work)
-    OPTIONAL MATCH (w)-[r:HAS_TAG]->(:Tag)
-    DELETE r
-    WITH w
-    UNWIND $tag_ids AS tag_id
-    MATCH (t:Tag {id: tag_id})
-    MERGE (w)-[:HAS_TAG]->(t)
-    RETURN w.id AS work_id
-    """
-
     GET_WORK_ID_QUERY: LiteralString = """
     MATCH (e:Text {id: $text_id})-[:TEXT_OF]->(w:Work)
     RETURN w.id AS work_id
     """
 
-    LINK_WORK_TO_CATEGORY_QUERY: LiteralString = """
-    MATCH (w:Work {id: $work_id})
-    MATCH (c:Category {id: $category_id})
-    CREATE (w)-[:HAS_CATEGORY]->(c)
+    LOCK_WITH_WORK_QUERY: LiteralString = """
+    MATCH (e:Text {id: $id})-[:TEXT_OF]->(w:Work)
+    CALL apoc.lock.nodes([w, e])
     FINISH
     """
 
@@ -232,7 +223,9 @@ class TextDatabase:
     RETURN w.id AS work_id,
            count { (e)<-[:EDITION_OF]-(:Edition) } AS edition_count,
            count { (e)<-[:TRANSLATION_OF]-(:Text) } AS translation_count,
-           count { (e)<-[:COMMENTARY_OF]-(:Text) } AS commentary_count
+           count { (e)<-[:COMMENTARY_OF]-(:Text) } AS commentary_count,
+           count { (e)<-[:PART_OF]-(:Text) } AS part_count,
+           count { (e)<-[:RECITATION_OF]-(:Audio) } AS audio_count
     """
 
     DELETE_QUERY: LiteralString = """
@@ -260,15 +253,18 @@ class TextDatabase:
     """
 
     async def get(self, text_id: str, application: str | None = None) -> TextOutput:
-        async def read(tx: AsyncManagedTransaction) -> TextOutput:
-            result = await tx.run(TextDatabase.GET_QUERY, id=text_id, application=application)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Text with ID '{text_id}' not found")
-            return TextOutput.model_validate(record["text"])
-
         async with self.session as session:
-            return await session.execute_read(read)
+            return await session.execute_read(self.get_with_transaction, text_id, application)
+
+    @staticmethod
+    async def get_with_transaction(
+        tx: AsyncManagedTransaction, text_id: str, application: str | None = None
+    ) -> TextOutput:
+        result = await tx.run(TextDatabase.GET_QUERY, id=text_id, application=application)
+        record = await result.single()
+        if record is None:
+            raise DataNotFoundError(f"Text with ID '{text_id}' not found")
+        return TextOutput.model_validate(record["text"])
 
     async def get_by_ids(self, text_ids: list[str], application: str | None = None) -> list[TextOutput]:
         if not text_ids:
@@ -299,34 +295,50 @@ class TextDatabase:
 
         async def read(tx: AsyncManagedTransaction) -> list[TextOutput]:
             if filters.language:
-                await DatabaseValidator.validate_language_code_exists(tx, filters.language)
+                await DatabaseValidator.validate_language_code_exists(tx, filters.language.split("-")[0])
             result = await tx.run(
                 TextDatabase.GET_ALL_QUERY,
                 offset=offset,
                 limit=limit,
-                language=filters.language,
-                category_id=filters.category_id,
-                author_id=filters.author_id,
-                tag_ids=filters.tag_ids,
-                tag_id_match=filters.tag_id_match,
-                bdrc=filters.bdrc,
-                wiki=filters.wiki,
                 application=application,
+                **TextDatabase._filter_params(filters, filters.language),
             )
             return [TextOutput.model_validate(record["text"]) for record in await result.data()]
 
         async with self.session as session:
             return await session.execute_read(read)
 
-    async def create(self, text: TextInput) -> str:
+    async def get_languages(self, filters: TextFacetFilter) -> list[TextLanguageResponse]:
+        async def read(tx: AsyncManagedTransaction) -> list[TextLanguageResponse]:
+            result = await tx.run(TextDatabase.GET_LANGUAGES_QUERY, **TextDatabase._filter_params(filters))
+            return [TextLanguageResponse.model_validate(record) for record in await result.data()]
+
+        async with self.session as session:
+            return await session.execute_read(read)
+
+    @staticmethod
+    def _filter_params(filters: TextFacetFilter, language: str | None = None) -> dict[str, Any]:
+        return {
+            "language": language,
+            "language_base": language.split("-")[0] if language else None,
+            "category_id": filters.category_id,
+            "author_id": filters.author_id,
+            "tag_groups": filters.tag_groups,
+            "bdrc": filters.bdrc,
+            "wiki": filters.wiki,
+        }
+
+    async def create(self, text: TextInput, application: str | None = None) -> str:
         try:
             async with self.session as session:
-                return await session.execute_write(lambda tx: TextDatabase.create_with_transaction(tx, text))
+                return await session.execute_write(TextDatabase.create_with_transaction, text, application=application)
         except ConstraintError as e:
             raise DataConflictError(str(e)) from e
 
     async def delete(self, text_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
+            # Audio creation takes the same locks, so a new recitation cannot slip past this check.
+            await TextDatabase.lock_with_work(tx, text_id)
             result = await tx.run(TextDatabase.DELETE_CHECK_QUERY, text_id=text_id)
             record = await result.single()
             if record is None:
@@ -339,6 +351,10 @@ class TextDatabase:
                 blockers.append(f"{record['translation_count']} translation(s)")
             if record["commentary_count"]:
                 blockers.append(f"{record['commentary_count']} commentary/commentaries")
+            if record["part_count"]:
+                blockers.append(f"{record['part_count']} part(s)")
+            if record["audio_count"]:
+                blockers.append(f"{record['audio_count']} audio(s)")
             if blockers:
                 raise DataConflictError(f"Text '{text_id}' cannot be deleted because it has {', '.join(blockers)}")
 
@@ -348,15 +364,16 @@ class TextDatabase:
             await session.execute_write(write)
 
     @staticmethod
-    async def create_with_transaction(tx: AsyncManagedTransaction, text: TextInput, text_id: str | None = None) -> str:
+    async def create_with_transaction(
+        tx: AsyncManagedTransaction, text: TextInput, text_id: str | None = None, application: str | None = None
+    ) -> str:
         text_id = text_id or generate_id()
         await TextDatabase._validate_related_text(tx, text)
 
         work_id = generate_id()
-        await DatabaseValidator.validate_text_creation(tx, text, work_id)
+        await DatabaseValidator.validate_text_creation(tx, text)
         base_lang_code = text.language.split("-")[0].lower()
         await DatabaseValidator.validate_language_code_exists(tx, base_lang_code)
-        await DatabaseValidator.validate_category_exists(tx, text.category_id)
 
         alt_titles = [dict(t.root) for t in text.alt_titles] if text.alt_titles else []
         title_nomen_id = await NomenDatabase.create_with_transaction(tx, dict(text.title.root), alt_titles)
@@ -369,7 +386,7 @@ class TextDatabase:
             "language_code": base_lang_code,
             "bcp47_tag": text.language,
             "title_nomen_id": title_nomen_id,
-            "target_id": text.translation_of or text.commentary_of,
+            "target_id": text.translation_of or text.commentary_of or text.part_of,
             "license": text.license.value,
         }
 
@@ -382,27 +399,37 @@ class TextDatabase:
 
         record = await result.single(strict=True)
         created_text_id = str(record["text_id"])
+        work_id = str(record["work_id"])
 
-        if text.category_id:
-            await tx.run(TextDatabase.LINK_WORK_TO_CATEGORY_QUERY, work_id=work_id, category_id=text.category_id)
+        if text.category_id is not None:
+            await TextDatabase._set_category(
+                tx, work_id, None, text.category_id, application=application, expected=None
+            )
 
         for contribution in text.contributions:
             await ContributionDatabase.create_with_transaction(tx, TEXT_LABEL, created_text_id, contribution)
 
         if text.tag_ids:
-            await DatabaseValidator.validate_tags_exist(tx, list(text.tag_ids))
-            for tag_id in text.tag_ids:
-                await TagDatabase.tag_work_with_transaction(tx, work_id, tag_id)
+            await TagDatabase.set_work_tags(tx, work_id, text.tag_ids, application=application)
 
         return created_text_id
 
     @staticmethod
+    async def lock_with_work(tx: AsyncManagedTransaction, text_id: str) -> None:
+        """Lock a text and its Work, Work first, as every text mutation does."""
+        await (await tx.run(TextDatabase.LOCK_WITH_WORK_QUERY, id=text_id)).consume()
+
+    @staticmethod
+    async def _get_for_update(tx: AsyncManagedTransaction, text_id: str) -> Record | None:
+        await TextDatabase.lock_with_work(tx, text_id)
+        return await (await tx.run(TextDatabase.GET_QUERY, id=text_id, application=None)).single()
+
+    @staticmethod
     async def _validate_related_text(tx: AsyncManagedTransaction, text: TextInput) -> None:
-        target_id = text.translation_of or text.commentary_of
+        target_id = text.translation_of or text.commentary_of or text.part_of
         if not target_id:
             return
-        result = await tx.run(TextDatabase.GET_QUERY, id=target_id, bdrc_id=None, application=None)
-        record = await result.single()
+        record = await TextDatabase._get_for_update(tx, target_id)
         if not record:
             raise DataNotFoundError(f"Target text '{target_id}' not found")
         target_language = record.data()["text"]["language"]
@@ -410,49 +437,24 @@ class TextDatabase:
             raise DataValidationError("Translation must have a different language than the target text")
 
     async def update(self, text_id: str, patch: TextPatch, application: str | None = None) -> TextOutput:
-        existing = await self.get(text_id)
-
-        merged_bdrc = patch.bdrc if patch.bdrc is not None else existing.bdrc
-        merged_wiki = patch.wiki if patch.wiki is not None else existing.wiki
-        merged_date = patch.date if patch.date is not None else existing.date
-        merged_title: dict[str, str] = dict(patch.title.root) if patch.title is not None else dict(existing.title.root)
-        merged_alt_titles: list[dict[str, str]] | None = (
-            [dict(alt.root) for alt in patch.alt_titles]
-            if patch.alt_titles is not None
-            else ([dict(alt.root) for alt in existing.alt_titles] if existing.alt_titles else None)
-        )
-        merged_language = patch.language if patch.language is not None else existing.language
-        merged_category_id = patch.category_id if patch.category_id is not None else existing.category_id
-        merged_license = patch.license if patch.license is not None else existing.license
-        merged_contributions = patch.contributions if patch.contributions is not None else existing.contributions
-
-        TextOutput.model_validate(
-            {
-                "id": existing.id,
-                "bdrc": merged_bdrc,
-                "wiki": merged_wiki,
-                "date": merged_date,
-                "title": merged_title,
-                "alt_titles": merged_alt_titles,
-                "language": merged_language,
-                "category_id": merged_category_id,
-                "license": merged_license,
-                "contributions": [c.model_dump() for c in merged_contributions],
-            }
-        )
-
-        async def update_transaction(tx: AsyncManagedTransaction) -> None:
-            await tx.run(
-                TextDatabase.UPDATE_PROPERTIES_QUERY,
-                text_id=text_id,
-                bdrc=merged_bdrc,
-                wiki=merged_wiki,
-                date=merged_date,
+        async def update_transaction(tx: AsyncManagedTransaction) -> TextOutput:
+            record = await TextDatabase._get_for_update(tx, text_id)
+            if record is None:
+                raise DataNotFoundError(f"Text with ID '{text_id}' not found")
+            existing = {key: value for key, value in record["text"].items() if key in TextBase.model_fields}
+            updated = TextBase.model_validate(
+                existing | patch.model_dump(include=set(TextBase.model_fields), exclude_unset=True)
             )
 
-            if patch.title is not None or patch.alt_titles is not None:
+            properties = patch.model_dump(include={"bdrc", "wiki", "date"}, exclude_unset=True)
+            if properties:
+                await tx.run(TextDatabase.UPDATE_PROPERTIES_QUERY, text_id=text_id, properties=properties)
+
+            if patch.model_fields_set & {"title", "alt_titles"}:
                 await tx.run(TextDatabase.DELETE_TITLE_QUERY, text_id=text_id)
-                title_nomen_id = await NomenDatabase.create_with_transaction(tx, merged_title, merged_alt_titles)
+                title_nomen_id = await NomenDatabase.create_with_transaction(
+                    tx, updated.title.root, [alt.root for alt in updated.alt_titles or []]
+                )
                 await tx.run(TextDatabase.LINK_TITLE_QUERY, text_id=text_id, nomen_id=title_nomen_id)
 
             if patch.license is not None:
@@ -468,7 +470,14 @@ class TextDatabase:
                 )
 
             if patch.category_id is not None:
-                await tx.run(TextDatabase.UPDATE_CATEGORY_QUERY, text_id=text_id, category_id=patch.category_id)
+                await self._set_category(
+                    tx,
+                    record["work_id"],
+                    record["text"]["category_id"],
+                    patch.category_id,
+                    application=application,
+                    expected=patch.expected_category_id,
+                )
 
             if patch.contributions is not None:
                 await DatabaseValidator.validate_contribution_references(tx, patch.contributions)
@@ -477,16 +486,34 @@ class TextDatabase:
                     await ContributionDatabase.create_with_transaction(tx, TEXT_LABEL, text_id, contribution)
 
             if patch.tag_ids is not None:
-                await DatabaseValidator.validate_tags_exist(tx, list(patch.tag_ids))
-                await tx.run(
-                    TextDatabase.UPDATE_TAGS_QUERY,
-                    text_id=text_id,
-                    tag_ids=list(patch.tag_ids),
+                await TagDatabase.set_work_tags(
+                    tx, record["work_id"], patch.tag_ids, application=application, replace=True
                 )
+            return await self.get_with_transaction(tx, text_id, application)
 
         async with self.session as session:
             try:
-                await session.execute_write(update_transaction)
+                return await session.execute_write(update_transaction)
             except ConstraintError as e:
                 raise DataConflictError(str(e)) from e
-            return await self.get(text_id, application=application)
+
+    @staticmethod
+    async def _set_category(
+        tx: AsyncManagedTransaction,
+        work_id: str,
+        current: str | None,
+        category_id: str,
+        *,
+        application: str | None,
+        expected: str | None,
+    ) -> None:
+        if current == category_id:
+            return
+        if current is not None:
+            await DatabaseValidator.validate_category_exists(tx, current, application)
+            if expected != current:
+                raise DataConflictError("Category changed or expected_category_id was not supplied")
+        await DatabaseValidator.validate_category_exists(tx, category_id, application)
+        result = await tx.run(TextDatabase.UPDATE_CATEGORY_QUERY, work_id=work_id, category_id=category_id)
+        if await result.single() is None:
+            raise DataNotFoundError("Work or category no longer exists")

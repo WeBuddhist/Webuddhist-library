@@ -3,9 +3,9 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
-from dependencies import RequiredAppHeader, get_api_key, get_db
+from dependencies import RequiredAppHeader, get_db
 from exceptions import DataNotFoundError
-from models.category import CategoryInput, CategoryOutput
+from models.category import CategoryInput, CategoryOutput, CategoryPatch
 from models.responses import IdResponse
 
 if TYPE_CHECKING:
@@ -22,7 +22,6 @@ router = APIRouter(prefix="/v2/categories", tags=["Categories"])
     description="Retrieve categories for an application.",
 )
 async def get_categories(
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
     parent_id: Annotated[str | None, Query(description="Filter by parent category ID")] = None,
@@ -41,7 +40,6 @@ async def get_categories(
 )
 async def get_category_by_id(
     category_id: str,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
 ) -> CategoryOutput:
@@ -64,7 +62,6 @@ async def get_category_by_id(
 )
 async def create_category(
     data: CategoryInput,
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
 ) -> IdResponse:
@@ -76,6 +73,28 @@ async def create_category(
     return IdResponse(id=category_id)
 
 
+@router.patch(
+    "/{category_id}",
+    summary="Update category localizations",
+    description=(
+        "Add or replace title and description localizations of a category. "
+        "Languages sent are added or replaced; languages not sent are kept."
+    ),
+)
+async def update_category(
+    category_id: Annotated[str, Path(description="The ID of the category")],
+    data: CategoryPatch,
+    db: Annotated[Database, Depends(get_db)],
+    x_application: RequiredAppHeader,
+) -> CategoryOutput:
+    """Update a category's title and description localizations."""
+    if not await db.application.exists(x_application):
+        raise DataNotFoundError(f"Application '{x_application}' not found")
+
+    logger.info("Updating category %s with: %s", category_id, data.model_dump_json())
+    return await db.category.update(category_id, data, application=x_application)
+
+
 @router.delete(
     "/{category_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -84,7 +103,6 @@ async def create_category(
 )
 async def delete_category(
     category_id: Annotated[str, Path(description="The ID of the category")],
-    _api_key: Annotated[str, Depends(get_api_key)],
     db: Annotated[Database, Depends(get_db)],
     x_application: RequiredAppHeader,
 ) -> None:

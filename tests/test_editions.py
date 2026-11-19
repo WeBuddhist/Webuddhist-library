@@ -26,6 +26,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from database.content_state import read_state
 from identifier import generate_id
 from models.annotation import Page, PaginationInput, Span, Volume
 from models.base import LocalizedString
@@ -148,9 +149,9 @@ class TestGetEditionContent(TestEditionsEndpoints):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["url"] == (
-            f"https://mock-s3.example.com/base_texts/{text_id}/{edition_id}.txt?signed=1&expires_in=3600"
-        )
+        async with test_database.get_session() as session:
+            state = await session.execute_read(read_state, edition_id)
+        assert data["url"] == f"https://mock-s3.example.com/{state.object_key}?signed=1&expires_in=3600"
         expires_at = datetime.fromisoformat(data["expires_at"])
         assert before + timedelta(seconds=3600) <= expires_at <= datetime.now(UTC) + timedelta(seconds=3600)
 
@@ -286,7 +287,7 @@ class TestCreateEdition(TestEditionsEndpoints):
 
         annotations_response = await client.get(f"/v2/editions/{edition_id}/pagination")
         assert annotations_response.status_code == 200
-        
+
         # Verify the pagination data matches what was sent
         pagination_response = annotations_response.json()
         assert pagination_response["volumes"][0]["pages"] == [
@@ -432,8 +433,9 @@ class TestCreateEdition(TestEditionsEndpoints):
         assert second_response.status_code == 422
         assert "error" in second_response.json()
 
-    async def test_create_edition_round_trip(self, client, test_database, test_person_data):
-        """Test creating an edition and retrieving it"""
+    @pytest.mark.parametrize("include_segmentation", [False, True])
+    async def test_create_edition_round_trip(self, client, test_database, test_person_data, include_segmentation):
+        """Diplomatic editions retain content, metadata, pagination, and optional segmentation."""
         person_id = await self._create_test_person(test_database, test_person_data)
         text_id = await self._create_test_text(test_database, person_id)
 
@@ -453,8 +455,16 @@ class TestCreateEdition(TestEditionsEndpoints):
             },
         }
 
+        if include_segmentation:
+            edition_data["segmentation"] = {
+                "segments": [
+                    {"lines": [{"start": 0, "end": 10}]},
+                    {"lines": [{"start": 10, "end": 23}]},
+                ],
+            }
+
         post_response = await client.post(f"/v2/texts/{text_id}/editions", json=edition_data)
-        assert post_response.status_code == 201
+        assert post_response.status_code == 201, post_response.json()
         edition_id = post_response.json()["id"]
 
         content_response = await client.get(f"/v2/editions/{edition_id}/content")
@@ -467,6 +477,19 @@ class TestCreateEdition(TestEditionsEndpoints):
         assert metadata["bdrc"] == "W12345"
         assert metadata["wiki"] == "Q123456"
         assert metadata["colophon"] == "Test colophon"
+
+        pagination_response = await client.get(f"/v2/editions/{edition_id}/pagination")
+        assert pagination_response.status_code == 200
+        assert pagination_response.json()["volumes"][0]["pages"] == edition_data["pagination"]["volumes"][0]["pages"]
+
+        segments_response = await client.get(f"/v2/editions/{edition_id}/segmentation/segments")
+        if include_segmentation:
+            assert segments_response.status_code == 200
+            assert [s["lines"] for s in segments_response.json()["items"]] == [
+                s["lines"] for s in edition_data["segmentation"]["segments"]
+            ]
+        else:
+            assert segments_response.status_code == 404
 
     async def test_create_edition_preserves_surrounding_whitespace(self, client, test_database, test_person_data):
         """Content must be stored verbatim so annotation offsets stay valid"""
@@ -614,6 +637,11 @@ class TestEditionAnnotations(TestEditionsEndpoints):
         assert second_body["has_more"] is False
         assert second_body["offset"] == 1
         assert second_body["limit"] == 1
+
+        all_items = (await client.get(f"/v2/editions/{edition_id}/segmentation/segments")).json()["items"]
+        assert [item["id"] for item in first_body["items"] + second_body["items"]] == [item["id"] for item in all_items]
+        assert len({item["id"] for item in all_items}) == 2
+        assert [item["lines"] for item in all_items] == [[{"start": 0, "end": 5}], [{"start": 5, "end": 10}]]
 
     async def test_post_segmentation_annotation_with_multiple_lines(self, client, test_database, test_person_data):
         """Test one segment can contain multiple line spans through the API and Neo4j storage."""
@@ -791,7 +819,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
         )
 
         translation_data = TextInput(
-            category_id="category",
+
             title=LocalizedString({"en": "English Translation"}),
             language="en",
             translation_of=original_text_id,
@@ -847,7 +875,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
         )
 
         translation_data = TextInput(
-            category_id="category",
+
             title=LocalizedString({"en": "English Translation"}),
             language="en",
             translation_of=original_text_id,
@@ -875,7 +903,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
         )
 
         translation_data = TextInput(
-            category_id="category",
+
             title=LocalizedString({"en": "English Translation"}),
             language="en",
             translation_of=original_text_id,
@@ -1096,11 +1124,11 @@ class TestPatchContent(TestEditionsEndpoints):
         async def fail(*_args, **_kwargs):
             raise RuntimeError("storage unavailable")
 
-        original = mock_storage.apply_insert
-        mock_storage.apply_insert = fail
+        original = mock_storage.put_immutable
+        mock_storage.put_immutable = fail
         try:
             # A deployed client receives 500: Starlette sends the error response and then re-raises
-            # so test clients can inspect the cause. Matching it proves the router compensated and
+            # so test clients can inspect the cause. Matching it proves the router preserved state and
             # re-raised our failure rather than swallowing or replacing it.
             with pytest.raises(RuntimeError, match="storage unavailable"):
                 await client.patch(
@@ -1108,7 +1136,7 @@ class TestPatchContent(TestEditionsEndpoints):
                     json={"type": "insert", "position": 6, "text": "Beautiful "}
                 )
         finally:
-            mock_storage.apply_insert = original
+            mock_storage.put_immutable = original
 
         assert await self._get_content_length(test_database, edition_id) == len("Hello World")
 
@@ -1310,7 +1338,7 @@ class TestPatchContent(TestEditionsEndpoints):
             reference: original_ids[reference] for reference in ("S1", "S2", "S4")
         }
         assert [segment["lines"] for segment in segments] == [
-            [{"start": 0, "end": 4}],
+            [{"start": 0, "end": 2}],
             [{"start": 2, "end": 4}],
             [{"start": 4, "end": 6}],
         ]
@@ -1440,7 +1468,7 @@ class TestPatchContent(TestEditionsEndpoints):
 
         response = await client.patch(f"/v2/editions/{edition_id}/content", json={})
 
-        assert response.status_code in (400, 422)
+        assert response.status_code == 422
 
     async def test_patch_content_insert_at_position_zero(self, client, test_database, test_person_data):
         """Test insert at position 0 (beginning of text)."""
@@ -1485,10 +1513,10 @@ class TestPatchContent(TestEditionsEndpoints):
             json={"type": "delete", "start": 0, "end": 5}
         )
 
-        assert response.status_code == 204
+        assert response.status_code == 422
 
         content_response = await client.get(f"/v2/editions/{edition_id}/content")
-        assert content_response.json() == ""
+        assert content_response.json() == "Hello"
 
     async def test_patch_content_replace_with_longer_text(self, client, test_database, test_person_data):
         """Test replace with longer text."""
@@ -1723,7 +1751,7 @@ class TestPatchContentWithSegmentation(TestEditionsEndpoints):
         assert response.status_code == 204
 
         spans = await self._get_segmentation_spans(client, edition_id)
-        assert (0, 4) in spans
+        assert (0, 2) in spans
         assert (2, 4) in spans
         assert (4, 6) in spans
         assert len(spans) == 3
@@ -1734,7 +1762,7 @@ class TestPatchContentWithSegmentation(TestEditionsEndpoints):
         edition_id, _ = await self._create_edition_with_segmentation(
             client, test_database, person_id,
             content="0123456789ABCDEF",
-            segments=[(0, 5), (10, 16)]
+            segments=[(0, 5), (5, 16)]
         )
 
         response = await client.patch(
@@ -1745,7 +1773,7 @@ class TestPatchContentWithSegmentation(TestEditionsEndpoints):
 
         spans = await self._get_segmentation_spans(client, edition_id)
         assert (0, 5) in spans
-        assert (7, 13) in spans
+        assert (5, 13) in spans
 
     async def test_replace_after_segment_leaves_unchanged(self, client, test_database, test_person_data):
         """Replace operation after a segment should leave it unchanged (covers line 61)."""
@@ -1753,7 +1781,7 @@ class TestPatchContentWithSegmentation(TestEditionsEndpoints):
         edition_id, _ = await self._create_edition_with_segmentation(
             client, test_database, person_id,
             content="0123456789ABCDEF",
-            segments=[(0, 5), (10, 16)]
+            segments=[(0, 5), (5, 16)]
         )
 
         response = await client.patch(
@@ -1764,7 +1792,7 @@ class TestPatchContentWithSegmentation(TestEditionsEndpoints):
 
         spans = await self._get_segmentation_spans(client, edition_id)
         assert (0, 5) in spans
-        assert (11, 17) in spans
+        assert (5, 17) in spans
 
     async def test_replace_inside_segment_expands_it(self, client, test_database, test_person_data):
         """Replace inside a segment should expand/shrink it (covers line 71)."""

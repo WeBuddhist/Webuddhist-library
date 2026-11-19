@@ -150,20 +150,43 @@ Texts can also be created or replaced with tag IDs:
 }
 ```
 
-Filter texts by tag. Pass comma-separated IDs in `tag_id`. The default `tag_id_match=all` requires every listed
-tag:
+## Filter Texts by Tag
 
-```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456" \
-  -H "X-API-Key: your_api_key"
+`GET /v2/texts` and `GET /v2/texts/languages` accept a repeatable `tag_id` parameter:
+
+- Each `tag_id` parameter is a group, and a text must match **every** group (AND).
+- Inside a group, comma-separated IDs are alternatives, and a text must have **at least one** of them (OR).
+
+So `tag_id=A,B&tag_id=C` means `(A OR B) AND C`.
+
+| Query                                              | Returns texts tagged with                     |
+| -------------------------------------------------- | --------------------------------------------- |
+| `tag_id=TAG123`                                    | TAG123                                        |
+| `tag_id=TAG123&tag_id=TAG456`                      | TAG123 and TAG456                             |
+| `tag_id=TAG123,TAG456`                             | TAG123 or TAG456                              |
+| `tag_id=TAG123,TAG456&tag_id=TAG789`               | TAG123 or TAG456, and TAG789                  |
+| `tag_id=TAG123,TAG456,TAG789&tag_id=TAG321,TAG654` | any of the first three, and TAG321 or TAG654  |
+
+A faceted UI sends one `tag_id` per facet, with that facet's selected tags joined by commas:
+
+```js
+const params = new URLSearchParams();
+for (const selectedTagIds of selectedFacets) params.append("tag_id", selectedTagIds.join(","));
 ```
 
-Use `tag_id_match=any` to return texts having at least one listed tag:
+Axios serializes arrays as `tag_id[]=…` by default; set `paramsSerializer: { indexes: null }` to send repeated `tag_id` keys.
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id_match=any" \
-  -H "X-API-Key: your_api_key"
+# (TAG123 OR TAG456) AND TAG789
+curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id=TAG789" \
+  -H "X-API-Key: your_api_key" \
+  -H "X-Application: webuddhist"
 ```
+
+- Spaces around IDs are ignored, and repeating an ID or a group has no effect.
+- An unknown tag ID matches nothing: `tag_id=TAG123,UNKNOWN` behaves like `tag_id=TAG123`, and `tag_id=TAG123&tag_id=UNKNOWN` returns no texts.
+- An empty ID in any group (`tag_id=`, `tag_id=A,,B`, `tag_id=A,`) returns `422 Validation Error`.
+- `tag_id` combines with the other filters, and with `title` search, by AND.
 
 ## Tag or Untag a Segment
 

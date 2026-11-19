@@ -1,0 +1,57 @@
+name: Sync environment from prod
+
+# Copies prod data (Neo4j + S3) into testing or dev and rebuilds that environment's search indexes.
+# Prod keeps running: the copy comes from an EBS snapshot. See scripts/env_sync/sync_from_prod.sh.
+# Weekly cycle: run this (target testing) first, then merge dev -> main.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Environment to overwrite with prod data
+        type: choice
+        options:
+          - testing
+          - dev
+        default: testing
+  # Turn on after the first manual runs succeed (Sunday 20:00 UTC = Monday 01:30 IST):
+  # schedule:
+  #   - cron: "0 20 * * 0"
+
+concurrency:
+  # Same group as deploy.yml, so a deploy and a sync never run on one environment at the same time.
+  group: deploy-${{ inputs.target || 'testing' }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: ${{ inputs.target || 'testing' }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          # A role that can read prod and write only to testing/dev. Never the deploy role.
+          role-to-assume: ${{ vars.SYNC_AWS_ROLE }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 10800
+
+      - name: Copy prod into ${{ inputs.target || 'testing' }}
+        env:
+          TARGET: ${{ inputs.target || 'testing' }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          PROD_NEO4J_INSTANCE_ID: ${{ vars.PROD_NEO4J_INSTANCE_ID }}
+          PROD_S3_BUCKET: ${{ vars.PROD_S3_BUCKET }}
+          TARGET_NEO4J_INSTANCE_ID: ${{ vars.NEO4J_INSTANCE_ID }}
+          TARGET_API_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          TARGET_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
+          APP_DIR: ${{ vars.APP_DIR }}
+          SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+        run: bash scripts/env_sync/sync_from_prod.sh

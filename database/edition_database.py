@@ -1,7 +1,7 @@
 import logging
 from typing import TYPE_CHECKING, LiteralString
 
-from exceptions import DataNotFoundError
+from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from models.edition import EditionOutput
 from models.enums import EditionType
 
@@ -11,7 +11,10 @@ from .annotation.note_database import NoteDatabase
 from .annotation.pagination_database import PaginationDatabase
 from .annotation.segmentation_database import SegmentationDatabase
 from .annotation.table_of_contents_database import TableOfContentsDatabase
-from .database_validator import DatabaseValidator, DataValidationError
+from .content_state import advance_revision, read_state
+from .database_validator import DatabaseValidator
+from .excerpt_database import ExcerptDatabase
+from .locking import lock_nodes
 from .nomen_database import NomenDatabase
 from .recording_database import RecordingDatabase
 from .text_database import TextDatabase
@@ -20,7 +23,7 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, AsyncSession
 
     from models.annotation import PaginationInput, SegmentationInput
-    from models.edition import EditionInput
+    from models.edition import EditionInput, ExcerptSource
     from models.text import TextInput
 
     from .database import Database
@@ -33,7 +36,10 @@ class EditionDatabase:
     MATCH (m:Edition {id: $edition_id})
     OPTIONAL MATCH (m)-[:HAS_INCIPIT_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
     OPTIONAL MATCH (n)<-[:ALTERNATIVE_OF]-(alt:Nomen)-[:HAS_LOCALIZATION]->(alt_lt:LocalizedText)
-    DETACH DELETE m, n, lt, alt, alt_lt
+    OPTIONAL MATCH (attribute:Attribute)-[:ATTRIBUTE_OF]->(m)
+    OPTIONAL MATCH (span:Span)-[:SPAN_OF]->(attribute)
+    OPTIONAL MATCH (attribute)-[:HAS_METADATA]->(metadata:AnnotationMetadata)
+    DETACH DELETE m, n, lt, alt, alt_lt, span, metadata, attribute
     FINISH
     """
 
@@ -52,6 +58,14 @@ class EditionDatabase:
         } THEN [(m)-[:HAS_INCIPIT_TITLE]->(:Nomen)<-[:ALTERNATIVE_OF]-(an:Nomen) |
             apoc.map.fromPairs([(an)-[:HAS_LOCALIZATION]->(lt:LocalizedText)-[r:HAS_LANGUAGE]->(l:Language) |
                 [coalesce(r.bcp47, l.code), lt.text]])] ELSE null END,
+        excerpt_of: [(m)-[:EXCERPT_OF]->(source:Edition) | {
+            edition_id: source.id,
+            spans: COLLECT {
+                MATCH (span:Span)-[:SPAN_OF]->(m)
+                WITH span ORDER BY span.index
+                RETURN {start: span.start, end: span.end}
+            }
+        }][0],
         text_id: e.id
     } as edition
     """
@@ -93,7 +107,8 @@ class EditionDatabase:
     OPTIONAL MATCH (it:Nomen {id: $incipit_nomen_id})
     MERGE (mt:EditionType {name: $type})
     CREATE (m:Edition {
-        id: $edition_id, bdrc: $bdrc, wiki: $wiki, colophon: $colophon, content_length: $content_length
+        id: $edition_id, bdrc: $bdrc, wiki: $wiki, colophon: $colophon, content_length: $content_length,
+        content_key: $content_key, revision: 0
     })
     WITH m, e, mt, it
     CREATE (m)-[:EDITION_OF]->(e), (m)-[:HAS_TYPE]->(mt)
@@ -125,9 +140,7 @@ class EditionDatabase:
 
     async def get_all(self, text_id: str, edition_type: EditionType | None = None) -> list[EditionOutput]:
         async with self.session as session:
-            return await session.execute_read(
-                lambda tx: EditionDatabase.get_all_with_transaction(tx, text_id, edition_type)
-            )
+            return await session.execute_read(EditionDatabase.get_all_with_transaction, text_id, edition_type)
 
     @staticmethod
     async def get_all_with_transaction(
@@ -157,15 +170,23 @@ class EditionDatabase:
         edition_id: str,
         text_id: str,
         content_length: int,
+        *,
         text: TextInput | None = None,
         pagination: PaginationInput | None = None,
         segmentation: SegmentationInput | None = None,
+        content_key: str | None = None,
+        excerpt_of: ExcerptSource | None = None,
     ) -> str:
         async def transaction_function(tx: AsyncManagedTransaction) -> str:
             if text:
                 await TextDatabase.create_with_transaction(tx, text, text_id)
 
-            created_edition_id = await self.create_with_transaction(tx, edition, text_id, edition_id, content_length)
+            created_edition_id = await self.create_with_transaction(
+                tx, edition, text_id, edition_id, content_length, content_key=content_key
+            )
+
+            if excerpt_of is not None:
+                await ExcerptDatabase.add_with_transaction(tx, created_edition_id, text_id, excerpt_of)
 
             if segmentation is not None:
                 await SegmentationDatabase.add_with_transaction(tx, created_edition_id, segmentation)
@@ -180,31 +201,47 @@ class EditionDatabase:
 
     async def delete(self, edition_id: str) -> None:
         async with self.session as session:
-            await session.execute_write(lambda tx: self.delete_with_transaction(tx, edition_id))
+            await session.execute_write(self.delete_with_transaction, edition_id)
 
     @staticmethod
     async def delete_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> None:
-        await SegmentationDatabase.delete_by_edition_with_transaction(tx, edition_id)
-        await PaginationDatabase.delete_all_with_transaction(tx, edition_id)
-        await TableOfContentsDatabase.delete_all_with_transaction(tx, edition_id)
-        await BibliographicDatabase.delete_all_with_transaction(tx, edition_id)
-        await NoteDatabase.delete_all_with_transaction(tx, edition_id)
-        await MarkDatabase.delete_all_with_transaction(tx, edition_id)
-        await RecordingDatabase.delete_all_with_transaction(tx, edition_id)
-        await tx.run(EditionDatabase.DELETE_QUERY, edition_id=edition_id)
-
-    async def validate_create(
-        self,
-        edition: EditionInput,
-        text_id: str,
-    ) -> None:
-        async with self.session as session:
-            await session.execute_read(lambda tx: self._validate_create(tx, edition, text_id))
+        # Locks the edition, so the checks below see every recording following it and every excerpt edition of it.
+        await advance_revision(tx, edition_id)
+        if (await read_state(tx, edition_id)).is_excerpt:
+            await tx.run(ExcerptDatabase.DELETE_QUERY, edition_id=edition_id)
+        elif users := await ExcerptDatabase.excerpt_editions_of_with_transaction(tx, edition_id):
+            raise DataConflictError(
+                f"Edition '{edition_id}' cannot be deleted because excerpt edition(s) {', '.join(users)} use it"
+            )
+        else:
+            await SegmentationDatabase.delete_by_edition_with_transaction(tx, edition_id)
+        # Audio outlives the edition: deleting it only removes FOLLOWS, so cues would lose their target.
+        cued = await RecordingDatabase.count_cued_followers_with_transaction(tx, edition_id)
+        if cued:
+            raise DataConflictError(
+                f"Edition '{edition_id}' cannot be deleted because {cued} recording(s) with cues follow it"
+            )
+        for query in (
+            PaginationDatabase.DELETE_ALL_QUERY,
+            TableOfContentsDatabase.DELETE_ALL_QUERY,
+            BibliographicDatabase.DELETE_ALL_QUERY,
+            NoteDatabase.DELETE_ALL_QUERY,
+            MarkDatabase.DELETE_ALL_QUERY,
+            EditionDatabase.DELETE_QUERY,
+        ):
+            await tx.run(query, edition_id=edition_id)
 
     @staticmethod
     async def create_with_transaction(
-        tx: AsyncManagedTransaction, edition: EditionInput, text_id: str, edition_id: str, content_length: int
+        tx: AsyncManagedTransaction,
+        edition: EditionInput,
+        text_id: str,
+        edition_id: str,
+        content_length: int,
+        *,
+        content_key: str | None = None,
     ) -> str:
+        await lock_nodes(tx, "Text", [text_id])
         await EditionDatabase._validate_create(tx, edition, text_id)
 
         incipit_nomen_id = None
@@ -225,6 +262,9 @@ class EditionDatabase:
             incipit_nomen_id=incipit_nomen_id,
             source=edition.source,
             content_length=content_length,
+            content_key=None
+            if edition.type is EditionType.EXCERPT
+            else content_key or f"base_texts/{text_id}/{edition_id}.txt",
         )
 
         record = await result.single(strict=True)

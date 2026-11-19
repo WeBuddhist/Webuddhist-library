@@ -1,0 +1,27 @@
+graph TD
+  Work["Work: Heart Sutra"]
+  Text["Text (bo): Heart Sutra, Tibetan<br/>written Expression"]
+  Edition["Edition: critical<br/>written Manifestation<br/>content_key = objects/{edition_id}"]
+  Audio["Audio (bo): morning chant<br/>audio Expression"]
+  Contribution["Contribution<br/>role: singer"]
+  Person["Person: Lama Tsering"]
+  R1["Recording: without music<br/>audio_key = objects/{recording_id}"]
+  R2["Recording: with music<br/>no edition, no cues"]
+  Cue["Cues (already in dev)<br/>start_ms, end_ms + Span"]
+
+  Text -->|TEXT_OF| Work
+  Edition -->|EDITION_OF| Text
+  Audio -->|AUDIO_OF| Work
+  Audio -->|RECITATION_OF| Text
+  R1 -->|RENDITION_OF| Audio
+  R2 -->|RENDITION_OF| Audio
+  R1 -->|"FOLLOWS (same text only)"| Edition
+  Cue -->|CUE_OF| R1
+  Cue -.->|span in| Edition
+  Audio -->|HAS_CONTRIBUTION| Contribution
+  Contribution -->|BY| Person
+
+  classDef written fill:#e8f0fe,stroke:#4a6fa5
+  classDef audio fill:#fdf0e0,stroke:#c07a2c
+  class Text,Edition,Work written
+  class Audio,R1,R2,Cue,Contribution,Person audio

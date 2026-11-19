@@ -100,7 +100,7 @@ nodes:
         target: Nomen
         cardinality: one
         required: false
-      CHILD_OF:
+      HAS_PARENT:
         target: Category
         cardinality: one
         required: false
@@ -139,6 +139,10 @@ nodes:
         target: Text
         cardinality: one
         required: false
+      PART_OF:
+        target: Text
+        cardinality: one
+        required: false
       HAS_LANGUAGE:
         target: Language
         cardinality: one
@@ -166,6 +170,15 @@ nodes:
         type: string
         required: true
         unique: true
+      content_length:
+        type: integer
+        required: true
+      content_key:
+        type: string
+        required: false  # absent exactly when the edition type is excerpt
+      revision:
+        type: integer
+        required: true
       colophon:
         type: string
         required: false
@@ -198,6 +211,49 @@ nodes:
         target: Segmentation
         cardinality: one
         required: false
+      EXCERPT_OF:
+        target: Edition
+        cardinality: one
+        required: false  # present exactly when the edition type is excerpt
+
+  Audio:
+    properties:
+      id:
+        type: string
+        required: true
+        unique: true
+      date:
+        type: string
+        required: false
+    relationships:
+      AUDIO_OF:
+        target: Work
+        cardinality: one
+        required: true
+      RECITATION_OF:
+        target: Text
+        cardinality: one
+        required: true
+      HAS_TITLE:
+        target: Nomen
+        cardinality: one
+        required: false
+      HAS_LANGUAGE:
+        target: Language
+        cardinality: one
+        required: true
+        properties:
+          bcp47:
+            type: string
+            required: false
+      HAS_LICENSE:
+        target: LicenseType
+        cardinality: one
+        required: true
+      HAS_CONTRIBUTION:
+        target: Contribution
+        cardinality: many
+        required: true
 
   Recording:
     properties:
@@ -205,6 +261,9 @@ nodes:
         type: string
         required: true
         unique: true
+      audio_key:
+        type: string
+        required: true
       format:
         type: string
         required: true
@@ -220,33 +279,32 @@ nodes:
       duration_ms:
         type: integer
         required: false
-      date:
-        type: string
-        required: false
     relationships:
-      RECORDING_OF:
-        target: Edition
+      RENDITION_OF:
+        target: Audio
         cardinality: one
         required: true
+      FOLLOWS:
+        target: Edition
+        cardinality: one
+        required: false
       HAS_TITLE:
         target: Nomen
         cardinality: one
         required: false
-      HAS_LANGUAGE:
-        target: Language
-        cardinality: one
-        required: false
-        properties:
-          bcp47:
-            type: string
-            required: false
-      HAS_LICENSE:
-        target: LicenseType
-        cardinality: one
+
+  Cue:
+    properties:
+      start_ms:
+        type: integer
         required: true
-      HAS_CONTRIBUTION:
-        target: Contribution
-        cardinality: many
+      end_ms:
+        type: integer
+        required: true
+    relationships:
+      CUE_OF:
+        target: Recording
+        cardinality: one
         required: true
 
   Source:
@@ -308,9 +366,12 @@ nodes:
       end:
         type: integer
         required: true
+      index:
+        type: integer
+        required: false  # order of an excerpt edition's spans; those are in its source edition's positions
     relationships:
       SPAN_OF:
-        target: Segment | BibliographicMetadata | Note | Mark | Attribute | Page | TableOfContentsSection
+        target: Segment | BibliographicMetadata | Note | Mark | Attribute | Page | TableOfContentsSection | Cue | Edition
         cardinality: one
         required: true
 
@@ -470,6 +531,10 @@ nodes:
         target: Pagination
         cardinality: one
         required: true
+      HAS_METADATA:
+        target: AnnotationMetadata
+        cardinality: one
+        required: false
 
   Page:
     properties:
@@ -586,6 +651,7 @@ nodes:
           - diplomatic
           - critical
           - collated
+          - excerpt
 
   LicenseType:
     enum: true
@@ -631,6 +697,7 @@ nodes:
         required: true
         allowed_values:
           - durchen
+          - footnote
 
   MarkType:
     enum: true
@@ -665,3 +732,5 @@ nodes:
           - translator
           - scholar
           - narrator
+          - singer
+          - musician

@@ -1,4 +1,4 @@
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -6,8 +6,8 @@ from .annotation import (
     PaginationInput,
     SegmentationInput,
 )
-from .base import NonEmptyStr, OpenPechaModel
-from .edition import EditionInput
+from .base import LanguageFilter, NonEmptyStr, OpenPechaModel
+from .edition import EditionInput, ExcerptSource
 from .enums import EditionType
 
 
@@ -24,29 +24,32 @@ class AlignmentPaginationParams(AnnotationSegmentsPaginationParams):
     pass
 
 
-class TextFilter(OpenPechaModel):
-    language: str | None = None
-    title: NonEmptyStr | None = Field(default=None, min_length=2, description="Filter by title, minimum 2 characters")
+class TextFacetFilter(OpenPechaModel):
     category_id: str | None = None
-    tag_id: str | None = Field(default=None, description="Comma-separated application tag IDs.")
-    tag_id_match: Literal["all", "any"] = Field(default="all", description="Match all or any listed tag IDs.")
+    tag_id: list[str] = Field(
+        default=[],
+        description="Application tag IDs. Repeat the parameter for groups that must all match; "
+        "within a group, comma-separated IDs are alternatives. `tag_id=A,B&tag_id=C` means (A or B) and C.",
+    )
     author_id: str | None = None
     bdrc: str | None = None
     wiki: str | None = None
 
     @field_validator("tag_id")
     @classmethod
-    def normalize_tag_ids(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        tag_ids = list(dict.fromkeys(tag_id.strip() for tag_id in value.split(",")))
-        if "" in tag_ids:
-            raise ValueError("tag_id must be a comma-separated list of non-empty tag IDs")
-        return ",".join(tag_ids)
+    def validate_tag_id(cls, value: list[str]) -> list[str]:
+        if any(not tag_id.strip() for group in value for tag_id in group.split(",")):
+            raise ValueError("each tag_id must be a comma-separated list of non-empty tag IDs")
+        return value
 
     @property
-    def tag_ids(self) -> list[str]:
-        return self.tag_id.split(",") if self.tag_id else []
+    def tag_groups(self) -> list[list[str]]:
+        return [[tag_id.strip() for tag_id in group.split(",")] for group in self.tag_id]
+
+
+class TextFilter(TextFacetFilter):
+    language: LanguageFilter | None = None
+    title: NonEmptyStr | None = Field(default=None, min_length=2, description="Filter by title, minimum 2 characters")
 
 
 class TextsQueryParams(PaginationParams, TextFilter):
@@ -72,7 +75,7 @@ class EditionsQueryParams(OpenPechaModel):
 class RelatedSegmentsFilter(OpenPechaModel):
     text_id: str | None = Field(default=None, description="Filter related segments by text ID")
     edition_id: str | None = Field(default=None, description="Filter related segments by edition ID")
-    language: str | None = Field(default=None, description="Filter related segments by text language")
+    language: LanguageFilter | None = Field(default=None, description="Filter related segments by text language")
 
 
 class DirectRelatedSegmentsQueryParams(PaginationParams, RelatedSegmentsFilter):
@@ -83,16 +86,31 @@ class EditionRequestModel(OpenPechaModel):
     metadata: EditionInput
     pagination: PaginationInput | None = None
     segmentation: SegmentationInput | None = None
-    content: NonEmptyStr
+    content: NonEmptyStr | None = None
+    excerpt_of: ExcerptSource | None = Field(
+        default=None, description="For type 'excerpt': the edition and its ordered spans that make up the content"
+    )
+
+    @model_validator(mode="after")
+    def validate_content_source(self) -> Self:
+        if (self.content is None) == (self.excerpt_of is None):
+            raise ValueError("Provide either content or excerpt_of")
+        if (self.excerpt_of is not None) != (self.metadata.type is EditionType.EXCERPT):
+            raise ValueError("Editions of type 'excerpt', and only they, take excerpt_of")
+        if self.excerpt_of is not None and (self.segmentation or self.pagination):
+            raise ValueError("Excerpt editions take their annotations from their source edition")
+        return self
 
     @model_validator(mode="after")
     def validate_spans_within_content(self) -> Self:
-        annotation = self.segmentation or self.pagination
-        if annotation and annotation.max_end > len(self.content):
-            raise ValueError(
-                f"annotation spans extend to {annotation.max_end} but content is {len(self.content)} characters; "
-                "spans must be Unicode code point offsets into the submitted content"
-            )
+        if self.content is None:
+            return self
+        for annotation in (self.segmentation, self.pagination):
+            if annotation is not None and annotation.max_end > len(self.content):
+                raise ValueError(
+                    f"annotation spans extend to {annotation.max_end} but content is {len(self.content)} characters; "
+                    "spans must be Unicode code point offsets into the submitted content"
+                )
         return self
 
     @model_validator(mode="after")
@@ -102,11 +120,8 @@ class EditionRequestModel(OpenPechaModel):
                 raise ValueError("Critical editions must have segmentation_annotation")
             if self.pagination:
                 raise ValueError("Critical editions must not have pagination_annotation")
-        elif self.metadata.type is EditionType.DIPLOMATIC:
-            if not self.pagination:
-                raise ValueError("Diplomatic editions must have pagination_annotation")
-            if self.segmentation:
-                raise ValueError("Diplomatic editions must not have segmentation_annotation")
+        elif self.metadata.type is EditionType.DIPLOMATIC and not self.pagination:
+            raise ValueError("Diplomatic editions must have pagination_annotation")
 
         return self
 
@@ -118,14 +133,6 @@ class LanguageCreateRequest(OpenPechaModel):
 
 class ApplicationCreateRequest(OpenPechaModel):
     name: NonEmptyStr
-
-
-class SearchQueryParams(OpenPechaModel):
-    query: NonEmptyStr = Field(..., description="Search query")
-    search_type: str = Field(default="hybrid", description="Type of search")
-    limit: int = Field(default=10, ge=1, le=100, description="Maximum number of results")
-    title: str | None = Field(None, description="Filter by title")
-    return_text: bool = Field(default=True, description="Include full text content")
 
 
 class SegmentsQueryParams(OpenPechaModel):

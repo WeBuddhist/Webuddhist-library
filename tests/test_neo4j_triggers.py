@@ -1,10 +1,14 @@
 # ruff: noqa: ANN001, S101, SLF001
+import asyncio
 import re
 from dataclasses import dataclass
 
 import pytest
 
-from database.neo4j_triggers import TRIGGERS
+from database.neo4j_triggers import SYSTEM_DATABASE_NAME, TRIGGERS, install_triggers
+from neo4j.exceptions import ClientError
+from tests.conftest import NEO4J_TRIGGER_REFRESH_SECONDS
+from tests.schema_contract import EXPECTED_TRIGGERS
 
 
 @dataclass(frozen=True)
@@ -19,13 +23,16 @@ def _query_with_metadata(setup_query: str, trigger_query: str) -> str:
         {setup_query}
     }}
     WITH createdNodes, createdRelationships, deletedRelationships, deletedNodes
-    CALL apoc.cypher.run(
+    CALL apoc.cypher.doIt(
         $trigger_query,
         {{
             createdNodes: createdNodes,
             createdRelationships: createdRelationships,
             deletedRelationships: deletedRelationships,
-            deletedNodes: deletedNodes
+            deletedNodes: deletedNodes,
+            assignedNodeProperties: {{}}, removedNodeProperties: {{}},
+            assignedRelationshipProperties: {{}}, removedRelationshipProperties: {{}},
+            assignedLabels: {{}}, removedLabels: {{}}
         }}
     ) YIELD value
     RETURN value
@@ -98,8 +105,43 @@ def _no_self_case(rel_type: str) -> str:
     """
 
 
+def _excerpt_edition_case(change: str, *, source: bool = True, spans: bool = True) -> str:
+    excerpt_of = "CREATE (edition)-[:EXCERPT_OF]->(stored)" if source else ""
+    span = "CREATE (:Span {start: 0, end: 1, index: 0})-[:SPAN_OF]->(edition)" if spans else ""
+    return f"""
+    MERGE (etype:EditionType {{name: 'excerpt'}})
+    CREATE (stored:Edition {{id: randomUUID(), content_key: 'objects/stored'}})
+    CREATE (edition:Edition {{id: randomUUID()}})-[:HAS_TYPE]->(etype)
+    {excerpt_of}
+    {span}
+    {change}
+    RETURN [edition, stored] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+    """
+
+
+EXCERPT_EDITION_CASES = {
+    "content_key": _excerpt_edition_case("SET edition.content_key = 'objects/x'"),
+    "no_source": _excerpt_edition_case("", source=False),
+    "no_spans": _excerpt_edition_case("", spans=False),
+    "excerpt_of_excerpt": _excerpt_edition_case("CREATE (edition)-[:EXCERPT_OF]->(edition)", source=False),
+    "two_sources": _excerpt_edition_case(
+        "CREATE (edition)-[:EXCERPT_OF]->(:Edition {id: randomUUID(), content_key: 'objects/other'})"
+    ),
+    "own_segmentation": _excerpt_edition_case("CREATE (edition)-[:HAS_SEGMENTATION]->(:Segmentation {id: randomUUID()})"),
+    "own_note": _excerpt_edition_case("CREATE (:Note {id: randomUUID()})-[:NOTE_OF]->(edition)"),
+    "stored_with_source": _excerpt_edition_case("CREATE (stored)-[:EXCERPT_OF]->(edition)"),
+    "stored_with_spans": _excerpt_edition_case("CREATE (:Span {start: 0, end: 1, index: 0})-[:SPAN_OF]->(stored)"),
+}
+
+
 def _custom_cases() -> dict[str, str]:
     return {
+        "enforce_toc_hierarchy": """
+            CREATE (a:TableOfContentsSection {id: randomUUID()})
+            CREATE (b:TableOfContentsSection {id: randomUUID()})
+            CREATE (a)-[:SUBSECTION_OF]->(b), (b)-[:SUBSECTION_OF]->(a)
+            RETURN [a, b] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
         "enforce_edition_has_segmentation_max_one": """
             CREATE (edition:Edition {id: randomUUID()})
             CREATE (seg_1:Segmentation {id: randomUUID()})
@@ -114,6 +156,7 @@ def _custom_cases() -> dict[str, str]:
             CREATE (edition)-[:HAS_TYPE]->(etype)
             RETURN [edition] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
+        "enforce_excerpt_edition": _excerpt_edition_case("SET edition.content_key = 'objects/x'"),
         "enforce_segment_reference_unique_per_segmentation": """
             CREATE (segmentation:Segmentation {id: randomUUID()})
             CREATE (:Segment {id: randomUUID(), reference: 'duplicate-ref'})-[:SEGMENT_OF]->(segmentation)
@@ -133,10 +176,30 @@ def _custom_cases() -> dict[str, str]:
             CREATE (span)-[rel_2:SPAN_OF]->(page)
             RETURN [span] AS createdNodes, [rel_1, rel_2] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
-        "enforce_recording_contribution_narrator": """
+        "enforce_audio_contribution_role": """
             MERGE (role:RoleType {name: 'translator'})
+            CREATE (audio:Audio {id: randomUUID()})
+            CREATE (audio)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(role)
+            RETURN [audio] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
+        "enforce_audio_recitation_in_work": """
+            CREATE (work:Work {id: randomUUID()}), (other_work:Work {id: randomUUID()})
+            CREATE (text:Text {id: randomUUID()})-[:TEXT_OF {original: true}]->(work)
+            CREATE (audio:Audio {id: randomUUID()})-[:RECITATION_OF]->(text)
+            CREATE (audio)-[:AUDIO_OF]->(other_work)
+            RETURN [audio] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
+        "enforce_recording_follows_recited_text": """
+            CREATE (recited:Text {id: randomUUID()}), (other:Text {id: randomUUID()})
+            CREATE (audio:Audio {id: randomUUID()})-[:RECITATION_OF]->(recited)
+            CREATE (edition:Edition {id: randomUUID()})-[:EDITION_OF]->(other)
+            CREATE (recording:Recording {id: randomUUID()})-[:RENDITION_OF]->(audio)
+            CREATE (recording)-[:FOLLOWS]->(edition)
+            RETURN [recording] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
+        "enforce_cue_requires_follows": """
             CREATE (recording:Recording {id: randomUUID()})
-            CREATE (recording)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(role)
+            CREATE (:Cue {start_ms: 0, end_ms: 100})-[:CUE_OF]->(recording)
             RETURN [recording] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
         "enforce_contribution_by": """
@@ -163,6 +226,10 @@ def _custom_cases() -> dict[str, str]:
             CREATE (span:Span {start: 6, end: 5})
             RETURN [span] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
+        "enforce_cue_start_ms_lt_end_ms": """
+            CREATE (cue:Cue {start_ms: 500, end_ms: 500})
+            RETURN [cue] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+        """,
         "enforce_nomen_no_alternative_chain": """
             CREATE (nomen_1:Nomen {id: randomUUID()})
             CREATE (nomen_2:Nomen {id: randomUUID()})
@@ -179,8 +246,8 @@ def _custom_cases() -> dict[str, str]:
         """,
         "enforce_text_title_unique": """
             CREATE (lang:Language {code: 'test-lang-' + randomUUID()})
-            CREATE (text_a:Text {id: randomUUID()})
-            CREATE (text_b:Text {id: randomUUID()})
+            CREATE (text_a:Text {id: randomUUID()})-[:HAS_LANGUAGE]->(lang)
+            CREATE (text_b:Text {id: randomUUID()})-[:HAS_LANGUAGE]->(lang)
             CREATE (title_a:Nomen {id: randomUUID()})
             CREATE (title_b:Nomen {id: randomUUID()})
             CREATE (text_a)-[:HAS_TITLE]->(title_a)
@@ -235,7 +302,7 @@ def _build_trigger_cases() -> list[TriggerCase]:
         source_label, _, _ = req_meta
         cases.append(TriggerCase(name=name, setup_query=_required_existence_case(source_label)))
 
-    expected = {trigger["name"] for trigger in TRIGGERS}
+    expected = EXPECTED_TRIGGERS
     actual = {case.name for case in cases}
     assert expected == actual, f"Missing trigger cases: {sorted(expected - actual)}"
     return cases
@@ -250,7 +317,38 @@ TRIGGER_QUERY_BY_NAME = {trigger["name"]: trigger["query"] for trigger in TRIGGE
 async def test_each_trigger_rejects_intentional_invalid_data(test_database, case: TriggerCase) -> None:
     query = _query_with_metadata(case.setup_query, TRIGGER_QUERY_BY_NAME[case.name])
     async with test_database.get_session() as session:
-        with pytest.raises(Exception, match=case.name):
+        with pytest.raises(ClientError, match=case.name):
             result = await session.run(query, trigger_query=TRIGGER_QUERY_BY_NAME[case.name])
             await result.consume()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize("setup_query", EXCERPT_EDITION_CASES.values(), ids=EXCERPT_EDITION_CASES.keys())
+async def test_excerpt_edition_trigger_rejects_each_invalid_shape(test_database, setup_query: str) -> None:
+    trigger_query = TRIGGER_QUERY_BY_NAME["enforce_excerpt_edition"]
+    async with test_database.get_session() as session:
+        with pytest.raises(ClientError, match="enforce_excerpt_edition"):
+            result = await session.run(_query_with_metadata(setup_query, trigger_query), trigger_query=trigger_query)
+            await result.consume()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_install_triggers_replaces_stale_triggers(test_database) -> None:
+    driver, database = test_database._driver, test_database._database
+    async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
+        result = await session.run(
+            "CALL apoc.trigger.install($database, 'stale_trigger', 'RETURN 1', {phase: 'before'})",
+            database=database,
+        )
+        await result.consume()
+
+    await install_triggers(driver, database)
+    await asyncio.sleep(NEO4J_TRIGGER_REFRESH_SECONDS)
+
+    async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
+        result = await session.run("CALL apoc.trigger.show($database) YIELD name, query", database=database)
+        stored = {record["name"]: record["query"] async for record in result}
+
+    assert set(stored) == {trigger["name"] for trigger in TRIGGERS}
+    assert all(query.startswith("CYPHER 25 ") for query in stored.values())
 

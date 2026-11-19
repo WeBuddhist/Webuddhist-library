@@ -1,72 +1,83 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from database.database_validator import DatabaseValidator
+from database.content_state import touch_edition
+from database.excerpt_database import read_edition
 from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from database.database import Database
-from identifier import generate_id
-from models.annotation import NoteInput, NoteOutput
+    from database.excerpt_database import ExcerptMap
+from models.annotation import FootnoteInput, NoteInput, NoteOutput, SingleSpanAnnotation, Span
+from models.enums import NoteType
+
+from .single_span import (
+    CREATE_SPAN_AND_METADATA,
+    DELETE_SPAN_AND_METADATA,
+    SINGLE_SPAN_RETURN,
+    create_single_span_annotation,
+)
 
 
 class NoteDatabase:
-    GET_BY_ID_QUERY: LiteralString = """
-    MATCH (span:Span)-[:SPAN_OF]->(n:Note {id: $note_id})
-        -[:NOTE_OF]->(edition:Edition)-[:EDITION_OF]->(text:Text)
-    WHERE span.start < span.end
-    RETURN n.id AS id,
-           edition.id AS edition_id,
-           text.id AS text_id,
-           n.text AS text,
-           {start: span.start, end: span.end} AS span
-    ORDER BY span.start
+    """Notes of every type share one graph shape; durchen covers a span, footnote marks a point (empty span)."""
+
+    GET_BY_ID_QUERY: LiteralString = f"""
+    MATCH (span:Span)-[:SPAN_OF]->(annotation:Note {{id: $note_id}})
+        -[:HAS_TYPE]->(:NoteType {{name: $note_type}}),
+        (annotation)-[:NOTE_OF]->(edition:Edition)-[:EDITION_OF]->(text:Text)
+
+    RETURN annotation.text AS text, {SINGLE_SPAN_RETURN}
+    ORDER BY span.start, span.end
     """
 
-    GET_BY_EDITION_ID_QUERY: LiteralString = """
-    MATCH (edition:Edition {id: $edition_id})<-[:NOTE_OF]-(n:Note)
-        -[:HAS_TYPE]->(:NoteType {name: $note_type}),
+    GET_BY_EDITION_ID_QUERY: LiteralString = f"""
+    MATCH (edition:Edition {{id: $edition_id}})<-[:NOTE_OF]-(annotation:Note)
+        -[:HAS_TYPE]->(annotation_type:NoteType {{name: $note_type}}),
         (edition)-[:EDITION_OF]->(text:Text)
-    MATCH (span:Span)-[:SPAN_OF]->(n)
-    WHERE span.start < span.end
-    RETURN n.id AS id,
-           edition.id AS edition_id,
-           text.id AS text_id,
-           n.text AS text,
-           {start: span.start, end: span.end} AS span
-    ORDER BY span.start
+    MATCH (span:Span)-[:SPAN_OF]->(annotation)
+
+    RETURN annotation.text AS text, {SINGLE_SPAN_RETURN}
+    ORDER BY span.start, span.end, id
     """
 
-    CREATE_QUERY: LiteralString = """
-    MATCH (m:Edition {id: $edition_id}), (nt:NoteType {name: $note_type})
-    CREATE (span:Span {start: $span_start, end: $span_end})
-        -[:SPAN_OF]->(n:Note {id: $note_id, text: $text})
-        -[:NOTE_OF]->(m),
-        (n)-[:HAS_TYPE]->(nt)
-    RETURN n.id AS note_id
+    # MERGE creates a note type on first use, so a new type needs no data migration.
+    CREATE_QUERY: LiteralString = f"""
+    MATCH (edition:Edition {{id: $edition_id}})
+    MERGE (annotation_type:NoteType {{name: $note_type}})
+    CREATE (annotation:Note {{text: $text, id: $annotation_id}})-[:NOTE_OF]->(edition),
+        (annotation)-[:HAS_TYPE]->(annotation_type)
+    {CREATE_SPAN_AND_METADATA}
     """
 
-    DELETE_QUERY: LiteralString = """
-    MATCH (n:Note {id: $note_id})
-    OPTIONAL MATCH (span:Span)-[:SPAN_OF]->(n)
-    DETACH DELETE span, n
-    FINISH
+    GET_EDITION_ID_QUERY: LiteralString = """
+    MATCH (:NoteType {name: $note_type})<-[:HAS_TYPE]-(:Note {id: $note_id})-[:NOTE_OF]->(edition:Edition)
+    RETURN edition.id AS edition_id
     """
 
-    DELETE_ALL_QUERY: LiteralString = """
-    MATCH (n:Note)-[:NOTE_OF]->(:Edition {id: $edition_id})
-    OPTIONAL MATCH (span:Span)-[:SPAN_OF]->(n)
-    DETACH DELETE span, n
-    FINISH
+    DELETE_QUERY: LiteralString = f"""
+    MATCH (annotation:Note {{id: $note_id}})-[:HAS_TYPE]->(:NoteType {{name: $note_type}})
+    {DELETE_SPAN_AND_METADATA}
+    """
+
+    DELETE_ALL_BY_TYPE_QUERY: LiteralString = f"""
+    MATCH (annotation:Note)-[:NOTE_OF]->(:Edition {{id: $edition_id}}),
+        (annotation)-[:HAS_TYPE]->(:NoteType {{name: $note_type}})
+    {DELETE_SPAN_AND_METADATA}
+    """
+
+    DELETE_ALL_QUERY: LiteralString = f"""
+    MATCH (annotation:Note)-[:NOTE_OF]->(:Edition {{id: $edition_id}})
+    {DELETE_SPAN_AND_METADATA}
     """
 
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def get(self, note_id: str) -> NoteOutput:
+    async def get(self, note_id: str, note_type: NoteType = NoteType.DURCHEN) -> NoteOutput:
         async def read(tx: AsyncManagedTransaction) -> NoteOutput:
-            result = await tx.run(NoteDatabase.GET_BY_ID_QUERY, note_id=note_id)
+            result = await tx.run(NoteDatabase.GET_BY_ID_QUERY, note_id=note_id, note_type=str(note_type))
             record = await result.single()
             if record is None:
                 raise DataNotFoundError(f"Note with ID '{note_id}' not found")
@@ -75,24 +86,34 @@ class NoteDatabase:
         async with self._db.get_session() as session:
             return await session.execute_read(read)
 
-    async def get_all(self, edition_id: str, note_type: str = "durchen") -> list[NoteOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[NoteOutput]:
+    async def get_all(self, edition_id: str, note_type: NoteType = NoteType.DURCHEN) -> list[NoteOutput]:
+        """An excerpt edition gets the source's notes that lie wholly inside one of its spans."""
+
+        async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> list[NoteOutput]:
             result = await tx.run(
                 NoteDatabase.GET_BY_EDITION_ID_QUERY,
-                edition_id=edition_id,
-                note_type=note_type,
+                edition_id=source_id,
+                note_type=str(note_type),
             )
-            return [NoteOutput.model_validate(record) for record in await result.data()]
+            notes = [NoteOutput.model_validate(record) for record in await result.data()]
+            return excerpt.project_annotations(notes, whole=True) if excerpt else notes
 
         async with self._db.get_session() as session:
-            return await session.execute_read(read)
+            return await session.execute_read(read_edition, edition_id, read)
 
     async def add_durchen(self, edition_id: str, note: NoteInput) -> str:
         return (await self.add_durchens(edition_id, [note]))[0]
 
     async def add_durchens(self, edition_id: str, notes: list[NoteInput]) -> list[str]:
         async def add_all(tx: AsyncManagedTransaction) -> list[str]:
-            return [await NoteDatabase.add_with_transaction(tx, edition_id, note, "durchen") for note in notes]
+            return [await NoteDatabase.add_with_transaction(tx, edition_id, note, NoteType.DURCHEN) for note in notes]
+
+        async with self._db.get_session() as session:
+            return await session.execute_write(add_all)
+
+    async def add_footnotes(self, edition_id: str, notes: list[FootnoteInput]) -> list[str]:
+        async def add_all(tx: AsyncManagedTransaction) -> list[str]:
+            return [await NoteDatabase.add_footnote_with_transaction(tx, edition_id, note) for note in notes]
 
         async with self._db.get_session() as session:
             return await session.execute_write(add_all)
@@ -102,34 +123,39 @@ class NoteDatabase:
         tx: AsyncManagedTransaction,
         edition_id: str,
         note: NoteInput,
-        note_type: str,
+        note_type: NoteType,
     ) -> str:
-        await DatabaseValidator.validate_edition_spans(tx, edition_id, note.max_end)
-
-        generated_id = generate_id()
-
-        result = await tx.run(
-            NoteDatabase.CREATE_QUERY,
-            edition_id=edition_id,
-            note_id=generated_id,
-            text=note.text,
-            span_start=note.span.start,
-            span_end=note.span.end,
-            note_type=note_type,
+        return await create_single_span_annotation(
+            tx, NoteDatabase.CREATE_QUERY, edition_id, note, text=note.text, note_type=str(note_type)
         )
-        record = await result.single(strict=True)
-        return str(record["note_id"])
 
     @staticmethod
-    async def delete_with_transaction(tx: AsyncManagedTransaction, note_id: str) -> None:
-        await tx.run(NoteDatabase.DELETE_QUERY, note_id=note_id)
-
-    async def delete(self, note_id: str) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(lambda tx: NoteDatabase.delete_with_transaction(tx, note_id))
+    async def add_footnote_with_transaction(tx: AsyncManagedTransaction, edition_id: str, note: FootnoteInput) -> str:
+        point = SingleSpanAnnotation(span=Span(start=note.position, end=note.position), metadata=note.metadata)
+        return await create_single_span_annotation(
+            tx, NoteDatabase.CREATE_QUERY, edition_id, point, text=note.text, note_type=str(NoteType.FOOTNOTE)
+        )
 
     @staticmethod
-    async def delete_all_with_transaction(
-        tx: AsyncManagedTransaction, edition_id: str, _note_type: str = "durchen"
+    async def delete_with_transaction(
+        tx: AsyncManagedTransaction, note_id: str, note_type: NoteType = NoteType.DURCHEN
     ) -> None:
-        await tx.run(NoteDatabase.DELETE_ALL_QUERY, edition_id=edition_id)
+        # Look the note up by type first: an ID of another note type deletes nothing and must not touch its edition.
+        result = await tx.run(NoteDatabase.GET_EDITION_ID_QUERY, note_id=note_id, note_type=str(note_type))
+        record = await result.single()
+        if record is None:
+            return
+        await touch_edition(tx, record["edition_id"])
+        await tx.run(NoteDatabase.DELETE_QUERY, note_id=note_id, note_type=str(note_type))
+
+    async def delete(self, note_id: str, note_type: NoteType = NoteType.DURCHEN) -> None:
+        async with self._db.get_session() as session:
+            await session.execute_write(NoteDatabase.delete_with_transaction, note_id, note_type)
+
+    async def delete_all_footnotes(self, edition_id: str) -> None:
+        async def write(tx: AsyncManagedTransaction) -> None:
+            await touch_edition(tx, edition_id)  # raises DataNotFoundError for an unknown edition
+            await tx.run(NoteDatabase.DELETE_ALL_BY_TYPE_QUERY, edition_id=edition_id, note_type=str(NoteType.FOOTNOTE))
+
+        async with self._db.get_session() as session:
+            await session.execute_write(write)
