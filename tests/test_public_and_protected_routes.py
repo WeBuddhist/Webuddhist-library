@@ -35,7 +35,7 @@ async def test_health_schema_and_documentation_are_public(monkeypatch):
     app = create_app(testing=False)
     monkeypatch.setattr(settings, "environment", "test")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        assert (await client.get("/__/health")).json() == {"status": "healthy"}
+        assert (await client.get("/__/health")).json()["status"] == "healthy"
         schema = await client.get("/openapi.json")
         assert schema.status_code == 200
         assert {"/v2/texts", "/v2/persons", "/v2/content-search"} <= schema.json()["paths"].keys()

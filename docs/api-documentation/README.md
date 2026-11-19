@@ -5,9 +5,9 @@ This folder documents the public FastAPI routes exposed by the backend. All endp
 ## Base URLs
 
 ```text
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://library.webuddhist.com
+Testing: https://testing.library.webuddhist.com
+Production: https://library-prod.webuddhist.com
 Local FastAPI app: http://127.0.0.1:8000
 ```
 
@@ -19,7 +19,7 @@ Application-scoped routes also require or accept `X-Application`:
 
 - Required for `categories` and `tags`.
 - Optional for `texts` and `segments`; when present, application-owned tags are filtered to that application.
-- App-bound API keys must use the same `X-Application` value as the key's bound application.
+- App-bound API keys: when `X-Application` is sent, it must match the key's bound application (otherwise `401`). When it is left out, the request is scoped to the key's bound application; routes where the header is required still return `422` without it.
 - Category/tag writes enforce application ownership. Work tag replacement preserves other applications' tags. Both the current and replacement category must be authorized when recategorizing a Work.
 - Application creation/deletion requires an unbound administrative key. Unbound keys can select a scope with `X-Application`; without it, their Work mutations apply across applications.
 

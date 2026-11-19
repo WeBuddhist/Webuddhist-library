@@ -18,8 +18,24 @@ APPLICATION_HEADER = "X-Application"
 
 api_key_header = APIKeyHeader(name=API_KEY_HEADER, auto_error=False)
 
-OptionalAppHeader = Annotated[str | None, Header(alias="X-Application")]
 RequiredAppHeader = Annotated[str, Header(alias="X-Application")]
+
+
+def get_optional_application(
+    request: Request,
+    x_application: Annotated[str | None, Header(alias="X-Application")] = None,
+) -> str | None:
+    """The X-Application header, or a bound key's own application when the header is left out.
+
+    Runs after get_api_key (a router dependency), which has already rejected a header that
+    names a different application.
+    """
+    if x_application is not None:
+        return x_application
+    return getattr(request.state, "api_key_info", {}).get("bound_application_id")
+
+
+OptionalAppHeader = Annotated[str | None, Depends(get_optional_application)]
 
 
 def get_db(request: Request) -> Database:
@@ -69,10 +85,12 @@ async def get_api_key(
 
     request.state.api_key_info = result
 
+    # A bound key already names its application, so a missing X-Application is accepted
+    # (get_optional_application then scopes the request to it); a different one is rejected.
     bound_application_id = result.get("bound_application_id")
     if bound_application_id is not None:
         x_application = request.headers.get(APPLICATION_HEADER)
-        if x_application != bound_application_id:
+        if x_application is not None and x_application != bound_application_id:
             logger.warning(
                 "API key application mismatch: key bound to %s, request for %s",
                 bound_application_id,
