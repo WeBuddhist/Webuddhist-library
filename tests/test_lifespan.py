@@ -64,6 +64,9 @@ async def test_lifespan_cleans_up_every_acquired_resource(monkeypatch, failure):
         "settings",
         SimpleNamespace(
             otel_enabled=False,
+            environment="",
+            app_version="",
+            root_path="",
             opensearch_endpoint="http://localhost:9200",
             neo4j_uri="bolt://localhost",
             neo4j_username="test",

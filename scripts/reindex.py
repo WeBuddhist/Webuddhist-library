@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from catalog_search import CatalogSearchService
 from catalog_search.service import _index_body as catalog_mapping
-from config import settings
+from config import check_environment, settings
 from content_search import ContentSearchService
 from content_search.service import _index_body as content_mapping
 from database import Database
@@ -107,6 +107,7 @@ async def main() -> None:
         help="Confirm API/import writers are stopped",
     )
     parser.parse_args()
+    check_environment(settings)
     async with AsyncExitStack() as stack:
         db = await stack.enter_async_context(
             Database(settings.neo4j_uri, (settings.neo4j_username, settings.neo4j_password), settings.neo4j_database)

@@ -28,5 +28,33 @@ class Settings(BaseSettings):
     environment: str = ""
     otel_enabled: bool = False
 
+    # Release shown in Swagger and /__/health; the deploy writes the tag (prod) or branch-sha (dev, testing).
+    app_version: str = ""
+    # Public path prefix in front of the API, for example "/api" behind library.webuddhist.com/api.
+    root_path: str = ""
+
+
+TESTING_ENVIRONMENT = "testing"
+TESTING_INDEX_PREFIX = "testing-"
+
+
+def check_environment(config: Settings) -> None:
+    """Refuse settings that would let one environment write into another environment's data.
+
+    Testing shares the prod OpenSearch domain, so its indexes must carry their own prefix.
+    """
+    if config.environment != TESTING_ENVIRONMENT:
+        return
+    wrong = [
+        name
+        for name in (config.opensearch_index, config.opensearch_catalog_index)
+        if not name.startswith(TESTING_INDEX_PREFIX)
+    ]
+    if wrong:
+        raise RuntimeError(
+            f"ENVIRONMENT={TESTING_ENVIRONMENT} needs search index names that start with "
+            f"{TESTING_INDEX_PREFIX!r}; got {', '.join(wrong)}"
+        )
+
 
 settings = Settings()
