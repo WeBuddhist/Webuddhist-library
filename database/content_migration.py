@@ -17,7 +17,8 @@ async def migrate_content(db: Database, storage: Storage, *, apply: bool = False
         async with db.get_session() as session:
             result = await session.run(
                 """
-                MATCH (e:Edition)-[:EDITION_OF]->(t:Text) WHERE e.id > $after
+                MATCH (e:Edition)-[:EDITION_OF]->(t:Text)
+                WHERE e.id > $after AND NOT (e)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'})
                 RETURN e.id AS id, t.id AS text_id, e.content_key AS key, e.content_length AS length,
                        e.revision AS revision
                 ORDER BY e.id LIMIT 100

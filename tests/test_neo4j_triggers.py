@@ -105,6 +105,35 @@ def _no_self_case(rel_type: str) -> str:
     """
 
 
+def _excerpt_edition_case(change: str, *, source: bool = True, spans: bool = True) -> str:
+    excerpt_of = "CREATE (edition)-[:EXCERPT_OF]->(stored)" if source else ""
+    span = "CREATE (:Span {start: 0, end: 1, index: 0})-[:SPAN_OF]->(edition)" if spans else ""
+    return f"""
+    MERGE (etype:EditionType {{name: 'excerpt'}})
+    CREATE (stored:Edition {{id: randomUUID(), content_key: 'objects/stored'}})
+    CREATE (edition:Edition {{id: randomUUID()}})-[:HAS_TYPE]->(etype)
+    {excerpt_of}
+    {span}
+    {change}
+    RETURN [edition, stored] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
+    """
+
+
+EXCERPT_EDITION_CASES = {
+    "content_key": _excerpt_edition_case("SET edition.content_key = 'objects/x'"),
+    "no_source": _excerpt_edition_case("", source=False),
+    "no_spans": _excerpt_edition_case("", spans=False),
+    "excerpt_of_excerpt": _excerpt_edition_case("CREATE (edition)-[:EXCERPT_OF]->(edition)", source=False),
+    "two_sources": _excerpt_edition_case(
+        "CREATE (edition)-[:EXCERPT_OF]->(:Edition {id: randomUUID(), content_key: 'objects/other'})"
+    ),
+    "own_segmentation": _excerpt_edition_case("CREATE (edition)-[:HAS_SEGMENTATION]->(:Segmentation {id: randomUUID()})"),
+    "own_note": _excerpt_edition_case("CREATE (:Note {id: randomUUID()})-[:NOTE_OF]->(edition)"),
+    "stored_with_source": _excerpt_edition_case("CREATE (stored)-[:EXCERPT_OF]->(edition)"),
+    "stored_with_spans": _excerpt_edition_case("CREATE (:Span {start: 0, end: 1, index: 0})-[:SPAN_OF]->(stored)"),
+}
+
+
 def _custom_cases() -> dict[str, str]:
     return {
         "enforce_toc_hierarchy": """
@@ -127,6 +156,7 @@ def _custom_cases() -> dict[str, str]:
             CREATE (edition)-[:HAS_TYPE]->(etype)
             RETURN [edition] AS createdNodes, [] AS createdRelationships, [] AS deletedRelationships, [] AS deletedNodes
         """,
+        "enforce_excerpt_edition": _excerpt_edition_case("SET edition.content_key = 'objects/x'"),
         "enforce_segment_reference_unique_per_segmentation": """
             CREATE (segmentation:Segmentation {id: randomUUID()})
             CREATE (:Segment {id: randomUUID(), reference: 'duplicate-ref'})-[:SEGMENT_OF]->(segmentation)
@@ -289,6 +319,16 @@ async def test_each_trigger_rejects_intentional_invalid_data(test_database, case
     async with test_database.get_session() as session:
         with pytest.raises(ClientError, match=case.name):
             result = await session.run(query, trigger_query=TRIGGER_QUERY_BY_NAME[case.name])
+            await result.consume()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize("setup_query", EXCERPT_EDITION_CASES.values(), ids=EXCERPT_EDITION_CASES.keys())
+async def test_excerpt_edition_trigger_rejects_each_invalid_shape(test_database, setup_query: str) -> None:
+    trigger_query = TRIGGER_QUERY_BY_NAME["enforce_excerpt_edition"]
+    async with test_database.get_session() as session:
+        with pytest.raises(ClientError, match="enforce_excerpt_edition"):
+            result = await session.run(_query_with_metadata(setup_query, trigger_query), trigger_query=trigger_query)
             await result.consume()
 
 

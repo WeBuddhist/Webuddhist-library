@@ -54,7 +54,7 @@ class ContentSearchService:
                 return []
         except DataNotFoundError:
             return []
-        content = await storage.read_text(state.object_key)
+        content = await storage.read_text(state.stored_key)
         if len(content) != state.length:
             raise DataValidationError(f"Stored content length differs for edition {edition_id}")
         return [
@@ -62,7 +62,7 @@ class ContentSearchService:
                 "id": f"{edition_id}:{offset}",
                 "edition_id": edition_id,
                 "text_id": state.text_id,
-                "object_key": state.object_key,
+                "object_key": state.stored_key,
                 "offset": offset,
                 "content": content[offset : offset + CHUNK_CHARS],
             }

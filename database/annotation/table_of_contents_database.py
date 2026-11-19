@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, LiteralString
 
 from database.content_state import read_value, touch_annotation, touch_edition
 from database.database_validator import DatabaseValidator
+from database.excerpt_database import read_edition
 from database.nomen_database import NomenDatabase
 from exceptions import DataNotFoundError
 from identifier import generate_id
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, Record
 
     from database.database import Database
+    from database.excerpt_database import ExcerptMap
 
 
 class TableOfContentsDatabase:
@@ -208,10 +210,14 @@ class TableOfContentsDatabase:
             return await session.execute_read(read)
 
     async def get_all(self, edition_id: str) -> list[TableOfContentsOutput]:
+        async def read(
+            tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None
+        ) -> list[TableOfContentsOutput]:
+            tocs = await TableOfContentsDatabase.get_all_with_transaction(tx, source_id)
+            return excerpt.project_tocs(tocs) if excerpt else tocs
+
         async with self._db.get_session() as session:
-            return await session.execute_read(
-                read_value, edition_id, lambda tx: TableOfContentsDatabase.get_all_with_transaction(tx, edition_id)
-            )
+            return await session.execute_read(read_edition, edition_id, read)
 
     async def add(self, edition_id: str, toc: TableOfContentsInput) -> str:
         async with self._db.get_session() as session:

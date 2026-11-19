@@ -1,12 +1,14 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from database.content_state import read_value, touch_edition
+from database.content_state import touch_edition
+from database.excerpt_database import read_edition
 from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from database.database import Database
+    from database.excerpt_database import ExcerptMap
 from models.annotation import FootnoteInput, NoteInput, NoteOutput, SingleSpanAnnotation, Span
 from models.enums import NoteType
 
@@ -85,16 +87,19 @@ class NoteDatabase:
             return await session.execute_read(read)
 
     async def get_all(self, edition_id: str, note_type: NoteType = NoteType.DURCHEN) -> list[NoteOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[NoteOutput]:
+        """An excerpt edition gets the source's notes that lie wholly inside one of its spans."""
+
+        async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> list[NoteOutput]:
             result = await tx.run(
                 NoteDatabase.GET_BY_EDITION_ID_QUERY,
-                edition_id=edition_id,
+                edition_id=source_id,
                 note_type=str(note_type),
             )
-            return [NoteOutput.model_validate(record) for record in await result.data()]
+            notes = [NoteOutput.model_validate(record) for record in await result.data()]
+            return excerpt.project_annotations(notes, whole=True) if excerpt else notes
 
         async with self._db.get_session() as session:
-            return await session.execute_read(read_value, edition_id, read)
+            return await session.execute_read(read_edition, edition_id, read)
 
     async def add_durchen(self, edition_id: str, note: NoteInput) -> str:
         return (await self.add_durchens(edition_id, [note]))[0]

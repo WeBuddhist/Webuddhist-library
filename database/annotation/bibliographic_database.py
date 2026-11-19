@@ -1,12 +1,14 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from database.content_state import read_value, touch_annotation
+from database.content_state import touch_annotation
+from database.excerpt_database import read_edition
 from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from database.database import Database
+    from database.excerpt_database import ExcerptMap
 from models.annotation import BibliographicMetadataInput, BibliographicMetadataOutput
 
 from .single_span import (
@@ -73,12 +75,15 @@ class BibliographicDatabase:
             return await session.execute_read(read)
 
     async def get_all(self, edition_id: str) -> list[BibliographicMetadataOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[BibliographicMetadataOutput]:
-            result = await tx.run(BibliographicDatabase.GET_BY_EDITION_ID_QUERY, edition_id=edition_id)
-            return [BibliographicMetadataOutput.model_validate(record) for record in await result.data()]
+        async def read(
+            tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None
+        ) -> list[BibliographicMetadataOutput]:
+            result = await tx.run(BibliographicDatabase.GET_BY_EDITION_ID_QUERY, edition_id=source_id)
+            metadata = [BibliographicMetadataOutput.model_validate(record) for record in await result.data()]
+            return excerpt.project_annotations(metadata) if excerpt else metadata
 
         async with self._db.get_session() as session:
-            return await session.execute_read(read_value, edition_id, read)
+            return await session.execute_read(read_edition, edition_id, read)
 
     async def add(
         self,

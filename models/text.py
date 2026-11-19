@@ -16,12 +16,15 @@ class TextBase(OpenPechaModel):
     language: NonEmptyStr
     commentary_of: NonEmptyStr | None = None
     translation_of: NonEmptyStr | None = None
+    part_of: NonEmptyStr | None = Field(default=None, description="The larger text this text is a part of")
     license: LicenseType = LicenseType.PUBLIC_DOMAIN_MARK
 
     @model_validator(mode="after")
     def validate_text(self) -> Self:
         if self.commentary_of and self.translation_of:
             raise ValueError("Cannot be both a commentary and translation")
+        if self.part_of and (self.commentary_of or self.translation_of):
+            raise ValueError("A part of a text cannot also be a commentary or translation")
 
         base_language = self.language.split("-")[0].lower()
         title_base_languages = {lang.split("-")[0].lower() for lang in self.title.root}
@@ -82,5 +85,6 @@ class TextOutput(TextBase):
     contributions: list[ContributionOutputItem]
     commentaries: list[str] = Field(default_factory=list)
     translations: list[str] = Field(default_factory=list)
+    parts: list[str] = Field(default_factory=list)
     editions: list[str] = Field(default_factory=list)
     tag_ids: list[str] = Field(default_factory=list)

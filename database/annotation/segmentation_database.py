@@ -3,12 +3,14 @@ from typing import TYPE_CHECKING, LiteralString
 from neo4j.exceptions import ResultNotSingleError
 
 from database.content_state import advance_revision, lock_connected_editions, read_value, touch_edition
+from database.excerpt_database import read_edition
 from exceptions import DataConflictError, DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from database.database import Database
+    from database.excerpt_database import ExcerptMap
 from database.database_validator import DatabaseValidator
 from identifier import generate_id
 from models.annotation import SegmentationInput, SegmentationOutput, SegmentOutput
@@ -24,7 +26,7 @@ class SegmentationDatabase:
     ORDER BY id
     """
 
-    _GET_SEGMENTS_QUERY_BODY: LiteralString = """
+    _SEGMENT_LINES: LiteralString = """
     MATCH (segment:Segment)-[:SEGMENT_OF]->(segmentation)
     CALL (segment) {
         MATCH (span:Span)-[:SPAN_OF]->(segment)
@@ -35,8 +37,20 @@ class SegmentationDatabase:
     }
     WITH segment, lines, min_start
     WHERE size(lines) > 0
+    """
+
+    _SEGMENTS_RETURN: LiteralString = """
     ORDER BY min_start, lines[-1].end, segment.id
     RETURN segment.id AS id, segment.type AS type, segment.reference AS reference, lines
+    """
+
+    _GET_SEGMENTS_QUERY_BODY: LiteralString = _SEGMENT_LINES + _SEGMENTS_RETURN
+
+    GET_SEGMENTS_IN_RANGE_QUERY: LiteralString = f"""
+    MATCH (:Edition {{id: $edition_id}})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
+    {_SEGMENT_LINES}
+      AND min_start <= $end AND lines[-1].end >= $start
+    {_SEGMENTS_RETURN}
     """
 
     GET_BY_EDITION_ID_QUERY: LiteralString = f"""
@@ -94,10 +108,16 @@ class SegmentationDatabase:
         self._db = db
 
     async def get_by_edition(self, edition_id: str) -> SegmentationOutput:
+        """An excerpt edition's segmentation is its source's, identified by the excerpt edition."""
+
+        async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> SegmentationOutput:
+            segmentation = await SegmentationDatabase.get_by_edition_with_transaction(tx, source_id)
+            if excerpt is None:
+                return segmentation
+            return segmentation.model_copy(update=excerpt.owner | {"id": excerpt.edition_id})
+
         async with self._db.get_session() as session:
-            return await session.execute_read(
-                read_value, edition_id, lambda tx: SegmentationDatabase.get_by_edition_with_transaction(tx, edition_id)
-            )
+            return await session.execute_read(read_edition, edition_id, read)
 
     async def get_segments_by_edition(
         self,
@@ -106,17 +126,23 @@ class SegmentationDatabase:
         offset: int,
         limit: int,
     ) -> list[SegmentOutput]:
+        """An excerpt edition gets the source segments overlapping each of its spans, trimmed to it."""
+
+        async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> list[SegmentOutput]:
+            if excerpt is None:
+                return await SegmentationDatabase.get_segments_by_edition_with_transaction(
+                    tx, source_id, offset=offset, limit=limit
+                )
+            await SegmentationDatabase.get_by_edition_with_transaction(tx, source_id)
+            segments: list[SegmentOutput] = []
+            for piece in excerpt.slices:
+                query = SegmentationDatabase.GET_SEGMENTS_IN_RANGE_QUERY
+                result = await tx.run(query, edition_id=source_id, start=piece.start, end=piece.end)
+                segments += piece.project_segments([SegmentOutput.model_validate(r) for r in await result.data()])
+            return segments[offset : offset + limit]
+
         async with self._db.get_session() as session:
-            return await session.execute_read(
-                read_value,
-                edition_id,
-                lambda tx: SegmentationDatabase.get_segments_by_edition_with_transaction(
-                    tx,
-                    edition_id,
-                    offset=offset,
-                    limit=limit,
-                ),
-            )
+            return await session.execute_read(read_edition, edition_id, read)
 
     async def get_all_segments_by_edition(self, edition_id: str) -> list[SegmentOutput]:
         async with self._db.get_session() as session:

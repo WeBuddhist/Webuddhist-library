@@ -256,6 +256,7 @@ GET /v2/texts/{text_id}
   "license": "public",
   "commentaries": ["C12345678"],
   "translations": ["TR12345678"],
+  "parts": ["PT12345678"],
   "editions": ["M12345678"]
 }
 ```
@@ -361,6 +362,7 @@ POST /v2/texts
 | `alt_titles`     | array  | Alternative localized titles                       |
 | `translation_of` | string | Text ID this is a translation of                   |
 | `commentary_of`  | string | Text ID this is a commentary of                    |
+| `part_of`        | string | Text ID of the larger text this text is a part of, such as one chapter of it |
 | `license`        | string | License type (see [License Types](#license-types)) |
 | `tag_ids`        | array  | Tag IDs to attach to the work behind this text |
 
@@ -368,6 +370,7 @@ POST /v2/texts
 
 - `title` must contain a localized title for the text language or its base language. For example, language `bo-x-ewts` can use a `bo` title.
 - A text cannot set both `translation_of` and `commentary_of`.
+- A part (`part_of`) is an original text with its own Work, category, tags and translations, so it cannot also set `translation_of` or `commentary_of`. Its content usually comes from an [excerpt edition](editions-api.md#excerpt-editions) of the whole text's edition. The whole text lists its parts in `parts`.
 - Translations inherit their Work category. Supplying `category_id`, including `null` or the inherited value, returns `422`.
 - Creation-time tags are added to the shared Work and must belong to the authorized application.
 - `contributions` may be omitted or empty when attribution is unknown. Each entry must include either `type` with `id` or `bdrc_id` depending on contribution type.
@@ -554,7 +557,7 @@ No response body is returned.
 **Error Responses:**
 
 - `404 Not Found`: Text does not exist
-- `409 Conflict`: Text has editions, audios, translations, or commentaries pointing to it
+- `409 Conflict`: Text has editions, audios, translations, commentaries, or parts pointing to it
 - `401 Unauthorized`: Missing or invalid API key in deployed environments
 
 **Example Usage:**
@@ -638,7 +641,7 @@ All fields are optional. Only include fields you want to update.
 | `tag_ids`       | array  | Replaces only the authorized application's Work tags; other applications' tags remain |
 
 
-**Note:** You cannot update `translation_of` or `commentary_of` via PATCH. These are set during creation. PATCH requires at least one field, rejects `null`, and rejects extra fields.
+**Note:** You cannot update `translation_of`, `commentary_of`, or `part_of` via PATCH. These are set during creation. PATCH requires at least one field, rejects `null`, and rejects extra fields.
 
 `contributions` replaces the text's whole contribution list. `tag_ids` replaces the Work tags within the authorized application scope, preserving tags owned by other applications; `[]` clears that scope. Category changes require ownership of both the existing and replacement category. Reassigning the same category is a no-op and does not require `expected_category_id`.
 

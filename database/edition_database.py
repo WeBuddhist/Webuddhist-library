@@ -11,7 +11,9 @@ from .annotation.note_database import NoteDatabase
 from .annotation.pagination_database import PaginationDatabase
 from .annotation.segmentation_database import SegmentationDatabase
 from .annotation.table_of_contents_database import TableOfContentsDatabase
+from .content_state import advance_revision, read_state
 from .database_validator import DatabaseValidator
+from .excerpt_database import ExcerptDatabase
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
 from .recording_database import RecordingDatabase
@@ -21,7 +23,7 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, AsyncSession
 
     from models.annotation import PaginationInput, SegmentationInput
-    from models.edition import EditionInput
+    from models.edition import EditionInput, ExcerptSource
     from models.text import TextInput
 
     from .database import Database
@@ -56,6 +58,14 @@ class EditionDatabase:
         } THEN [(m)-[:HAS_INCIPIT_TITLE]->(:Nomen)<-[:ALTERNATIVE_OF]-(an:Nomen) |
             apoc.map.fromPairs([(an)-[:HAS_LOCALIZATION]->(lt:LocalizedText)-[r:HAS_LANGUAGE]->(l:Language) |
                 [coalesce(r.bcp47, l.code), lt.text]])] ELSE null END,
+        excerpt_of: [(m)-[:EXCERPT_OF]->(source:Edition) | {
+            edition_id: source.id,
+            spans: COLLECT {
+                MATCH (span:Span)-[:SPAN_OF]->(m)
+                WITH span ORDER BY span.index
+                RETURN {start: span.start, end: span.end}
+            }
+        }][0],
         text_id: e.id
     } as edition
     """
@@ -165,6 +175,7 @@ class EditionDatabase:
         pagination: PaginationInput | None = None,
         segmentation: SegmentationInput | None = None,
         content_key: str | None = None,
+        excerpt_of: ExcerptSource | None = None,
     ) -> str:
         async def transaction_function(tx: AsyncManagedTransaction) -> str:
             if text:
@@ -173,6 +184,9 @@ class EditionDatabase:
             created_edition_id = await self.create_with_transaction(
                 tx, edition, text_id, edition_id, content_length, content_key=content_key
             )
+
+            if excerpt_of is not None:
+                await ExcerptDatabase.add_with_transaction(tx, created_edition_id, text_id, excerpt_of)
 
             if segmentation is not None:
                 await SegmentationDatabase.add_with_transaction(tx, created_edition_id, segmentation)
@@ -191,8 +205,16 @@ class EditionDatabase:
 
     @staticmethod
     async def delete_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> None:
-        # Locks the edition, so the check below sees every recording that follows it.
-        await SegmentationDatabase.delete_by_edition_with_transaction(tx, edition_id)
+        # Locks the edition, so the checks below see every recording following it and every excerpt edition of it.
+        await advance_revision(tx, edition_id)
+        if (await read_state(tx, edition_id)).is_excerpt:
+            await tx.run(ExcerptDatabase.DELETE_QUERY, edition_id=edition_id)
+        elif users := await ExcerptDatabase.excerpt_editions_of_with_transaction(tx, edition_id):
+            raise DataConflictError(
+                f"Edition '{edition_id}' cannot be deleted because excerpt edition(s) {', '.join(users)} use it"
+            )
+        else:
+            await SegmentationDatabase.delete_by_edition_with_transaction(tx, edition_id)
         # Audio outlives the edition: deleting it only removes FOLLOWS, so cues would lose their target.
         cued = await RecordingDatabase.count_cued_followers_with_transaction(tx, edition_id)
         if cued:
@@ -240,7 +262,9 @@ class EditionDatabase:
             incipit_nomen_id=incipit_nomen_id,
             source=edition.source,
             content_length=content_length,
-            content_key=content_key or f"base_texts/{text_id}/{edition_id}.txt",
+            content_key=None
+            if edition.type is EditionType.EXCERPT
+            else content_key or f"base_texts/{text_id}/{edition_id}.txt",
         )
 
         record = await result.single(strict=True)

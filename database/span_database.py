@@ -71,6 +71,17 @@ def _adjust_annotation_for_replace(
     return (start, replace_start + new_len)  # start < replace_start < end <= replace_end
 
 
+def adjust_annotation_span(
+    start: int, end: int, edit_start: int, edit_end: int, new_len: int
+) -> tuple[int, int] | None:
+    """Span after replacing [edit_start, edit_end) with new_len characters; None when the edit removes it."""
+    if edit_start == edit_end:
+        return _adjust_annotation_for_insert(start, end, edit_start, new_len)
+    if new_len == 0:
+        return _adjust_span_for_delete(start, end, edit_start, edit_end)
+    return _adjust_annotation_for_replace(start, end, edit_start, edit_end, new_len)
+
+
 def _adjust_continuous_entities(
     entities: dict[tuple[str, str, bool], list[tuple[str, int, int]]], start: int, end: int, new_len: int
 ) -> dict[str, tuple[int, int]]:
@@ -226,12 +237,6 @@ class SpanDatabase:
         result = await tx.run(SpanDatabase.FIND_ANNOTATION_SPANS_QUERY, edition_id=edition_id)
         for record in await result.data():
             old = (record["span_start"], record["span_end"])
-            if start == end:
-                adjusted = _adjust_annotation_for_insert(*old, start, new_len)
-            elif new_len == 0:
-                adjusted = _adjust_span_for_delete(*old, start, end)
-            else:
-                adjusted = _adjust_annotation_for_replace(*old, start, end, new_len)
-            record_change(record["span_id"], old, adjusted)
+            record_change(record["span_id"], old, adjust_annotation_span(*old, start, end, new_len))
 
         await SpanDatabase._flush_batch(tx, updates, deletes)

@@ -37,8 +37,10 @@ class TextDatabase:
         wiki: e.wiki,
         commentary_of: [(e)-[:COMMENTARY_OF]->(c_target:Text) | c_target.id][0],
         translation_of: [(e)-[:TRANSLATION_OF]->(t_target:Text) | t_target.id][0],
+        part_of: [(e)-[:PART_OF]->(whole:Text) | whole.id][0],
         commentaries: [(e)<-[:COMMENTARY_OF]-(c_child:Text) | c_child.id],
         translations: [(e)<-[:TRANSLATION_OF]-(t_child:Text) | t_child.id],
+        parts: [(e)<-[:PART_OF]-(part:Text) | part.id],
         contributions: """
         + contributions_return("e")
         + """,
@@ -180,9 +182,11 @@ class TextDatabase:
     """
 
     CREATE_STANDALONE_QUERY: LiteralString = f"""
+    OPTIONAL MATCH (whole:Text {{id: $target_id}})
     CREATE (w:Work {{id: $work_id}})
     CREATE (e:Text {{id: $text_id, bdrc: $bdrc, wiki: $wiki, date: $date}})
     MERGE (e)-[:TEXT_OF {{original: $original}}]->(w)
+    CALL (*) {{ WHEN whole IS NOT NULL THEN {{ CREATE (e)-[:PART_OF]->(whole) }} }}
     {_CREATE_TEXT_LINKS}
     """
 
@@ -220,6 +224,7 @@ class TextDatabase:
            count { (e)<-[:EDITION_OF]-(:Edition) } AS edition_count,
            count { (e)<-[:TRANSLATION_OF]-(:Text) } AS translation_count,
            count { (e)<-[:COMMENTARY_OF]-(:Text) } AS commentary_count,
+           count { (e)<-[:PART_OF]-(:Text) } AS part_count,
            count { (e)<-[:RECITATION_OF]-(:Audio) } AS audio_count
     """
 
@@ -346,6 +351,8 @@ class TextDatabase:
                 blockers.append(f"{record['translation_count']} translation(s)")
             if record["commentary_count"]:
                 blockers.append(f"{record['commentary_count']} commentary/commentaries")
+            if record["part_count"]:
+                blockers.append(f"{record['part_count']} part(s)")
             if record["audio_count"]:
                 blockers.append(f"{record['audio_count']} audio(s)")
             if blockers:
@@ -379,7 +386,7 @@ class TextDatabase:
             "language_code": base_lang_code,
             "bcp47_tag": text.language,
             "title_nomen_id": title_nomen_id,
-            "target_id": text.translation_of or text.commentary_of,
+            "target_id": text.translation_of or text.commentary_of or text.part_of,
             "license": text.license.value,
         }
 
@@ -419,7 +426,7 @@ class TextDatabase:
 
     @staticmethod
     async def _validate_related_text(tx: AsyncManagedTransaction, text: TextInput) -> None:
-        target_id = text.translation_of or text.commentary_of
+        target_id = text.translation_of or text.commentary_of or text.part_of
         if not target_id:
             return
         record = await TextDatabase._get_for_update(tx, target_id)

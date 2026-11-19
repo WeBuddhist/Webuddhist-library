@@ -55,6 +55,7 @@ class EditionType(StrEnum):
     DIPLOMATIC = "diplomatic"
     CRITICAL = "critical"
     COLLATED = "collated"
+    EXCERPT = "excerpt"
 
 
 class LicenseType(StrEnum):

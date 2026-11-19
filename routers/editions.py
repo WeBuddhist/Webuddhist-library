@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Body, Depends, Path, Query, status
 
-from content_service import edit_content
+from content_service import edit_content, read_content
 from database.content_state import read_state
 from dependencies import get_db, get_storage
 from models.alignment import EditionAlignmentOutput
@@ -71,9 +71,7 @@ async def get_content(
     span_end: Annotated[int | None, Query(description="End position for text slice")] = None,
 ) -> str:
     """Fetch base text content for an edition."""
-    async with db.get_session() as session:
-        state = await session.execute_read(read_state, edition_id)
-    base_text = await storage.read_text(state.object_key)
+    base_text = await read_content(db, storage, edition_id)
 
     if span_start is not None and span_end is not None:
         base_text = base_text[span_start:span_end]
@@ -95,7 +93,7 @@ async def get_content_url(
     async with db.get_session() as session:
         state = await session.execute_read(read_state, edition_id)
     issued_at = datetime.now(UTC)
-    url = await storage.generate_url(state.object_key, expires_in=CONTENT_URL_EXPIRATION_SECONDS)
+    url = await storage.generate_url(state.stored_key, expires_in=CONTENT_URL_EXPIRATION_SECONDS)
     return PresignedUrlResponse(
         url=url,
         expires_at=issued_at + timedelta(seconds=CONTENT_URL_EXPIRATION_SECONDS),

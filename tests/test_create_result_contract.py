@@ -112,7 +112,7 @@ def assert_strict_neo4j_id(result, returned_id, field):
 
 @pytest.fixture
 def skip_span_validation(monkeypatch):
-    state = ContentState("edition-id", "text-id", "key", 1, 0)
+    state = ContentState("edition-id", "text-id", "key", 1, 0, is_excerpt=False)
     for module in (single_span_module, pagination_module, segmentation_module, toc_module):
         monkeypatch.setattr(module, "touch_edition", AsyncMock(return_value=state))
 
@@ -159,7 +159,7 @@ async def test_footnote_create_stores_empty_span_with_note_type(monkeypatch, ski
 
 
 async def test_footnote_create_rejects_position_beyond_content(monkeypatch):
-    state = ContentState("edition-id", "text-id", "key", 5, 0)
+    state = ContentState("edition-id", "text-id", "key", 5, 0, is_excerpt=False)
     monkeypatch.setattr(single_span_module, "touch_edition", AsyncMock(return_value=state))
     tx = RecordingTransaction()
 
@@ -408,6 +408,7 @@ async def test_text_create_strictly_returns_neo4j_id(
         date=None,
         translation_of=translation_of,
         commentary_of=commentary_of,
+        part_of=None,
         license=SimpleNamespace(value="public"),
         category_id=None,
         contributions=[],

@@ -7,7 +7,7 @@ from .annotation import (
     SegmentationInput,
 )
 from .base import LanguageFilter, NonEmptyStr, OpenPechaModel
-from .edition import EditionInput
+from .edition import EditionInput, ExcerptSource
 from .enums import EditionType
 
 
@@ -86,10 +86,25 @@ class EditionRequestModel(OpenPechaModel):
     metadata: EditionInput
     pagination: PaginationInput | None = None
     segmentation: SegmentationInput | None = None
-    content: NonEmptyStr
+    content: NonEmptyStr | None = None
+    excerpt_of: ExcerptSource | None = Field(
+        default=None, description="For type 'excerpt': the edition and its ordered spans that make up the content"
+    )
+
+    @model_validator(mode="after")
+    def validate_content_source(self) -> Self:
+        if (self.content is None) == (self.excerpt_of is None):
+            raise ValueError("Provide either content or excerpt_of")
+        if (self.excerpt_of is not None) != (self.metadata.type is EditionType.EXCERPT):
+            raise ValueError("Editions of type 'excerpt', and only they, take excerpt_of")
+        if self.excerpt_of is not None and (self.segmentation or self.pagination):
+            raise ValueError("Excerpt editions take their annotations from their source edition")
+        return self
 
     @model_validator(mode="after")
     def validate_spans_within_content(self) -> Self:
+        if self.content is None:
+            return self
         for annotation in (self.segmentation, self.pagination):
             if annotation is not None and annotation.max_end > len(self.content):
                 raise ValueError(

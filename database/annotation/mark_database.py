@@ -1,12 +1,14 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from database.content_state import read_value, touch_annotation
+from database.content_state import touch_annotation
+from database.excerpt_database import read_edition
 from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from database.database import Database
+    from database.excerpt_database import ExcerptMap
 from models.annotation import MarkInput, MarkOutput
 from models.enums import MarkType
 
@@ -74,16 +76,17 @@ class MarkDatabase:
         edition_id: str,
         mark_type: MarkType = MarkType.YIGCHUNG,
     ) -> list[MarkOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[MarkOutput]:
+        async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> list[MarkOutput]:
             result = await tx.run(
                 MarkDatabase.GET_BY_EDITION_ID_QUERY,
-                edition_id=edition_id,
+                edition_id=source_id,
                 mark_type=mark_type.value,
             )
-            return [MarkOutput.model_validate(record) for record in await result.data()]
+            marks = [MarkOutput.model_validate(record) for record in await result.data()]
+            return excerpt.project_annotations(marks) if excerpt else marks
 
         async with self._db.get_session() as session:
-            return await session.execute_read(read_value, edition_id, read)
+            return await session.execute_read(read_edition, edition_id, read)
 
     async def add_yigchung(self, edition_id: str, mark: MarkInput) -> str:
         return (await self.add_yigchungs(edition_id, [mark]))[0]

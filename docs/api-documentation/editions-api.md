@@ -7,6 +7,7 @@ Editions are concrete versions of a text. The metadata lives in Neo4j and the ba
 - **Diplomatic edition**: A transcription of a source. Requires `metadata.type = "diplomatic"`, a `bdrc` value, and a `pagination` annotation at creation. May also include `segmentation`.
 - **Critical edition**: A scholarly edition. Must not include `bdrc`, and requires a `segmentation` annotation at creation.
 - **Collated edition**: Accepted by the metadata enum, but the create request does not enforce initial pagination or segmentation for this type.
+- **Excerpt edition** (`metadata.type = "excerpt"`): An edition made of ordered spans (character ranges) of one stored edition, given in `excerpt_of`, instead of its own content. It serves part of a larger text, for example one chapter or chapters 1 and 4, as a text with `part_of`, without copying words. Its content, segments, table of contents, notes, footnotes, marks and bibliographic metadata are read from the source edition, and content edits to it carry over automatically. It has no annotations of its own; recordings can follow it. See [Excerpt editions](#excerpt-editions).
 - **Content operations**: Insert, delete, and replace operations update stored base text and adjust stored spans for annotations on the edition, including the cues of the recordings that follow it.
 - **Related editions**: Discovered from alignment and text relationship data.
 
@@ -38,11 +39,12 @@ Returns metadata for one edition.
   "incipit_title": {
     "bo": "འདི་སྐད་བདག་གིས།"
   },
-  "alt_incipit_titles": null
+  "alt_incipit_titles": null,
+  "excerpt_of": null
 }
 ```
 
-`404` means the edition does not exist.
+`excerpt_of` gives an excerpt edition's source as `{"edition_id", "spans"}`, with the spans in order and in the source edition's positions; it is `null` for other editions. `404` means the edition does not exist.
 
 ## Get Edition Content
 
@@ -50,7 +52,7 @@ Returns metadata for one edition.
 GET /v2/editions/{edition_id}/content
 ```
 
-Returns the stored base text as a JSON string. If both `span_start` and `span_end` are supplied, the returned string is sliced with Python-style half-open indexing.
+Returns the stored base text as a JSON string; for an excerpt edition, the text of its spans joined in order. If both `span_start` and `span_end` are supplied, the returned string is sliced with Python-style half-open indexing.
 
 | Query | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -81,7 +83,8 @@ Fetching `url` returns the raw content as `text/plain; charset=utf-8`. The URL p
 was current when it was issued; after a content edit it keeps returning the earlier version. Use the existing content endpoint for
 character-span requests. The URL expires after one hour and acts as a bearer credential until then, so clients
 should not log or persist it. Browser clients that fetch the URL in JavaScript require the S3 bucket's CORS policy
-to allow `GET` from the frontend origin.
+to allow `GET` from the frontend origin. An excerpt edition stores no content object, so this endpoint returns `409`
+for it; use the content endpoint instead.
 
 ## Patch Edition Content
 
@@ -134,6 +137,8 @@ Subsequent annotation spans are validated against the patched text, not the orig
 
 The server uploads a new immutable content object, then commits its pointer, length, span adjustments, and internal revision in one transaction. Internal edition revisions detect concurrent content or annotation changes; those edits receive `409 Conflict`. Revisions are internal: existing request and response bodies stay unchanged. Bounds violations and edits that would empty the edition or any page receive `422`; the content and annotations remain unchanged.
 
+An edit to an edition is replayed into every excerpt edition of it: their spans, content length and recording cues move with the text. An edit that would remove a span entirely returns `409`. Patching an excerpt edition itself returns `409`; edit its source edition instead.
+
 A valid offset from an older editor view cannot be distinguished from an intentional edit without client context. Internal concurrency checks cover changes during request processing, not this cross-request ambiguity.
 
 ## Delete Edition
@@ -157,6 +162,7 @@ Error responses:
 
 - `404 Not Found`: Edition does not exist.
 - `409 Conflict`: A recording with cues follows the edition. Remove its cues or its follow first; see [recordings-api.md](recordings-api.md#follow-an-edition).
+- `409 Conflict`: An excerpt edition uses the edition. Delete the excerpt edition first. Deleting an excerpt edition removes only its spans, never its source edition.
 - `401 Unauthorized`: Missing or invalid API key in deployed environments.
 
 ## List Editions for a Text
@@ -169,7 +175,7 @@ Optional query:
 
 | Query | Type | Description |
 |-------|------|-------------|
-| `edition_type` | `diplomatic`, `critical`, or `collated` | Filters returned editions by type |
+| `edition_type` | `diplomatic`, `critical`, `collated`, or `excerpt` | Filters returned editions by type |
 
 ```bash
 curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/TXT123/editions?edition_type=diplomatic" \
@@ -257,13 +263,60 @@ Response:
 
 Important validation rules:
 
-- `content` is required and must contain at least one non-whitespace character.
+- `content` is required, except for excerpt editions, and must contain at least one non-whitespace character.
 - `content` is stored exactly as submitted, including leading and trailing whitespace.
 - Span offsets in both pagination and segmentation must not extend past the end of `content`.
 - Diplomatic editions require `metadata.bdrc` and `pagination`; they may also include `segmentation` in the same request.
 - Critical editions must not include `metadata.bdrc`; they require `segmentation` and must not include `pagination`.
 - `alt_incipit_titles` can only be set when `incipit_title` is set.
 - Every span must satisfy `0 <= start <= end`; see [span layout rules](#span-layout-rules).
+
+### Excerpt editions
+
+An excerpt edition sends `excerpt_of` instead of `content`: the source edition and the spans of it that make up the
+text. Chapter 10 of a text, as its own text (created with `part_of`), is a single span of the whole text's edition:
+
+```json
+{
+  "metadata": {"type": "excerpt"},
+  "excerpt_of": {"edition_id": "ED123", "spans": [{"start": 80000, "end": 90000}]}
+}
+```
+
+A text made of passages that are not continuous, such as chapters 1 and 4, lists several spans. The edition's content
+is the spans' text joined in their listed order, and its positions start at 0.
+
+Rules:
+
+- `metadata.type` is `excerpt` exactly when `excerpt_of` is sent; `content`, `segmentation` and `pagination` are rejected with it.
+- `spans` is non-empty; each span covers at least one character inside the source edition's current content.
+- Spans must not overlap; their order is free.
+- The source edition must belong to another text, since an edition is a version of its whole text.
+- If the text has `part_of`, the source edition must be an edition of that whole text.
+- The source edition may itself be an excerpt edition, for a part of a part. The spans are then stored as the
+  matching spans of the edition holding the content, so `GET /v2/editions/{id}` reports that edition and its
+  positions, and the intermediate edition can be deleted without affecting the new one.
+- `excerpt_of` cannot be changed after creation; delete and recreate the edition instead.
+
+Reads and writes:
+
+- `GET .../content` joins the spans; `GET .../content/url` returns `409`.
+- `GET .../segmentation/segments` returns the source edition's segments that overlap each span, trimmed to it, in
+  the excerpt edition's positions, with their original IDs. Translations align to those same segments through the
+  source edition. A segment split across two spans is listed once per span.
+- `GET .../segmentation` returns the source edition's segmentation with `id`, `edition_id` and `text_id` set to
+  the excerpt edition, or `404` when the source edition has none.
+- `GET .../table-of-contents` returns the source edition's tables of contents with sections trimmed and shifted the
+  same way; sections outside every span are left out.
+- `GET .../yigchungs` and `GET .../bibliographic` return the source edition's annotations trimmed and shifted the
+  same way, once per span they overlap. `GET .../durchens` returns only notes that lie wholly inside one span, since
+  a note on a cut passage would no longer match its text. `GET .../footnotes` returns footnotes whose position falls
+  inside a span; a position at a span's end is kept only for the last span. These annotations keep their original
+  IDs, with `edition_id` and `text_id` set to the excerpt edition. Pagination is not served.
+- Adding or deleting annotations, alignments or content operations on the excerpt edition returns `409`. Annotate
+  and edit the source edition; the changes show through. Recordings can follow an excerpt edition and their cues
+  use its positions.
+- Content search indexes only editions with their own segmentation, so text served by excerpt editions is never returned twice.
 
 ### Span offset semantics
 

@@ -14,9 +14,18 @@ from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 class ContentState:
     edition_id: str
     text_id: str
-    object_key: str
+    object_key: str | None
     length: int
     revision: int
+    is_excerpt: bool
+
+    @property
+    def stored_key(self) -> str:
+        if self.object_key is None:
+            raise DataConflictError(
+                f"Edition '{self.edition_id}' is an excerpt edition and stores no content; use its excerpt_of edition"
+            )
+        return self.object_key
 
     def validate_span(self, end: int) -> None:
         if end > self.length:
@@ -31,14 +40,15 @@ async def read_state(tx: AsyncManagedTransaction, edition_id: str) -> ContentSta
         """
         MATCH (e:Edition {id: $id})-[:EDITION_OF]->(text:Text)
         RETURN e.id AS edition_id, text.id AS text_id, e.content_key AS object_key,
-               e.content_length AS length, e.revision AS revision
+               e.content_length AS length, e.revision AS revision,
+               EXISTS { (e)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'}) } AS is_excerpt
     """,
         id=edition_id,
     )
     record = await result.single()
     if record is None:
         raise DataNotFoundError(f"Edition with ID '{edition_id}' not found")
-    if any(record[key] is None for key in ("object_key", "length", "revision")):
+    if None in (record["length"], record["revision"]) or (record["object_key"] is None) != record["is_excerpt"]:
         raise DataValidationError(f"Edition '{edition_id}' requires the content-state migration")
     return ContentState(**record)
 
@@ -70,7 +80,13 @@ async def read_at_revision[T](
 async def touch_edition(tx: AsyncManagedTransaction, edition_id: str) -> ContentState:
     """Serialize an annotation mutation and invalidate edits prepared before it."""
     await advance_revision(tx, edition_id)
-    return await read_state(tx, edition_id)
+    state = await read_state(tx, edition_id)
+    if state.is_excerpt:
+        raise DataConflictError(
+            f"Edition '{edition_id}' is an excerpt edition and has no annotations of its own; "
+            "annotate its excerpt_of edition instead"
+        )
+    return state
 
 
 async def touch_annotation(tx: AsyncManagedTransaction, label: LiteralString, annotation_id: str) -> None:
@@ -81,14 +97,17 @@ async def touch_annotation(tx: AsyncManagedTransaction, label: LiteralString, an
 
 
 async def lock_connected_editions(tx: AsyncManagedTransaction, edition_id: str) -> list[str]:
-    """Segment removal changes alignment views on both ends; lock those editions too."""
+    """Content and segment changes alter the alignment views on both ends and the excerpt editions using it."""
 
     async def connected() -> set[str]:
         result = await tx.run(
             """
             MATCH (:Edition {id: $id})-[:HAS_SEGMENTATION]->(:Segmentation)<-[:SEGMENT_OF]-(:Segment)
                   -[:ALIGNED_TO]-(:Segment)-[:SEGMENT_OF]->(:Segmentation)<-[:HAS_SEGMENTATION]-(e:Edition)
-            RETURN DISTINCT e.id AS id
+            RETURN e.id AS id
+            UNION
+            MATCH (:Edition {id: $id})<-[:EXCERPT_OF]-(e:Edition)
+            RETURN e.id AS id
         """,
             id=edition_id,
         )

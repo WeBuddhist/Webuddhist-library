@@ -139,6 +139,10 @@ nodes:
         target: Text
         cardinality: one
         required: false
+      PART_OF:
+        target: Text
+        cardinality: one
+        required: false
       HAS_LANGUAGE:
         target: Language
         cardinality: one
@@ -171,7 +175,7 @@ nodes:
         required: true
       content_key:
         type: string
-        required: true
+        required: false  # absent exactly when the edition type is excerpt
       revision:
         type: integer
         required: true
@@ -207,6 +211,10 @@ nodes:
         target: Segmentation
         cardinality: one
         required: false
+      EXCERPT_OF:
+        target: Edition
+        cardinality: one
+        required: false  # present exactly when the edition type is excerpt
 
   Audio:
     properties:
@@ -358,9 +366,12 @@ nodes:
       end:
         type: integer
         required: true
+      index:
+        type: integer
+        required: false  # order of an excerpt edition's spans; those are in its source edition's positions
     relationships:
       SPAN_OF:
-        target: Segment | BibliographicMetadata | Note | Mark | Attribute | Page | TableOfContentsSection | Cue
+        target: Segment | BibliographicMetadata | Note | Mark | Attribute | Page | TableOfContentsSection | Cue | Edition
         cardinality: one
         required: true
 
@@ -640,6 +651,7 @@ nodes:
           - diplomatic
           - critical
           - collated
+          - excerpt
 
   LicenseType:
     enum: true

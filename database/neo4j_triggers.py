@@ -255,6 +255,16 @@ TRIGGERS.append(
 
 TRIGGERS.append(
     _rel_target_type_trigger(
+        "enforce_part_of_target",
+        "PART_OF must point to a Text node",
+        "PART_OF",
+        "Text",
+    )
+)
+TRIGGERS.append(_max_one_trigger("enforce_text_part_of_max_one", "Text", "PART_OF", "Text"))
+
+TRIGGERS.append(
+    _rel_target_type_trigger(
         "enforce_edition_has_segmentation_target",
         "HAS_SEGMENTATION must point to a Segmentation node",
         "HAS_SEGMENTATION",
@@ -340,6 +350,44 @@ TRIGGERS.append(
     }
 )
 
+# --- Excerpt editions: content comes only from spans of one stored edition -------
+_EXCERPT_EDITION_INVALID = """
+    CASE WHEN EXISTS { (e)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'}) } THEN
+        e.content_key IS NOT NULL
+        OR count { (e)-[:EXCERPT_OF]->(:Edition) } <> 1
+        OR NOT EXISTS { (:Span)-[:SPAN_OF]->(e) }
+        OR EXISTS { (e)-[:EXCERPT_OF]->(source:Edition) WHERE source.content_key IS NULL }
+        OR EXISTS { (e)-[:HAS_SEGMENTATION]->() }
+        OR EXISTS { (e)<-[:PAGINATION_OF|TOC_OF|NOTE_OF|MARK_OF|BIBLIOGRAPHY_OF|ATTRIBUTE_OF]-() }
+    ELSE EXISTS { (e)-[:EXCERPT_OF]->() } OR EXISTS { (:Span)-[:SPAN_OF]->(e) }
+    END
+"""
+TRIGGERS.append(
+    {
+        "name": "enforce_excerpt_edition",
+        "description": (
+            "An excerpt edition has spans and EXCERPT_OF one stored edition, no content_key and no annotations of "
+            "its own; other editions have neither EXCERPT_OF nor spans"
+        ),
+        "phase": "before",
+        "query": f"""
+        UNWIND $createdNodes AS e
+        WITH e WHERE e:Edition AND {_EXCERPT_EDITION_INVALID}
+        WITH collect(coalesce(e.id, elementId(e))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            'enforce_excerpt_edition: Invalid excerpt edition content source. IDs: %s',
+            [string.join(ids, ', ')]
+        )
+        RETURN null
+    """,
+        "audit": f"""
+        MATCH (e:Edition) WHERE {_EXCERPT_EDITION_INVALID}
+        RETURN coalesce(e.id, elementId(e)) AS violating_id
+    """,
+    }
+)
 TRIGGERS.append(
     {
         "name": "enforce_segment_reference_unique_per_segmentation",
@@ -385,7 +433,7 @@ TRIGGERS.append(
         "name": "enforce_span_span_of",
         "description": (
             "Every Span must have SPAN_OF to one of: Segment, BibliographicMetadata, Note, Mark, Attribute, Page, "
-            "TableOfContentsSection, Cue"
+            "TableOfContentsSection, Cue, Edition"
         ),
         "phase": "before",
         "query": """
@@ -403,7 +451,7 @@ TRIGGERS.append(
         WITH DISTINCT node
         WHERE NOT (node IN $deletedNodes)
           AND NOT (node)-[:SPAN_OF]->(
-            :Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue
+            :Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition
         )
         WITH collect(coalesce(toString(node.start), 'unknown')) AS ids
         WHERE size(ids) > 0
@@ -417,7 +465,7 @@ TRIGGERS.append(
         "audit": """
         MATCH (s:Span)
         WHERE NOT (s)-[:SPAN_OF]->(
-            :Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue
+            :Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition
         )
         RETURN elementId(s) AS violating_id
     """,
@@ -847,6 +895,13 @@ TRIGGERS.append(
         "enforce_no_self_commentary_of",
         "COMMENTARY_OF must not point to self",
         "COMMENTARY_OF",
+    )
+)
+TRIGGERS.append(
+    _no_self_ref_trigger(
+        "enforce_no_self_part_of",
+        "PART_OF must not point to self",
+        "PART_OF",
     )
 )
 TRIGGERS.append(

@@ -80,7 +80,7 @@ async def get_segment_content(
 
     async with db.get_session() as session:
         state, segment = await session.execute_read(read)
-    base_text = await storage.read_text(state.object_key)
+    base_text = await storage.read_text(state.stored_key)
     return base_text[segment.span.start : segment.span.end]
 
 

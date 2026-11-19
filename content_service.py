@@ -1,8 +1,10 @@
 """Immutable uploads precede a single graph transaction; rollback keeps the previous content active."""
 
+from functools import partial
 from typing import TYPE_CHECKING
 
-from database.content_state import advance_revision, lock_connected_editions, read_state
+from database.content_state import advance_revision, lock_connected_editions, read_at_revision, read_state
+from database.excerpt_database import ExcerptDatabase
 from exceptions import DataConflictError, DataValidationError
 from identifier import generate_id
 from models.content_operation import ContentOperation, DeleteOperation, InsertOperation
@@ -20,6 +22,10 @@ if TYPE_CHECKING:
 
 async def create_edition(db: Database, storage: Storage, text_id: str, data: EditionRequestModel) -> str:
     edition_id = generate_id()
+    if data.content is None:
+        length = sum(span.end - span.start for span in data.excerpt_of.spans) if data.excerpt_of else 0
+        return await db.edition.create(data.metadata, edition_id, text_id, length, excerpt_of=data.excerpt_of)
+
     key = f"objects/{edition_id}"
     await storage.put_immutable(key, data.content.encode(), "text/plain; charset=utf-8")
 
@@ -34,6 +40,18 @@ async def create_edition(db: Database, storage: Storage, text_id: str, data: Edi
     )
 
 
+async def read_content(db: Database, storage: Storage, edition_id: str) -> str:
+    """An excerpt edition's content is its spans of the source edition, joined in order."""
+    async with db.get_session() as session:
+        state, slices = await session.execute_read(
+            read_at_revision, edition_id, partial(ExcerptDatabase.get_slices_with_transaction, edition_id=edition_id)
+        )
+    if not state.is_excerpt:
+        return await storage.read_text(state.stored_key)
+    source = await storage.read_text(slices[0].key)
+    return "".join(source[piece.start : piece.end] for piece in slices)
+
+
 async def edit_content(db: Database, storage: Storage, edition_id: str, data: ContentOperation) -> None:
     async with db.get_session() as session:
         state = await session.execute_read(read_state, edition_id)
@@ -43,7 +61,7 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
     state.validate_span(end)
     if state.length + len(replacement) - (end - start) <= 0:
         raise DataValidationError("Content edits must leave at least one character")
-    content = await storage.read_text(state.object_key)
+    content = await storage.read_text(state.stored_key)
     if len(content) != state.length:
         raise DataValidationError("Stored content length differs from edition metadata")
     key = f"objects/{generate_id()}"
@@ -56,6 +74,7 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
         if current.revision != state.revision:
             raise DataConflictError(f"Edition changed: expected revision {state.revision}, current {current.revision}")
         await db.span.adjust_with_transaction(tx, edition_id, start, end, len(replacement))
+        await ExcerptDatabase.propagate_edit_with_transaction(tx, edition_id, start, end, len(replacement))
         await tx.run(
             """
             MATCH (e:Edition {id: $id})
