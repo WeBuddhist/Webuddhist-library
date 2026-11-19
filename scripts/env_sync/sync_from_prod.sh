@@ -87,10 +87,11 @@ ssm_run() { # <instance> <script file> [args...]
 }
 
 oneline() { # <instance> <command...> as a script
-  local f
+  local instance=$1 f
+  shift
   f=$(mktemp)
   printf '%s\n' "set -euo pipefail" "$*" >"$f"
-  ssm_run "$1" "$f"
+  ssm_run "$instance" "$f"
   rm -f "$f"
 }
 

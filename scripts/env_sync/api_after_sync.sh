@@ -10,12 +10,17 @@ SERVICE=$2
 
 cd "$APP_DIR"
 owner=$(stat -c '%U' .)
-py() { runuser -u "$owner" -- .venv/bin/python -m "$@"; }
+# Neo4j driver notifications flood the output and push real errors past SSM's output limit.
+py() { runuser -u "$owner" -- .venv/bin/python -m "$@" 2>&1 | { grep -v 'neo4j.notifications' || true; }; }
 
 echo "Code: $(git -c safe.directory="$PWD" rev-parse --short HEAD)"
 # The dump holds data only; constraints and triggers come from the code this environment runs.
 py scripts.install_neo4j_constraints
 py scripts.install_neo4j_triggers
+# This environment's code is usually ahead of prod, so prod's data may need its pending upgrades
+# (the same ones the next release runs on prod). Audit first: it fails on data the upgrade cannot fix.
+py scripts.migrate
+py scripts.migrate --apply --content
 # The search indexes must describe this environment's data, not the old data.
 py scripts.reindex --writes-paused
 
