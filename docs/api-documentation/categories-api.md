@@ -29,9 +29,9 @@ Categories provide a hierarchical taxonomy system for organizing texts. Each cat
 ### Base URL
 
 ```
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local: http://127.0.0.1:8000
 ```
 
@@ -122,12 +122,12 @@ GET /v2/categories
 
 ```bash
 # Get all root categories
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/categories" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/categories" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
 # Get child categories of a specific parent
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/categories?parent_id=CAT12345678" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/categories?parent_id=CAT12345678" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
@@ -182,7 +182,7 @@ GET /v2/categories/{category_id}
 **Example Usage:**
 
 ```bash
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/categories/CAT12345678" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/categories/CAT12345678" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 ```
@@ -251,7 +251,7 @@ POST /v2/categories
 
 ```bash
 # Create root category
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/categories" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/categories" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist" \
   -H "Content-Type: application/json" \
@@ -263,7 +263,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/categories" \
   }'
 
 # Create child category with parent
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/categories" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/categories" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist" \
   -H "Content-Type: application/json" \
@@ -276,7 +276,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/categories" \
   }'
 
 # Create category with description
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/categories" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/categories" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist" \
   -H "Content-Type: application/json" \
@@ -359,7 +359,7 @@ Returns the updated category with all of its localizations.
 **Example Usage:**
 
 ```bash
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/categories/CAT12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/categories/CAT12345678" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist" \
   -H "Content-Type: application/json" \
@@ -407,7 +407,7 @@ No response body is returned.
 **Example Usage:**
 
 ```bash
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/categories/CAT12345678" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/categories/CAT12345678" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 ```

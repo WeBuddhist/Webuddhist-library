@@ -60,7 +60,7 @@ Returns the stored base text as a JSON string; for an excerpt edition, the text 
 | `span_end` | integer | No | End character offset, exclusive |
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/content?span_start=0&span_end=100" \
+curl "https://dev.library.webuddhist.com/api/v2/editions/ED123/content?span_start=0&span_end=100" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -178,7 +178,7 @@ Optional query:
 | `edition_type` | `diplomatic`, `critical`, `collated`, or `excerpt` | Filters returned editions by type |
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/TXT123/editions?edition_type=diplomatic" \
+curl "https://dev.library.webuddhist.com/api/v2/texts/TXT123/editions?edition_type=diplomatic" \
   -H "X-API-Key: your_api_key"
 ```
 

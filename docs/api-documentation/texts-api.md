@@ -31,9 +31,9 @@ Texts (also known as Expressions in FRBR terminology) represent the intellectual
 ### Base URL
 
 ```
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local: http://127.0.0.1:8000
 ```
 
@@ -119,50 +119,50 @@ GET /v2/texts
 
 ```bash
 # Get all texts (default pagination)
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts" \
   -H "X-API-Key: your_api_key"
 
 # Get texts with pagination
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?limit=50&offset=100" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?limit=50&offset=100" \
   -H "X-API-Key: your_api_key"
 
 # Filter by language
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?language=bo" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?language=bo" \
   -H "X-API-Key: your_api_key"
 
 # Search by title (lenient, script-aware match; minimum 2 characters)
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?title=Heart%20Sutra" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?title=Heart%20Sutra" \
   -H "X-API-Key: your_api_key"
 
 # Filter by category
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?category_id=CAT12345678" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?category_id=CAT12345678" \
   -H "X-API-Key: your_api_key"
 
 # Filter by BDRC identifier
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?bdrc=W123456" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?bdrc=W123456" \
   -H "X-API-Key: your_api_key"
 
 # Combine multiple filters
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?language=bo&category_id=CAT12345678&limit=10" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?language=bo&category_id=CAT12345678&limit=10" \
   -H "X-API-Key: your_api_key"
 
 # Filter by one tag
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?tag_id=TAG123" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
 # Filter by every listed tag: TAG123 AND TAG456
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123&tag_id=TAG456" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?tag_id=TAG123&tag_id=TAG456" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
 # Filter by any listed tag: TAG123 OR TAG456
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?tag_id=TAG123,TAG456" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 
 # Combine: (TAG123 OR TAG456) AND TAG789
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id=TAG789" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?tag_id=TAG123,TAG456&tag_id=TAG789" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 ```
@@ -207,11 +207,11 @@ Accepts the [List All Texts](#list-all-texts) filters except `language`, `title`
 
 ```bash
 # Languages of texts in a category
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/languages?category_id=CAT12345678" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts/languages?category_id=CAT12345678" \
   -H "X-API-Key: your_api_key"
 
 # Then list the texts in one of those languages
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?category_id=CAT12345678&language=bo" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts?category_id=CAT12345678&language=bo" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -294,7 +294,7 @@ GET /v2/texts/{text_id}
 **Example Usage:**
 
 ```bash
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/texts/T12345678" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -498,7 +498,7 @@ For AI-generated translations:
 
 ```bash
 # Create a root text
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/texts" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -519,7 +519,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts" \
   }'
 
 # Create a translation
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/texts" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -563,7 +563,7 @@ No response body is returned.
 **Example Usage:**
 
 ```bash
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/texts/T12345678" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -683,7 +683,7 @@ All fields are optional. Only include fields you want to update.
 
 ```bash
 # Update BDRC ID only
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/texts/T12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -691,7 +691,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
   }'
 
 # Update title only
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/texts/T12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -702,7 +702,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
   }'
 
 # Update multiple fields
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/texts/T12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -715,7 +715,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
   }'
 
 # Replace tag IDs
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/texts/T12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -739,10 +739,10 @@ DELETE /v2/texts/{text_id}/tags/{tag_id}
 **Response: 204 No Content**
 
 ```bash
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678/tags/TAG123" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/texts/T12345678/tags/TAG123" \
   -H "X-API-Key: your_api_key"
 
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/T12345678/tags/TAG123" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/texts/T12345678/tags/TAG123" \
   -H "X-API-Key: your_api_key"
 ```
 

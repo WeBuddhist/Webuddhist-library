@@ -47,7 +47,7 @@ The `metadata` part:
 Every field is optional, so `{}` is valid. `title` names the version. `edition_id` makes the recording follow that edition.
 
 ```bash
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/audios/AUD123/recordings" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/audios/AUD123/recordings" \
   -H "X-API-Key: your_api_key" \
   -F 'metadata={"edition_id":"ED123"}' \
   -F "file=@chant.mp3;type=audio/mpeg"
@@ -122,7 +122,7 @@ Responds `307 Temporary Redirect` with a `Location` header pointing at a presign
 Because the redirect target is served by storage rather than the API, range requests and seeking work without any further support from this service.
 
 ```bash
-curl -L "https://api-l25bgmwqoa-uc.a.run.app/v2/recordings/REC123/audio" \
+curl -L "https://dev.library.webuddhist.com/api/v2/recordings/REC123/audio" \
   -H "X-API-Key: your_api_key" \
   -o reading.mp3
 ```
