@@ -27,9 +27,9 @@ Applications provide:
 ### Base URL
 
 ```
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local: http://127.0.0.1:8000
 ```
 
@@ -102,7 +102,7 @@ POST /v2/applications
 
 ```bash
 # Create application
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/applications" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/applications" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -147,7 +147,7 @@ No response body is returned.
 **Example Usage:**
 
 ```bash
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/applications/myapp" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/applications/myapp" \
   -H "X-API-Key: your_api_key"
 ```
 

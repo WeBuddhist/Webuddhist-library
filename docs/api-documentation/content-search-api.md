@@ -55,7 +55,7 @@ Response:
 Example:
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/content-search?query=%E0%BD%96%E0%BD%91%E0%BD%BA%E0%BC%8B%E0%BD%A3%E0%BD%BA%E0%BD%82%E0%BD%A6&search_type=exact" \
+curl "https://dev.library.webuddhist.com/api/v2/content-search?query=%E0%BD%96%E0%BD%91%E0%BD%BA%E0%BC%8B%E0%BD%A3%E0%BD%BA%E0%BD%82%E0%BD%A6&search_type=exact" \
   -H "X-API-Key: your_api_key"
 ```
 
