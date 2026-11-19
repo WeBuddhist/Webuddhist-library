@@ -3,7 +3,6 @@
 
 import json
 
-from fastapi.routing import APIRoute
 import pytest
 
 from database.content_state import read_state
@@ -206,9 +205,9 @@ UNPROJECTED_READS = {
 
 async def test_every_edition_read_is_projected_or_listed_as_not(client, test_database):
     routes = {
-        route.path.split("}", 1)[1]
-        for route in create_app(testing=True).routes
-        if isinstance(route, APIRoute) and "GET" in route.methods and route.path.startswith("/v2/editions/{")
+        path.split("}", 1)[1]
+        for path, operations in create_app(testing=True).openapi()["paths"].items()
+        if "get" in operations and path.startswith("/v2/editions/{")
     }
     assert routes == PROJECTED_READS | UNPROJECTED_READS.keys()
 
