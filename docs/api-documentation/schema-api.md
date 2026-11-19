@@ -26,9 +26,9 @@ FastAPI exposes the generated OpenAPI schema for the application. The current co
 ### Base URL
 
 ```
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local: http://127.0.0.1:8000
 ```
 
@@ -95,11 +95,11 @@ The response is a complete OpenAPI specification document containing:
 
 ```bash
 # Download OpenAPI specification
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/openapi.json" \
+curl -X GET "https://dev.library.webuddhist.com/api/openapi.json" \
   -o openapi.json
 
 # View specification
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/openapi.json"
+curl -X GET "https://dev.library.webuddhist.com/api/openapi.json"
 
 # Pretty-print the downloaded schema
 python -m json.tool openapi.json > openapi.pretty.json

@@ -40,9 +40,9 @@ Edition-pair alignment endpoints link existing segments; they do not create new 
 ### Base URL
 
 ```
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local: http://127.0.0.1:8000
 ```
 
@@ -103,7 +103,7 @@ GET /v2/segments/{segment_id}
 **Example Usage:**
 
 ```bash
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG001" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/segments/SEG001" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -142,7 +142,7 @@ The response contains text extracted from the immutable edition object associate
 **Example Usage:**
 
 ```bash
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG001/content" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/segments/SEG001/content" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -213,12 +213,12 @@ If the segment ID does not exist, this endpoint returns an empty paginated respo
 **Example Usage:**
 
 ```bash
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG001/related" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/segments/SEG001/related" \
   -H "X-API-Key: your_api_key"
 ```
 
 ```bash
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG001/related?text_id=TXT456&language=en" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/segments/SEG001/related?text_id=TXT456&language=en" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -241,7 +241,7 @@ GET /v2/content-search
 The endpoint supports `exact` (default) and `similar` search, with optional `text_id` and `edition_id` filters. It returns an array of results containing edition and text IDs, `segment_ids`, context, and spans. See the [Content Search API](content-search-api.md) for the full request and response contract.
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/content-search?query=Heart%20Sutra&search_type=similar&limit=20" \
+curl "https://dev.library.webuddhist.com/api/v2/content-search?query=Heart%20Sutra&search_type=similar&limit=20" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -261,10 +261,10 @@ DELETE /v2/segments/{segment_id}/tags/{tag_id}
 **Response: 204 No Content**
 
 ```bash
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG001/tags/TAG123" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/segments/SEG001/tags/TAG123" \
   -H "X-API-Key: your_api_key"
 
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG001/tags/TAG123" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/segments/SEG001/tags/TAG123" \
   -H "X-API-Key: your_api_key"
 ```
 

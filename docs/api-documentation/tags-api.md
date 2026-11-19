@@ -45,7 +45,7 @@ Returns all tags that belong to the application in `X-Application`.
 Example:
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/tags" \
+curl "https://dev.library.webuddhist.com/api/v2/tags" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 ```
@@ -83,7 +83,7 @@ Response:
 Example:
 
 ```bash
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/tags" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/tags" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist" \
   -H "Content-Type: application/json" \
@@ -116,7 +116,7 @@ Error responses:
 - `422 Validation Error`: Missing `X-Application` header.
 
 ```bash
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/tags/TAG123" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/tags/TAG123" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 ```
@@ -131,10 +131,10 @@ DELETE /v2/texts/{text_id}/tags/{tag_id}
 These endpoints attach or remove a tag from the work behind a text. They return `204 No Content`.
 
 ```bash
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/TEXT123/tags/TAG123" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/texts/TEXT123/tags/TAG123" \
   -H "X-API-Key: your_api_key"
 
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/TEXT123/tags/TAG123" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/texts/TEXT123/tags/TAG123" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -178,7 +178,7 @@ Axios serializes arrays as `tag_id[]=…` by default; set `paramsSerializer: { i
 
 ```bash
 # (TAG123 OR TAG456) AND TAG789
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts?tag_id=TAG123,TAG456&tag_id=TAG789" \
+curl "https://dev.library.webuddhist.com/api/v2/texts?tag_id=TAG123,TAG456&tag_id=TAG789" \
   -H "X-API-Key: your_api_key" \
   -H "X-Application: webuddhist"
 ```
@@ -198,7 +198,7 @@ DELETE /v2/segments/{segment_id}/tags/{tag_id}
 These endpoints attach or remove a tag from a segment. They return `204 No Content`.
 
 ```bash
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/segments/SEG123/tags/TAG123" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/segments/SEG123/tags/TAG123" \
   -H "X-API-Key: your_api_key"
 ```
 

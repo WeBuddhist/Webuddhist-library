@@ -41,7 +41,7 @@ Create a commentary:
 Fetch relation information:
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/texts/TXT_SOURCE" \
+curl "https://dev.library.webuddhist.com/api/v2/texts/TXT_SOURCE" \
   -H "X-API-Key: your_api_key"
 ```
 

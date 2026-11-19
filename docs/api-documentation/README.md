@@ -5,11 +5,16 @@ This folder documents the public FastAPI routes exposed by the backend. All endp
 ## Base URLs
 
 ```text
-Development: https://library.webuddhist.com
-Testing: https://testing.library.webuddhist.com
-Production: https://library-prod.webuddhist.com
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local FastAPI app: http://127.0.0.1:8000
 ```
+
+- Each environment serves the API under `/api`. The same paths without `/api` (for example `https://testing.library.webuddhist.com/v2/texts`) still work for older clients, but new code should use `/api`.
+- Production serves `/api` from release `v2.15.0`. Until that release, production answers only on the bare host `https://library-prod.webuddhist.com`.
+- `https://library.webuddhist.com` still points at development, for older clients. It moves to production (`https://library.webuddhist.com/api`) once no development tool uses it, so switch development tools to `dev.library` now.
+- Which environment to use: `dev` for development (changes daily, test data), `testing` for testing an app against the next release (a copy of production data), production only for released apps.
 
 ## Authentication
 

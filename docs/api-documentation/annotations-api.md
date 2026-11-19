@@ -522,10 +522,10 @@ Response:
 ## Example Calls
 
 ```bash
-curl "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/segmentation" \
+curl "https://dev.library.webuddhist.com/api/v2/editions/ED123/segmentation" \
   -H "X-API-Key: your_api_key"
 
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/durchens" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/editions/ED123/durchens" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '[
@@ -539,20 +539,20 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/durchens" \
     }
   ]'
 
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/durchens/DUR123" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/durchens/DUR123" \
   -H "X-API-Key: your_api_key"
 
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/footnotes" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/editions/ED123/footnotes" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '[
     {"position": 450, "text": "Cited from Degé Tengyur, vol. 34"}
   ]'
 
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/footnotes" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/editions/ED123/footnotes" \
   -H "X-API-Key: your_api_key"
 
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/yigchungs" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/editions/ED123/yigchungs" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '[
@@ -560,7 +560,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/yigchungs" \
     {"span": {"start": 350, "end": 360}}
   ]'
 
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/editions/ED123/table-of-contents" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/editions/ED123/table-of-contents" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
