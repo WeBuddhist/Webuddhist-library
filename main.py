@@ -10,9 +10,10 @@ from fastapi.responses import JSONResponse
 from neo4j.exceptions import ClientError as Neo4jClientError
 from opensearchpy.exceptions import OpenSearchException
 from pydantic import ValidationError
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from catalog_search import CatalogSearchService
-from config import settings
+from config import check_environment, settings
 from content_search import ContentSearchService
 from database import Database
 from dependencies import get_api_key
@@ -42,6 +43,27 @@ from storage import Storage
 logger = logging.getLogger(__name__)
 
 _UNTRACED_PATHS = frozenset({"/__/health", "/docs", "/redoc", "/openapi.json"})
+
+# Version of the API contract. A release tag (APP_VERSION) overrides it in Swagger and /__/health.
+API_VERSION = "2.15.0"
+
+
+class RootPathMiddleware:
+    """Serve the API under a public prefix such as /api without dropping the bare paths.
+
+    nginx forwards /api/... unchanged. Starlette strips scope["root_path"] before routing when the path
+    starts with it, so /api/v2/texts and /v2/texts both reach the same route, and Swagger links to
+    /api/openapi.json. (uvicorn --root-path would instead prepend the prefix to every path.)
+    """
+
+    def __init__(self, app: ASGIApp, root_path: str) -> None:
+        self.app = app
+        self.root_path = root_path.rstrip("/")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in {"http", "websocket"}:
+            scope = scope | {"root_path": self.root_path}
+        await self.app(scope, receive, send)
 
 
 def _map_neo4j_client_error(exc: Neo4jClientError) -> tuple[int, str]:
@@ -78,6 +100,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         setup_telemetry()
 
         if not app.state.testing and settings.neo4j_uri:
+            check_environment(settings)
             db = Database(
                 neo4j_uri=settings.neo4j_uri,
                 neo4j_auth=(settings.neo4j_username, settings.neo4j_password),
@@ -126,18 +149,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 def create_app(*, testing: bool = False) -> FastAPI:
     app = FastAPI(
         title="OpenPecha API v2",
-        version="2.15.0",
+        version=settings.app_version or API_VERSION,
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         telemetry={
             "auto_configure": settings.otel_enabled,
-            "exclude": lambda scope: scope["path"] in _UNTRACED_PATHS,
+            "exclude": lambda scope: scope["path"].removeprefix(settings.root_path) in _UNTRACED_PATHS,
         },
     )
 
     app.state.testing = testing
+
+    if settings.root_path:
+        app.add_middleware(RootPathMiddleware, root_path=settings.root_path)
 
     app.add_middleware(
         CORSMiddleware,
@@ -197,8 +223,8 @@ def create_app(*, testing: bool = False) -> FastAPI:
 
     @app.get("/__/health")
     async def health_check() -> dict:
-        """Health check endpoint."""
-        return {"status": "healthy"}
+        """Health check endpoint; also tells which release this environment runs."""
+        return {"status": "healthy", "version": app.version}
 
     for router in (
         texts_router,

@@ -6,6 +6,7 @@ Tests cover:
 - Master keys (no application binding) accept any X-Application header
 - App-bound keys validate X-Application header matches
 - App-bound keys reject mismatched X-Application header
+- App-bound keys accept requests without an X-Application header
 - Missing API key returns 401
 - Invalid API key returns 401
 - API key CRUD operations (create, validate, revoke, rotate, list)
@@ -225,13 +226,36 @@ class TestApiKeyAuthMiddlewareWithKeys:
         assert response.status_code == 401
         assert response.json()["error"] == "API key not authorized for this application"
 
+    async def test_app_bound_key_accepts_missing_application(self, auth_client, test_database):
+        """Test app-bound key works on routes where X-Application is optional and not sent."""
+        key_id = generate_id()
+        _, raw_key = await test_database.api_key.create(key_id, "App Key", "app@example.com", "test_application")
+
+        response = await auth_client.get("/v2/languages", headers={"X-API-Key": raw_key})
+
+        assert response.status_code == 200
+
 
 @pytest.mark.asyncio(loop_scope='session')
-async def test_bound_key_requires_application_header(auth_client, test_database):
+async def test_bound_key_without_application_header_uses_its_application(auth_client, test_database):
     _, key = await test_database.api_key.create(generate_id(), 'Bound', 'bound@example.com', 'test_application')
     response = await auth_client.get('/v2/texts', headers={'X-API-Key': key})
-    assert response.status_code == 401
-    assert response.json()['error'] == 'API key not authorized for this application'
+    assert response.status_code == 200, response.text
+
+
+def test_optional_application_defaults_to_bound_application():
+    from types import SimpleNamespace
+
+    from dependencies import get_optional_application
+
+    def request(**state):
+        return SimpleNamespace(state=SimpleNamespace(**state))
+
+    bound = request(api_key_info={'bound_application_id': 'test_application'})
+    assert get_optional_application(bound, None) == 'test_application'  # type: ignore[arg-type]
+    assert get_optional_application(bound, 'test_application') == 'test_application'  # type: ignore[arg-type]
+    assert get_optional_application(request(api_key_info={'bound_application_id': None}), None) is None  # type: ignore[arg-type]
+    assert get_optional_application(request(), None) is None  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio(loop_scope='session')

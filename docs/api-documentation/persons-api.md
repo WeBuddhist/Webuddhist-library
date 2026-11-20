@@ -29,9 +29,9 @@ Persons represent individuals who have contributed to texts as authors, translat
 ### Base URL
 
 ```
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local: http://127.0.0.1:8000
 ```
 
@@ -101,27 +101,27 @@ GET /v2/persons
 
 ```bash
 # Get all persons (default pagination)
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/persons" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/persons" \
   -H "X-API-Key: your_api_key"
 
 # Get persons with pagination
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/persons?limit=50&offset=100" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/persons?limit=50&offset=100" \
   -H "X-API-Key: your_api_key"
 
 # Search by name (lenient, script-aware match; minimum 2 characters)
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/persons?name=Nagarjuna" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/persons?name=Nagarjuna" \
   -H "X-API-Key: your_api_key"
 
 # Filter by BDRC ID (exact match)
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/persons?bdrc=P2816" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/persons?bdrc=P2816" \
   -H "X-API-Key: your_api_key"
 
 # Filter by Wikidata ID (exact match)
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/persons?wiki=Q182485" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/persons?wiki=Q182485" \
   -H "X-API-Key: your_api_key"
 
 # Combine filters with pagination
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/persons?name=Rinpoche&limit=30" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/persons?name=Rinpoche&limit=30" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -173,7 +173,7 @@ GET /v2/persons/{person_id}
 **Example Usage:**
 
 ```bash
-curl -X GET "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
+curl -X GET "https://dev.library.webuddhist.com/api/v2/persons/P12345678" \
   -H "X-API-Key: your_api_key"
 ```
 
@@ -244,7 +244,7 @@ POST /v2/persons
 
 ```bash
 # Create person with basic info
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/persons" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/persons" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -258,7 +258,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/persons" \
   }'
 
 # Create person with alternative names
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/persons" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/persons" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -281,7 +281,7 @@ curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/persons" \
   }'
 
 # Create person with minimal info
-curl -X POST "https://api-l25bgmwqoa-uc.a.run.app/v2/persons" \
+curl -X POST "https://dev.library.webuddhist.com/api/v2/persons" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -374,7 +374,7 @@ All fields are optional. Only include fields you want to update.
 
 ```bash
 # Update BDRC ID only
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/persons/P12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -382,7 +382,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
   }'
 
 # Update name only
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/persons/P12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -393,7 +393,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
   }'
 
 # Update multiple fields
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/persons/P12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -411,7 +411,7 @@ curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
   }'
 
 # Add Wikidata identifier to existing person
-curl -X PATCH "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
+curl -X PATCH "https://dev.library.webuddhist.com/api/v2/persons/P12345678" \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -442,7 +442,7 @@ No response body is returned.
 **Example Usage:**
 
 ```bash
-curl -X DELETE "https://api-l25bgmwqoa-uc.a.run.app/v2/persons/P12345678" \
+curl -X DELETE "https://dev.library.webuddhist.com/api/v2/persons/P12345678" \
   -H "X-API-Key: your_api_key"
 ```
 

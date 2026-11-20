@@ -5,21 +5,26 @@ This folder documents the public FastAPI routes exposed by the backend. All endp
 ## Base URLs
 
 ```text
-Development: https://api-l25bgmwqoa-uc.a.run.app
-Production: https://api-aq25662yyq-uc.a.run.app
-Test: https://api-kwgjscy6gq-uc.a.run.app
+Development: https://dev.library.webuddhist.com/api
+Testing: https://testing.library.webuddhist.com/api
+Production: https://library-prod.webuddhist.com/api
 Local FastAPI app: http://127.0.0.1:8000
 ```
 
+- Each environment serves the API under `/api`. The same paths without `/api` (for example `https://testing.library.webuddhist.com/v2/texts`) still work for older clients, but new code should use `/api`.
+- Production serves `/api` from release `v2.15.0`. Until that release, production answers only on the bare host `https://library-prod.webuddhist.com`.
+- `https://library.webuddhist.com` still points at development, for older clients. It moves to production (`https://library.webuddhist.com/api`) once no development tool uses it, so switch development tools to `dev.library` now.
+- Which environment to use: `dev` for development (changes daily, test data), `testing` for testing an app against the next release (a copy of production data), production only for released apps.
+
 ## Authentication
 
-Most routes require `X-API-Key`. In local test/dev mode the dependency accepts requests without a real key, but deployed environments validate the header.
+Most routes require `X-API-Key`, in every environment (dev, testing and production). Ask for a key for the environment you use. A local run checks keys too; create one in your local database with `python scripts/api_key.py create --name "Local" --email "you@example.com"`.
 
 Application-scoped routes also require or accept `X-Application`:
 
 - Required for `categories` and `tags`.
 - Optional for `texts` and `segments`; when present, application-owned tags are filtered to that application.
-- App-bound API keys must use the same `X-Application` value as the key's bound application.
+- App-bound API keys: when `X-Application` is sent, it must match the key's bound application (otherwise `401`). When it is left out, the request is scoped to the key's bound application; routes where the header is required still return `422` without it.
 - Category/tag writes enforce application ownership. Work tag replacement preserves other applications' tags. Both the current and replacement category must be authorized when recategorizing a Work.
 - Application creation/deletion requires an unbound administrative key. Unbound keys can select a scope with `X-Application`; without it, their Work mutations apply across applications.
 

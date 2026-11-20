@@ -117,18 +117,36 @@ subsequent runs.
 
 ## Deployment
 
-Deployment is handled automatically via GitHub Actions when pushing to `main`.
+GitHub Actions (`.github/workflows/deploy.yml`) deploys to three environments:
 
-### Manual Deployment (EC2)
+| Environment | Deploys when | API key | Data |
+|---|---|---|---|
+| `dev` | a push to `dev` | needed | test data, reset from prod by hand |
+| `testing` | a merge (push) to `main` | needed | copy of prod, refreshed each release cycle |
+| `prod` | a tag `vX.Y.Z` on a `main` commit | needed | real |
+
+To release: merge `dev` into `main`, test on testing, then tag the tested commit:
 
 ```bash
-ssh ubuntu@<EC2_HOST>
-cd /opt/openpecha-backend
-git pull origin main
-source .venv/bin/activate
-pip install -r requirements.txt
-sudo systemctl restart openpecha-api
+git tag v2.16.0 <tested main commit> && git push origin v2.16.0
 ```
+
+The tag must be on `main`, or the deploy stops. To roll back, run the deploy workflow on the
+previous tag. `/__/health` and Swagger show the deployed version (`APP_VERSION`).
+
+Each GitHub environment sets `EC2_INSTANCE_ID`, `APP_DIR`, `SERVICE_NAME`, the Neo4j, S3 and
+OpenSearch values, `ENVIRONMENT`, and optionally `ROOT_PATH` (for example `/api`, once nginx
+forwards that prefix). Testing shares the prod OpenSearch domain, so with `ENVIRONMENT=testing`
+the API refuses to start unless both index names start with `testing-`.
+
+### Refresh testing (or dev) from prod
+
+Run **Actions → Sync environment from prod** (`.github/workflows/sync-from-prod.yml`) and pick
+the target. It snapshots the prod Neo4j disk (prod keeps running), loads that copy into the
+target Neo4j, copies the prod S3 files, installs constraints and triggers, and rebuilds the
+target's search indexes. The target's own Neo4j password and settings stay. Pending data
+migrations (`python -m scripts.migrate --apply`) are not run; rehearse them on testing after a
+sync.
 
 ### Environment Configuration
 

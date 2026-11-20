@@ -57,6 +57,7 @@ class TextDatabase:
         category_id: [(e)-[:TEXT_OF]->(work:Work)-[:HAS_CATEGORY]->(cat:Category) | cat.id][0],
         license: coalesce([(e)-[:HAS_LICENSE]->(license:LicenseType) | license.name][0], "public"),
         editions: [(e)<-[:EDITION_OF]-(m:Edition) | m.id],
+        audios: [(e)<-[:RECITATION_OF]-(a:Audio) | a.id],
         tag_ids: [(e)-[:TEXT_OF]->(w:Work)-[:HAS_TAG]->(t:Tag)
             WHERE ($application IS NULL OR (t)-[:BELONGS_TO]->(:Application {id: $application})) | t.id]
     } AS text
