@@ -5,7 +5,6 @@ from fastapi import Depends, Header, Request, Security
 from fastapi.security import APIKeyHeader
 
 from catalog_search import CatalogSearchService
-from config import settings
 from content_search import ContentSearchService
 from database import Database
 from exceptions import ForbiddenError, ServiceUnavailableError, UnauthorizedError
@@ -69,8 +68,11 @@ async def get_api_key(
     Validate the API key from the request header.
     Returns the validated API key.
     Raises UnauthorizedError if the key is missing or invalid.
+
+    Every environment checks the key, dev included: they are all public. Only the test suite's
+    app (create_app(testing=True)) skips the check.
     """
-    if request.app.state.testing or settings.environment == "dev":
+    if request.app.state.testing:
         return "test-api-key"
 
     if not x_api_key:
