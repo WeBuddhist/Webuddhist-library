@@ -25,6 +25,7 @@ Texts (also known as Expressions in FRBR terminology) represent the intellectual
 - **Edition (Manifestation)**: A specific physical or digital instantiation of a text
 - **Translation**: A text translated into another language
 - **Commentary**: A text that comments on or explains another text
+- **Audio**: A recited performance of a text, listed in the text's `audios`
 - **Contribution**: Attribution of a person or AI to a text (author, translator, reviser, scholar)
 - **Tags**: Application-scoped labels attached to the work behind a text
 
@@ -99,6 +100,7 @@ GET /v2/texts
       "commentaries": [],
       "translations": ["DEF87654321"],
       "editions": ["M12345678"],
+      "audios": [],
       "tag_ids": ["TAG123"]
     }
   ],
@@ -257,9 +259,12 @@ GET /v2/texts/{text_id}
   "commentaries": ["C12345678"],
   "translations": ["TR12345678"],
   "parts": ["PT12345678"],
-  "editions": ["M12345678"]
+  "editions": ["M12345678"],
+  "audios": ["AUD12345678"]
 }
 ```
+
+`audios` lists the IDs of the [audios](audios-api.md) that recite the text. `GET /v2/texts/{text_id}/audios` returns them in full.
 
 **Response: 200 OK (Translation Text)**
 
@@ -281,7 +286,8 @@ GET /v2/texts/{text_id}
   "license": "cc0",
   "commentaries": [],
   "translations": [],
-  "editions": []
+  "editions": [],
+  "audios": []
 }
 ```
 
@@ -668,6 +674,7 @@ All fields are optional. Only include fields you want to update.
   "commentaries": [],
   "translations": [],
   "editions": [],
+  "audios": [],
   "tag_ids": ["TAG123"]
 }
 ```

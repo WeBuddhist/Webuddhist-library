@@ -87,4 +87,5 @@ class TextOutput(TextBase):
     translations: list[str] = Field(default_factory=list)
     parts: list[str] = Field(default_factory=list)
     editions: list[str] = Field(default_factory=list)
+    audios: list[str] = Field(default_factory=list)
     tag_ids: list[str] = Field(default_factory=list)
