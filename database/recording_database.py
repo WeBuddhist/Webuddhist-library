@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, LiteralString
 
+from pydantic import MISSING
+
 from exceptions import DataNotFoundError, DataValidationError
 from models.enums import AudioFormat
 from models.recording import RecordingCue, RecordingInput, RecordingOutput, RecordingPatch
@@ -414,7 +416,7 @@ class RecordingDatabase:
             result = await tx.run("MATCH (r:Recording {id: $id}) RETURN r.id AS id", id=recording_id)
             if await result.single() is None:
                 raise DataNotFoundError(f"Recording '{recording_id}' not found")
-            properties = patch.model_dump(include={"duration_ms"}, exclude_unset=True)
+            properties = patch.model_dump(include={"duration_ms"})
             if properties:
                 await tx.run(
                     RecordingDatabase.UPDATE_PROPERTIES_QUERY,
@@ -422,7 +424,7 @@ class RecordingDatabase:
                     properties=properties,
                 )
 
-            if patch.title is not None:
+            if patch.title is not MISSING:
                 await tx.run(RecordingDatabase.DELETE_TITLE_QUERY, recording_id=recording_id)
                 nomen_id = await NomenDatabase.create_with_transaction(tx, patch.title.root)
                 await tx.run(RecordingDatabase.LINK_TITLE_QUERY, recording_id=recording_id, nomen_id=nomen_id)

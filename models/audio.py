@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from pydantic import AfterValidator, Field
+from pydantic import MISSING, AfterValidator, Field
 
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel
 from .contribution import ContributionInputItem, ContributionOutputItem
@@ -34,11 +34,11 @@ class AudioInput(AudioBase):
 
 
 class AudioPatch(PatchModel):
-    title: LocalizedString | None = None
-    language: NonEmptyStr | None = None
-    license: LicenseType | None = None
-    date: NonEmptyStr | None = None
-    contributions: PerformerContributions | None = None
+    title: LocalizedString | MISSING = MISSING
+    language: NonEmptyStr | MISSING = MISSING
+    license: LicenseType | MISSING = MISSING
+    date: NonEmptyStr | MISSING = MISSING
+    contributions: PerformerContributions | MISSING = MISSING
 
 
 class AudioOutput(AudioBase):

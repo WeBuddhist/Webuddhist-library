@@ -1395,9 +1395,9 @@ class TestPatchTextV2:
         )
 
         assert response.status_code == 422
-        data = response.json()
-        assert "detail" in data
-        assert "Null values are not supported in PATCH" in str(data["detail"])
+        error = response.json()["detail"][0]
+        assert error["loc"] == ["body", "bdrc"]
+        assert error["type"] == "string_type"
 
     async def test_patch_text_unknown_field_rejected(self, client, test_database, test_person_data):
         """Test that unknown fields are rejected"""

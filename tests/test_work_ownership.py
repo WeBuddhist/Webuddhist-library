@@ -38,9 +38,12 @@ async def work(test_database):
     }
 
 
-@pytest.mark.parametrize("category", [None, "category", "different"])
-async def test_translation_rejects_any_category(category):
-    with pytest.raises(ValidationError, match="must not be supplied"):
+@pytest.mark.parametrize(
+    ("category", "error"),
+    [(None, "valid string"), ("category", "must not be supplied"), ("different", "must not be supplied")],
+)
+async def test_translation_rejects_any_category(category, error):
+    with pytest.raises(ValidationError, match=error):
         TextInput(title={"en": "Translation"}, language="en", translation_of="source", category_id=category)
 
 

@@ -1,7 +1,7 @@
 from itertools import pairwise
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, Field, model_validator
+from pydantic import MISSING, AfterValidator, Field, model_validator
 
 from .annotation import Span
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel
@@ -22,8 +22,8 @@ class RecordingInput(RecordingBase):
 
 
 class RecordingPatch(PatchModel):
-    title: LocalizedString | None = None
-    duration_ms: int | None = Field(default=None, ge=0)
+    title: LocalizedString | MISSING = MISSING
+    duration_ms: int | MISSING = Field(default=MISSING, ge=0)
 
 
 class RecordingOutput(RecordingBase):

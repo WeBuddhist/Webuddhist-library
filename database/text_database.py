@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, LiteralString
 
 from neo4j.exceptions import ConstraintError
+from pydantic import MISSING
 
 from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from identifier import generate_id
@@ -401,7 +402,7 @@ class TextDatabase:
         created_text_id = str(record["text_id"])
         work_id = str(record["work_id"])
 
-        if text.category_id is not None:
+        if text.category_id is not MISSING:
             await TextDatabase._set_category(
                 tx, work_id, None, text.category_id, application=application, expected=None
             )
@@ -442,11 +443,9 @@ class TextDatabase:
             if record is None:
                 raise DataNotFoundError(f"Text with ID '{text_id}' not found")
             existing = {key: value for key, value in record["text"].items() if key in TextBase.model_fields}
-            updated = TextBase.model_validate(
-                existing | patch.model_dump(include=set(TextBase.model_fields), exclude_unset=True)
-            )
+            updated = TextBase.model_validate(existing | patch.model_dump(include=set(TextBase.model_fields)))
 
-            properties = patch.model_dump(include={"bdrc", "wiki", "date"}, exclude_unset=True)
+            properties = patch.model_dump(include={"bdrc", "wiki", "date"})
             if properties:
                 await tx.run(TextDatabase.UPDATE_PROPERTIES_QUERY, text_id=text_id, properties=properties)
 
@@ -457,10 +456,10 @@ class TextDatabase:
                 )
                 await tx.run(TextDatabase.LINK_TITLE_QUERY, text_id=text_id, nomen_id=title_nomen_id)
 
-            if patch.license is not None:
+            if patch.license is not MISSING:
                 await tx.run(TextDatabase.UPDATE_LICENSE_QUERY, text_id=text_id, license=patch.license.value)
 
-            if patch.language is not None:
+            if patch.language is not MISSING:
                 base_lang_code = patch.language.split("-")[0].lower()
                 await tx.run(
                     TextDatabase.UPDATE_LANGUAGE_QUERY,
@@ -469,23 +468,23 @@ class TextDatabase:
                     bcp47_tag=patch.language,
                 )
 
-            if patch.category_id is not None:
+            if patch.category_id is not MISSING:
                 await self._set_category(
                     tx,
                     record["work_id"],
                     record["text"]["category_id"],
                     patch.category_id,
                     application=application,
-                    expected=patch.expected_category_id,
+                    expected=None if patch.expected_category_id is MISSING else patch.expected_category_id,
                 )
 
-            if patch.contributions is not None:
+            if patch.contributions is not MISSING:
                 await DatabaseValidator.validate_contribution_references(tx, patch.contributions)
                 await ContributionDatabase.delete_all_with_transaction(tx, TEXT_LABEL, text_id)
                 for contribution in patch.contributions:
                     await ContributionDatabase.create_with_transaction(tx, TEXT_LABEL, text_id, contribution)
 
-            if patch.tag_ids is not None:
+            if patch.tag_ids is not MISSING:
                 await TagDatabase.set_work_tags(
                     tx, record["work_id"], patch.tag_ids, application=application, replace=True
                 )

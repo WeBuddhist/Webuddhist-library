@@ -1,6 +1,6 @@
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import MISSING, model_validator
 
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel, _dedupe
 
@@ -23,14 +23,14 @@ class PersonInput(PersonBase):
 
 
 class PersonPatch(PatchModel):
-    bdrc: NonEmptyStr | None = None
-    wiki: NonEmptyStr | None = None
-    name: LocalizedString | None = None
-    alt_names: list[LocalizedString] | None = None
+    bdrc: NonEmptyStr | MISSING = MISSING
+    wiki: NonEmptyStr | MISSING = MISSING
+    name: LocalizedString | MISSING = MISSING
+    alt_names: list[LocalizedString] | MISSING = MISSING
 
     @model_validator(mode="after")
     def remove_duplicate_alt_names(self) -> Self:
-        if self.alt_names is not None and self.name is not None:
+        if self.alt_names is not MISSING and self.name is not MISSING:
             self.alt_names = _dedupe(list(self.alt_names), self.name)
         return self
 
