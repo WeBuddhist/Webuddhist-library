@@ -127,6 +127,31 @@ curl -L "https://dev.library.webuddhist.com/api/v2/recordings/REC123/audio" \
   -o reading.mp3
 ```
 
+A browser player can't use this endpoint directly: an `<audio src>` tag (and Swagger's audio player) can't send `X-API-Key`, so the API answers `401`. Use [Get Recording Audio URL](#get-recording-audio-url) instead.
+
+## Get Recording Audio URL
+
+```http
+GET /v2/recordings/{recording_id}/audio-url
+```
+
+Returns a presigned storage URL for the recording's audio and how many seconds it stays valid. The URL needs no API key, so pass it straight to a player. Range requests and seeking work as with the redirect. Fetch a fresh URL when it expires, for example when playback starts again after a long pause.
+
+```json
+{
+  "url": "https://….s3.ap-southeast-1.amazonaws.com/objects/REC123?X-Amz-Signature=…",
+  "expires_in": 3600
+}
+```
+
+```js
+const res = await fetch(`${API}/v2/recordings/${id}/audio-url`, { headers: { "X-API-Key": key } });
+const { url } = await res.json();
+audioElement.src = url;
+```
+
+`404` means the recording does not exist.
+
 ## Update Recording
 
 ```http
@@ -246,7 +271,7 @@ Cue spans follow `PATCH /v2/editions/{edition_id}/content` on the followed editi
 
 1. Find the recordings that follow the edition with `GET /v2/editions/{edition_id}/recordings`, and fetch the edition's base text, for example through `GET /v2/editions/{edition_id}/content/url`.
 2. Fetch the cues with `GET /v2/recordings/{recording_id}/cues`.
-3. Play the audio from `GET /v2/recordings/{recording_id}/audio`.
+3. Get a playable link with `GET /v2/recordings/{recording_id}/audio-url` and set it as the player's source.
 4. On each time update, binary-search the cues by `start_ms` and highlight `content[span.start:span.end]` for the cue containing the current time. This works because cues are sorted and do not overlap.
 
 ## Developer Notes

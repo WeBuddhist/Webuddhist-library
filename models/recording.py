@@ -35,6 +35,13 @@ class RecordingOutput(RecordingBase):
     size_bytes: int
 
 
+class RecordingAudioUrl(OpenPechaModel):
+    """A short-lived link to a recording's audio file that any player can open without an API key."""
+
+    url: NonEmptyStr = Field(description="Presigned storage URL; supports range requests and seeking")
+    expires_in: int = Field(description="Seconds until the URL stops working", gt=0)
+
+
 class RecordingCue(OpenPechaModel):
     """The stretch of audio during which the text in `span` is being recited."""
 

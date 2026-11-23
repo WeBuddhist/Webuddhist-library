@@ -5,13 +5,15 @@ from fastapi import APIRouter, Body, Depends, Path, status
 from fastapi.responses import RedirectResponse
 
 from dependencies import get_db, get_storage
-from models.recording import RecordingCue, RecordingCues, RecordingOutput, RecordingPatch
+from models.recording import RecordingAudioUrl, RecordingCue, RecordingCues, RecordingOutput, RecordingPatch
 
 if TYPE_CHECKING:
     from database import Database
     from storage import Storage
 
 logger = logging.getLogger(__name__)
+
+AUDIO_URL_EXPIRES_IN = 3600
 
 router = APIRouter(prefix="/v2/recordings", tags=["Recordings"])
 
@@ -44,8 +46,26 @@ async def get_recording_audio(
 ) -> RedirectResponse:
     """Redirect to the recording's audio in storage, which serves range requests directly."""
     key = await db.recording.get_storage_location(recording_id)
-    url = await storage.generate_url(key)
+    url = await storage.generate_url(key, expires_in=AUDIO_URL_EXPIRES_IN)
     return RedirectResponse(url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@router.get(
+    "/{recording_id}/audio-url",
+    summary="Get a playable link to recording audio",
+    description=(
+        "Return a short-lived presigned URL for the recording's audio file. Players such as an HTML "
+        "`<audio>` tag can't send `X-API-Key`, so fetch this link with the key and give the URL to the player."
+    ),
+)
+async def get_recording_audio_url(
+    recording_id: Annotated[str, Path(description="The ID of the recording")],
+    db: Annotated[Database, Depends(get_db)],
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> RecordingAudioUrl:
+    key = await db.recording.get_storage_location(recording_id)
+    url = await storage.generate_url(key, expires_in=AUDIO_URL_EXPIRES_IN)
+    return RecordingAudioUrl(url=url, expires_in=AUDIO_URL_EXPIRES_IN)
 
 
 @router.get(
