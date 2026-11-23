@@ -1,6 +1,6 @@
 from typing import Self
 
-from pydantic import Field, model_validator
+from pydantic import MISSING, Field, model_validator
 
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel, _dedupe
 from .contribution import ContributionInputItem, ContributionOutputItem
@@ -43,38 +43,38 @@ class TextBase(OpenPechaModel):
 
 
 class TextInput(TextBase):
-    category_id: NonEmptyStr | None = None
+    category_id: NonEmptyStr | MISSING = MISSING
     contributions: list[ContributionInputItem] = Field(default_factory=list)
     tag_ids: list[NonEmptyStr] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_category(self) -> Self:
         if self.translation_of:
-            if "category_id" in self.model_fields_set:
+            if self.category_id is not MISSING:
                 raise ValueError("Translations inherit their category; category_id must not be supplied")
-        elif self.category_id is None:
+        elif self.category_id is MISSING:
             raise ValueError("category_id is required for original texts and commentaries")
         return self
 
 
 class TextPatch(PatchModel):
-    bdrc: NonEmptyStr | None = None
-    wiki: NonEmptyStr | None = None
-    date: NonEmptyStr | None = None
-    title: LocalizedString | None = None
-    alt_titles: list[LocalizedString] | None = None
-    language: NonEmptyStr | None = None
-    category_id: NonEmptyStr | None = None
-    expected_category_id: NonEmptyStr | None = None
-    license: LicenseType | None = None
-    contributions: list[ContributionInputItem] | None = None
-    tag_ids: list[NonEmptyStr] | None = None
+    bdrc: NonEmptyStr | MISSING = MISSING
+    wiki: NonEmptyStr | MISSING = MISSING
+    date: NonEmptyStr | MISSING = MISSING
+    title: LocalizedString | MISSING = MISSING
+    alt_titles: list[LocalizedString] | MISSING = MISSING
+    language: NonEmptyStr | MISSING = MISSING
+    category_id: NonEmptyStr | MISSING = MISSING
+    expected_category_id: NonEmptyStr | MISSING = MISSING
+    license: LicenseType | MISSING = MISSING
+    contributions: list[ContributionInputItem] | MISSING = MISSING
+    tag_ids: list[NonEmptyStr] | MISSING = MISSING
 
     @model_validator(mode="after")
     def remove_duplicate_alt_titles(self) -> Self:
-        if self.expected_category_id is not None and self.category_id is None:
+        if self.expected_category_id is not MISSING and self.category_id is MISSING:
             raise ValueError("expected_category_id requires category_id")
-        if self.alt_titles is not None and self.title is not None:
+        if self.alt_titles is not MISSING and self.title is not MISSING:
             self.alt_titles = _dedupe(list(self.alt_titles), self.title)
         return self
 
@@ -87,4 +87,5 @@ class TextOutput(TextBase):
     translations: list[str] = Field(default_factory=list)
     parts: list[str] = Field(default_factory=list)
     editions: list[str] = Field(default_factory=list)
+    audios: list[str] = Field(default_factory=list)
     tag_ids: list[str] = Field(default_factory=list)

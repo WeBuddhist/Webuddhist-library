@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import MISSING
 
 import database.annotation.note_database as note_module
 import database.annotation.pagination_database as pagination_module
@@ -410,7 +411,7 @@ async def test_text_create_strictly_returns_neo4j_id(
         commentary_of=commentary_of,
         part_of=None,
         license=SimpleNamespace(value="public"),
-        category_id=None,
+        category_id=MISSING,
         contributions=[],
         tag_ids=[],
     )

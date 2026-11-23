@@ -182,13 +182,13 @@ class PersonDatabase:
             if record is None:
                 raise DataNotFoundError(f"Person with ID '{person_id}' not found")
 
-            properties = patch.model_dump(include={"bdrc", "wiki"}, exclude_unset=True)
+            properties = patch.model_dump(include={"bdrc", "wiki"})
             if properties:
                 await tx.run(PersonDatabase.UPDATE_PROPERTIES_QUERY, id=person_id, properties=properties)
 
             if patch.model_fields_set & {"name", "alt_names"}:
                 existing = {key: value for key, value in record["person"].items() if key in PersonBase.model_fields}
-                updated = PersonBase.model_validate(existing | patch.model_dump(exclude_unset=True))
+                updated = PersonBase.model_validate(existing | patch.model_dump())
                 await tx.run(PersonDatabase.DELETE_NAME_QUERY, person_id=person_id)
                 primary_nomen_id = await NomenDatabase.create_with_transaction(
                     tx, updated.name.root, [alt.root for alt in updated.alt_names or []]

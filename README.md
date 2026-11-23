@@ -121,7 +121,7 @@ GitHub Actions (`.github/workflows/deploy.yml`) deploys to three environments:
 
 | Environment | Deploys when | API key | Data |
 |---|---|---|---|
-| `dev` | a push to `dev` | not needed (`ENVIRONMENT=dev`) | test data, reset from prod by hand |
+| `dev` | a push to `dev` | needed | test data, reset from prod by hand |
 | `testing` | a merge (push) to `main` | needed | copy of prod, refreshed each release cycle |
 | `prod` | a tag `vX.Y.Z` on a `main` commit | needed | real |
 

@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import MISSING, Field
 
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel
 
@@ -14,8 +14,8 @@ class CategoryInput(CategoryBase):
 
 
 class CategoryPatch(PatchModel):
-    title: LocalizedString | None = None
-    description: LocalizedString | None = None
+    title: LocalizedString | MISSING = MISSING
+    description: LocalizedString | MISSING = MISSING
 
 
 class CategoryOutput(CategoryBase):

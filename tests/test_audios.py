@@ -145,6 +145,22 @@ class TestAudiosEndpoints(RecordingHelpers):
         assert [audio["id"] for audio in response.json()] == ids
         assert (await client.get(f"/v2/texts/{await self._text(test_database)}/audios")).json() == []
 
+    async def test_text_metadata_lists_its_audios(self, client, test_database):
+        source = await self._text(test_database)
+        translation = await self._text(test_database, "Heart Sutra translation", "en", translation_of=source)
+        person_id = await self._create_person(test_database)
+        assert (await client.get(f"/v2/texts/{source}")).json()["audios"] == []
+
+        ids = sorted([await self._create_audio(client, source, person_id) for _ in range(2)])
+        translation_audio = await self._create_audio(client, translation, person_id)
+
+        assert sorted((await client.get(f"/v2/texts/{source}")).json()["audios"]) == ids
+        # An audio is listed on the text it recites, not on other texts of the same Work.
+        assert (await client.get(f"/v2/texts/{translation}")).json()["audios"] == [translation_audio]
+
+        assert (await client.delete(f"/v2/audios/{ids[0]}")).status_code == 204
+        assert (await client.get(f"/v2/texts/{source}")).json()["audios"] == [ids[1]]
+
     async def test_list_audios_for_missing_text(self, client):
         assert (await client.get(f"/v2/texts/{generate_id()}/audios")).status_code == 404
 

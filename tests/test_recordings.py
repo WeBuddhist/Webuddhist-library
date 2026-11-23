@@ -7,6 +7,7 @@ Tests endpoints:
 - GET /v2/editions/{edition_id}/recordings
 - GET /v2/recordings/{recording_id}
 - GET /v2/recordings/{recording_id}/audio
+- GET /v2/recordings/{recording_id}/audio-url
 - PATCH /v2/recordings/{recording_id}
 - DELETE /v2/recordings/{recording_id}
 - PUT /v2/recordings/{recording_id}/edition/{edition_id}
@@ -241,6 +242,23 @@ class TestRecordingsEndpoints(RecordingHelpers):
 
     async def test_get_audio_for_missing_recording(self, client):
         response = await client.get(f"/v2/recordings/{generate_id()}/audio", follow_redirects=False)
+
+        assert response.status_code == 404
+
+    async def test_get_recording_audio_url(self, client, test_database):
+        _, audio_id = await self._setup_audio(client, test_database)
+        recording_id = await self._create_recording(client, audio_id)
+
+        response = await client.get(f"/v2/recordings/{recording_id}/audio-url")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body == {"url": body["url"], "expires_in": 3600}
+        assert f"objects/{recording_id}" in body["url"]
+        assert "expires_in=3600" in body["url"]
+
+    async def test_get_audio_url_for_missing_recording(self, client):
+        response = await client.get(f"/v2/recordings/{generate_id()}/audio-url")
 
         assert response.status_code == 404
 

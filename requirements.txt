@@ -2,10 +2,10 @@ fastapi==0.162.7
 uvicorn[standard]==0.52.4
 gunicorn==26.0.0
 uvicorn-worker==0.4.0
-pydantic==2.13.5
+pydantic==2.14.4
 pydantic-settings==2.14.1
 python-multipart==0.0.32
-neo4j-rust-ext==6.3.0.0
+neo4j-rust-ext==6.4.1.0
 aioboto3==15.5.0
 httpx==0.28.1
 opensearch-py[async]==3.2.0

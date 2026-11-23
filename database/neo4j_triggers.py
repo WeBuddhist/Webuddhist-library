@@ -12,7 +12,7 @@ SYSTEM_DATABASE_NAME = "system"
 
 # Each trigger is a dict with:
 #   name: unique trigger name
-#   query: Cypher to execute on each transaction
+#   query: Cypher to execute on each transaction; it reads changedNodes and changedRelationships (see _CHANGED_NODES)
 #   phase: "before" or "after" commit
 #   audit: standalone Cypher that checks the same invariant against ALL existing data
 #
@@ -34,7 +34,7 @@ def _required_rel_trigger(
 
     Returns a list of dicts:
       - Existence: a single trigger that fires on both node creation and
-        relationship deletion, using CALL () { UNION ALL } to collect affected nodes.
+        relationship deletion, using CALL (*) { UNION ALL } to collect affected nodes.
       - If cardinality is 'one', also includes a uniqueness trigger (at most one).
     """
     triggers = [
@@ -43,8 +43,8 @@ def _required_rel_trigger(
             "description": description,
             "phase": "before",
             "query": f"""
-                CALL () {{
-                    UNWIND $createdNodes AS n
+                CALL (*) {{
+                    UNWIND changedNodes AS n
                     WITH n WHERE n:{source_label}
                     RETURN n AS node
                   UNION ALL
@@ -82,12 +82,12 @@ def _required_rel_trigger(
                 "description": f"{source_label} must have at most one {rel_type}->{target_label}",
                 "phase": "before",
                 "query": f"""
-                CALL () {{
-                    UNWIND $createdNodes AS n
+                CALL (*) {{
+                    UNWIND changedNodes AS n
                     WITH n WHERE n:{source_label}
                     RETURN n AS node
                   UNION ALL
-                    UNWIND $createdRelationships AS rel
+                    UNWIND changedRelationships AS rel
                     WITH rel WHERE type(rel) = '{rel_type}'
                     WITH startNode(rel) AS n
                     WHERE n:{source_label}
@@ -129,7 +129,7 @@ def _rel_target_type_trigger(
         "description": description,
         "phase": "before",
         "query": f"""
-            UNWIND $createdRelationships AS rel
+            UNWIND changedRelationships AS rel
             WITH rel
             WHERE type(rel) = '{rel_type}'
             WITH rel, startNode(rel) AS source, endNode(rel) AS target
@@ -158,12 +158,12 @@ def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: 
         "description": f"{source_label} must have at most one {rel_type}->{target_label}",
         "phase": "before",
         "query": f"""
-        CALL () {{
-            UNWIND $createdNodes AS n
+        CALL (*) {{
+            UNWIND changedNodes AS n
             WITH n WHERE n:{source_label}
             RETURN n AS node
           UNION ALL
-            UNWIND $createdRelationships AS rel
+            UNWIND changedRelationships AS rel
             WITH rel WHERE type(rel) = '{rel_type}'
             WITH startNode(rel) AS n
             WHERE n:{source_label}
@@ -277,12 +277,12 @@ TRIGGERS.append(
         "description": "Edition must have at most one HAS_SEGMENTATION relationship",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Edition
             RETURN n AS node
           UNION ALL
-            UNWIND $createdRelationships AS rel
+            UNWIND changedRelationships AS rel
             WITH rel WHERE type(rel) = 'HAS_SEGMENTATION'
             WITH startNode(rel) AS n
             WHERE n:Edition
@@ -316,8 +316,8 @@ TRIGGERS.append(
         "description": "A diplomatic Edition must have exactly one Pagination",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Edition
             RETURN n AS node
           UNION ALL
@@ -371,7 +371,7 @@ TRIGGERS.append(
         ),
         "phase": "before",
         "query": f"""
-        UNWIND $createdNodes AS e
+        UNWIND changedNodes AS e
         WITH e WHERE e:Edition AND {_EXCERPT_EDITION_INVALID}
         WITH collect(coalesce(e.id, elementId(e))) AS ids
         WHERE size(ids) > 0
@@ -394,12 +394,12 @@ TRIGGERS.append(
         "description": "Non-null Segment.reference values must be unique within a segmentation",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS node
+        CALL (*) {
+            UNWIND changedNodes AS node
             WITH node WHERE node:Segment
             RETURN node
           UNION ALL
-            UNWIND $createdRelationships AS rel
+            UNWIND changedRelationships AS rel
             WITH rel WHERE type(rel) = 'SEGMENT_OF'
             WITH startNode(rel) AS node
             WHERE node:Segment
@@ -437,8 +437,8 @@ TRIGGERS.append(
         ),
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Span
             RETURN n AS node
           UNION ALL
@@ -477,12 +477,12 @@ TRIGGERS.append(
         "description": "Span must have at most one SPAN_OF relationship",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Span
             RETURN n AS node
           UNION ALL
-            UNWIND $createdRelationships AS rel
+            UNWIND changedRelationships AS rel
             WITH rel WHERE type(rel) = 'SPAN_OF'
             WITH startNode(rel) AS n
             WHERE n:Span
@@ -518,17 +518,17 @@ TRIGGERS.append(
         "description": "Every Contribution on an Audio must have a performer role (narrator, singer or musician)",
         "phase": "before",
         "query": f"""
-        CALL () {{
-            UNWIND $createdNodes AS n
+        CALL (*) {{
+            UNWIND changedNodes AS n
             WITH n WHERE n:Audio
             RETURN n AS node
           UNION ALL
-            UNWIND $createdNodes AS n
+            UNWIND changedNodes AS n
             WITH n WHERE n:Contribution
             MATCH (node:Audio)-[:HAS_CONTRIBUTION]->(n)
             RETURN node
           UNION ALL
-            UNWIND $createdNodes AS n
+            UNWIND changedNodes AS n
             WITH n WHERE n:RoleType AND NOT coalesce(n.name, '') IN {_AUDIO_ROLE_LIST}
             MATCH (node:Audio)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(n)
             RETURN node
@@ -563,17 +563,17 @@ TRIGGERS.append(
         "description": "The Text an Audio recites must have TEXT_OF to the Audio's AUDIO_OF Work",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Audio
             RETURN n AS node
           UNION ALL
-            UNWIND $createdNodes AS n
+            UNWIND changedNodes AS n
             WITH n WHERE n:Text
             MATCH (node:Audio)-[:RECITATION_OF]->(n)
             RETURN node
           UNION ALL
-            UNWIND $createdNodes AS n
+            UNWIND changedNodes AS n
             WITH n WHERE n:Work
             MATCH (node:Audio)-[:AUDIO_OF]->(n)
             RETURN node
@@ -621,17 +621,17 @@ TRIGGERS.append(
         "description": "The Edition a Recording follows must be an edition of the Text its Audio recites",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Recording
             RETURN n AS node
           UNION ALL
-            UNWIND $createdNodes AS n
+            UNWIND changedNodes AS n
             WITH n WHERE n:Edition
             MATCH (node:Recording)-[:FOLLOWS]->(n)
             RETURN node
           UNION ALL
-            UNWIND $createdNodes AS n
+            UNWIND changedNodes AS n
             WITH n WHERE n:Audio
             MATCH (node:Recording)-[:RENDITION_OF]->(n)
             RETURN node
@@ -669,12 +669,12 @@ TRIGGERS.append(
         "description": "Cues require FOLLOWS; removing or replacing FOLLOWS requires deleting the cues",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Recording
             RETURN n AS node, false AS unfollowed
           UNION ALL
-            UNWIND $createdNodes AS n
+            UNWIND changedNodes AS n
             WITH n WHERE n:Cue
             MATCH (n)-[:CUE_OF]->(node:Recording)
             RETURN node, false AS unfollowed
@@ -721,7 +721,7 @@ TRIGGERS.append(
         "description": "Cue.start_ms must be less than Cue.end_ms",
         "phase": "before",
         "query": """
-        UNWIND $createdNodes AS node
+        UNWIND changedNodes AS node
         WITH node
         WHERE node:Cue
         WITH node
@@ -749,8 +749,8 @@ TRIGGERS.append(
         "description": "Every Contribution must have BY->Person or BY->AI",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Contribution
             RETURN n AS node
           UNION ALL
@@ -785,12 +785,12 @@ TRIGGERS.append(
         "description": "Contribution must have at most one BY relationship",
         "phase": "before",
         "query": """
-        CALL () {
-            UNWIND $createdNodes AS n
+        CALL (*) {
+            UNWIND changedNodes AS n
             WITH n WHERE n:Contribution
             RETURN n AS node
           UNION ALL
-            UNWIND $createdRelationships AS rel
+            UNWIND changedRelationships AS rel
             WITH rel WHERE type(rel) = 'BY'
             WITH startNode(rel) AS n
             WHERE n:Contribution
@@ -825,7 +825,7 @@ TRIGGERS.append(
         "description": "A Text must not have both TRANSLATION_OF and COMMENTARY_OF",
         "phase": "before",
         "query": """
-        UNWIND $createdNodes AS node
+        UNWIND changedNodes AS node
         WITH node
         WHERE node:Text
         WITH node
@@ -862,7 +862,7 @@ def _no_self_ref_trigger(
         "description": description,
         "phase": "before",
         "query": f"""
-            UNWIND $createdRelationships AS rel
+            UNWIND changedRelationships AS rel
             WITH rel
             WHERE type(rel) = '{rel_type}'
             WITH rel, startNode(rel) AS source, endNode(rel) AS target
@@ -933,7 +933,7 @@ TRIGGERS.append(
         "description": "Span.start must not be greater than Span.end",
         "phase": "before",
         "query": """
-        UNWIND $createdNodes AS node
+        UNWIND changedNodes AS node
         WITH node
         WHERE node:Span
         WITH node
@@ -964,7 +964,7 @@ TRIGGERS.append(
         "description": "A Nomen that is ALTERNATIVE_OF another must not itself be the target of ALTERNATIVE_OF",
         "phase": "before",
         "query": """
-        UNWIND $createdRelationships AS rel
+        UNWIND changedRelationships AS rel
         WITH rel
         WHERE type(rel) = 'ALTERNATIVE_OF'
         WITH startNode(rel) AS child, endNode(rel) AS parent
@@ -994,7 +994,7 @@ TRIGGERS.append(
         "description": "A Work can have at most one original Text (TEXT_OF with original:true)",
         "phase": "before",
         "query": """
-        UNWIND $createdRelationships AS rel
+        UNWIND changedRelationships AS rel
         WITH rel
         WHERE type(rel) = 'TEXT_OF' AND rel.original = true
         WITH endNode(rel) AS work
@@ -1026,7 +1026,7 @@ TRIGGERS.append(
         "description": "Text title + language combination must be unique among texts written in that language",
         "phase": "before",
         "query": """
-        UNWIND $createdNodes AS candidate
+        UNWIND changedNodes AS candidate
         WITH DISTINCT candidate WHERE NOT candidate IN $deletedNodes
         MATCH (candidate)-[:HAS_TITLE|HAS_LOCALIZATION*0..2]->(node:LocalizedText)
         MATCH (node)-[:HAS_LANGUAGE]->(language:Language)
@@ -1100,7 +1100,7 @@ TRIGGERS.append(
         "description": "TOC parents form a contained tree within one TOC",
         "phase": "before",
         "query": f"""
-        UNWIND $createdNodes AS n
+        UNWIND changedNodes AS n
         CALL (n) {{
             WITH n WHERE n:TableOfContentsSection RETURN n AS section
             UNION MATCH (n:Span)-[:SPAN_OF]->(section:TableOfContentsSection) RETURN section
@@ -1119,33 +1119,39 @@ TRIGGERS.append(
     }
 )
 
-# APOC supplies changed properties and labels separately from created nodes.
-# Expand that event set once when building the statements, so updates use the same rules.
-_CHANGED_RELATIONSHIPS = """($createdRelationships
-    + reduce(rels = [], key IN keys($assignedRelationshipProperties) |
-        rels + [entry IN $assignedRelationshipProperties[key] | entry.relationship])
-    + reduce(rels = [], key IN keys($removedRelationshipProperties) |
-        rels + [entry IN $removedRelationshipProperties[key] | entry.relationship]))"""
-_CHANGED_NODES = """($createdNodes
-    + reduce(nodes = [], key IN keys($assignedNodeProperties) |
-        nodes + [entry IN $assignedNodeProperties[key] | entry.node])
-    + reduce(nodes = [], key IN keys($removedNodeProperties) |
-        nodes + [entry IN $removedNodeProperties[key] | entry.node])
-    + reduce(nodes = [], label IN keys($assignedLabels) | nodes + $assignedLabels[label])
-    + reduce(nodes = [], label IN keys($removedLabels) | nodes + $removedLabels[label]
-        + reduce(neighbors = [], node IN [n IN $removedLabels[label] WHERE NOT n IN $deletedNodes] |
-            neighbors + [(node)--(neighbor) | neighbor]))
-    + [rel IN $createdRelationships + $deletedRelationships | startNode(rel)]
-    + [rel IN $createdRelationships + $deletedRelationships | endNode(rel)])"""
-# Hash-set subtraction also dedupes; list concatenation in reduce and `IN` filters are quadratic on large changes.
-_CHANGED_NODES = f"apoc.coll.subtract({_CHANGED_NODES}, $deletedNodes)"
-_CHANGED_RELATIONSHIPS = f"apoc.coll.subtract({_CHANGED_RELATIONSHIPS}, $deletedRelationships)"
+# APOC supplies changed properties and labels separately from created elements. Bind the surviving
+# created or changed elements once per statement, so updates use the same rules as creation.
+# Hash-set subtraction also dedupes; `IN` filters are quadratic on large changes.
+_CHANGED_RELATIONSHIPS = """
+WITH apoc.coll.subtract($createdRelationships
+    + coll.flatten([key IN keys($assignedRelationshipProperties) |
+        [entry IN $assignedRelationshipProperties[key] | entry.relationship]])
+    + coll.flatten([key IN keys($removedRelationshipProperties) |
+        [entry IN $removedRelationshipProperties[key] | entry.relationship]]),
+    $deletedRelationships) AS changedRelationships
+"""
+_CHANGED_NODES = """
+WITH changedRelationships, apoc.coll.subtract($createdNodes
+    + coll.flatten([key IN keys($assignedNodeProperties) | [entry IN $assignedNodeProperties[key] | entry.node]])
+    + coll.flatten([key IN keys($removedNodeProperties) | [entry IN $removedNodeProperties[key] | entry.node]])
+    + coll.flatten([label IN keys($assignedLabels) | $assignedLabels[label]])
+    + coll.flatten([label IN keys($removedLabels) | $removedLabels[label]
+        + coll.flatten([node IN $removedLabels[label] WHERE NOT node IN $deletedNodes |
+            [(node)--(neighbor) | neighbor]])])
+    + [rel IN changedRelationships + $deletedRelationships | startNode(rel)]
+    + [rel IN changedRelationships + $deletedRelationships | endNode(rel)],
+    $deletedNodes) AS changedNodes
+"""
+
+
+def bind_changes(query: str) -> str:
+    """Prefix a trigger query with the changedRelationships and changedNodes it reads."""
+    changed_nodes = _CHANGED_NODES if "changedNodes" in query else ""
+    return _CHANGED_RELATIONSHIPS + changed_nodes + query
+
+
 for trigger in TRIGGERS:
-    trigger["query"] = (
-        trigger["query"]
-        .replace("$createdNodes", _CHANGED_NODES)
-        .replace("$createdRelationships", _CHANGED_RELATIONSHIPS)
-    )
+    trigger["query"] = bind_changes(trigger["query"])
 
 
 async def install_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -> None:

@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, LiteralString
 
+from pydantic import MISSING
+
 from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from identifier import generate_id
 from models.category import CategoryOutput
@@ -209,7 +211,7 @@ class CategoryDatabase:
             if existing is None:
                 raise DataNotFoundError(f"Category '{category_id}' not found in application '{application}'")
 
-            if patch.title is not None:
+            if patch.title is not MISSING:
                 await self._validate_not_exists_tx(
                     tx, application, patch.title.root, existing.parent_id, category_id=category_id
                 )
@@ -218,7 +220,7 @@ class CategoryDatabase:
                 nomen_id = await NomenDatabase.create_with_transaction(tx, title)
                 await tx.run(CategoryDatabase.LINK_TITLE_QUERY, category_id=category_id, nomen_id=nomen_id)
 
-            if patch.description is not None:
+            if patch.description is not MISSING:
                 existing_description = existing.description.root if existing.description else {}
                 description = _merge_localizations(existing_description, patch.description.root)
                 await tx.run(CategoryDatabase.DELETE_DESCRIPTION_QUERY, category_id=category_id)

@@ -11,7 +11,13 @@ from database.migrations import (
     unconvertible_recording_ids,
     upgrade_recordings,
 )
-from database.neo4j_triggers import SYSTEM_DATABASE_NAME, _required_rel_trigger, install_triggers, wait_for_triggers
+from database.neo4j_triggers import (
+    SYSTEM_DATABASE_NAME,
+    _required_rel_trigger,
+    bind_changes,
+    install_triggers,
+    wait_for_triggers,
+)
 from identifier import generate_id
 from models.edition import EditionInput
 from models.recording import RecordingCue
@@ -55,7 +61,7 @@ async def _replace_triggers_with_old_rule(db) -> None:
                 "CALL apoc.trigger.install($database, $name, $statement, {phase: 'before'})",
                 database=db._database,
                 name=OLD_RECORDING_TRIGGER["name"],
-                statement=f"CYPHER 25 {OLD_RECORDING_TRIGGER['query']}",
+                statement=f"CYPHER 25 {bind_changes(OLD_RECORDING_TRIGGER['query'])}",
             )
         ).consume()
     await asyncio.sleep(NEO4J_TRIGGER_REFRESH_SECONDS)

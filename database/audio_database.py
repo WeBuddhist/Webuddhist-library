@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, LiteralString
 
+from pydantic import MISSING
+
 from exceptions import DataConflictError, DataNotFoundError
 from identifier import generate_id
 from models.audio import AudioInput, AudioOutput, AudioPatch
@@ -208,14 +210,14 @@ class AudioDatabase:
             result = await tx.run("MATCH (a:Audio {id: $id}) RETURN a.id AS id", id=audio_id)
             if await result.single() is None:
                 raise DataNotFoundError(f"Audio '{audio_id}' not found")
-            properties = patch.model_dump(include={"date"}, exclude_unset=True)
+            properties = patch.model_dump(include={"date"})
             if properties:
                 await tx.run(AudioDatabase.UPDATE_PROPERTIES_QUERY, audio_id=audio_id, properties=properties)
 
-            if patch.license is not None:
+            if patch.license is not MISSING:
                 await tx.run(AudioDatabase.UPDATE_LICENSE_QUERY, audio_id=audio_id, license=patch.license.value)
 
-            if patch.language is not None:
+            if patch.language is not MISSING:
                 language_code = patch.language.split("-")[0].lower()
                 await DatabaseValidator.validate_language_code_exists(tx, language_code)
                 await tx.run(
@@ -225,12 +227,12 @@ class AudioDatabase:
                     language_code=language_code,
                 )
 
-            if patch.title is not None:
+            if patch.title is not MISSING:
                 await tx.run(AudioDatabase.DELETE_TITLE_QUERY, audio_id=audio_id)
                 nomen_id = await NomenDatabase.create_with_transaction(tx, patch.title.root)
                 await tx.run(AudioDatabase.LINK_TITLE_QUERY, audio_id=audio_id, nomen_id=nomen_id)
 
-            if patch.contributions is not None:
+            if patch.contributions is not MISSING:
                 await DatabaseValidator.validate_contribution_references(tx, patch.contributions)
                 await ContributionDatabase.delete_all_with_transaction(tx, AUDIO_LABEL, audio_id)
                 for contribution in patch.contributions:

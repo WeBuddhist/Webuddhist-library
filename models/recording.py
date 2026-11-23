@@ -1,7 +1,7 @@
 from itertools import pairwise
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, Field, model_validator
+from pydantic import MISSING, AfterValidator, Field, model_validator
 
 from .annotation import Span
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel
@@ -22,8 +22,8 @@ class RecordingInput(RecordingBase):
 
 
 class RecordingPatch(PatchModel):
-    title: LocalizedString | None = None
-    duration_ms: int | None = Field(default=None, ge=0)
+    title: LocalizedString | MISSING = MISSING
+    duration_ms: int | MISSING = Field(default=MISSING, ge=0)
 
 
 class RecordingOutput(RecordingBase):
@@ -33,6 +33,13 @@ class RecordingOutput(RecordingBase):
     edition_id: NonEmptyStr | None = None
     format: AudioFormat
     size_bytes: int
+
+
+class RecordingAudioUrl(OpenPechaModel):
+    """A short-lived link to a recording's audio file that any player can open without an API key."""
+
+    url: NonEmptyStr = Field(description="Presigned storage URL; supports range requests and seeking")
+    expires_in: int = Field(description="Seconds until the URL stops working", gt=0)
 
 
 class RecordingCue(OpenPechaModel):

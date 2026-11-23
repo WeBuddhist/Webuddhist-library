@@ -29,15 +29,6 @@ class OpenPechaModel(BaseModel):
 
 
 class PatchModel(OpenPechaModel):
-    @model_validator(mode="before")
-    @classmethod
-    def reject_null_fields(cls, data: object) -> object:
-        if isinstance(data, dict):
-            null_fields = [str(field) for field, value in data.items() if value is None]
-            if null_fields:
-                raise ValueError(f"Null values are not supported in PATCH: {', '.join(null_fields)}")
-        return data
-
     @model_validator(mode="after")
     def validate_at_least_one_field(self) -> Self:
         if not self.model_fields_set:
