@@ -274,6 +274,14 @@ async def test_edit_that_would_remove_a_span_is_rejected(client, test_database):
     assert await _content(client, edition) == "Two. "
 
 
+async def test_identical_source_replacement_preserves_excerpt_slice(client, test_database):
+    _, source, _, edition = await _part(client, test_database)
+    response = await _patch(client, source, {"type": "replace", "start": 5, "end": 10, "text": WHOLE[5:10]})
+    assert response.status_code == 204, response.text
+    assert await _content(client, edition) == WHOLE[5:10]
+    assert (await client.get(f"/v2/editions/{edition}")).json()["excerpt_of"]["spans"] == _spans((5, 10))
+
+
 async def test_excerpt_edition_rejects_its_own_annotations_and_content_writes(client, test_database):
     _, _, _, edition = await _part(client, test_database)
     span = _span(0, 5)

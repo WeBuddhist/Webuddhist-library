@@ -75,6 +75,8 @@ PATCH /v2/editions/{edition_id}/content
 
 ### Behavior Summary
 
+Replacing a range with exactly the text it already contains preserves segment IDs, annotations, alignments and excerpt spans. The edit still publishes a fresh content object and advances the edition revision after checking for concurrent changes.
+
 | Operation | Segment | Page | Other annotations |
 |-----------|---------|------|-------------------|
 | Insert at start boundary | Shift† | Shift† | Shift |

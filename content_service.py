@@ -66,6 +66,7 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
         raise DataValidationError("Stored content length differs from edition metadata")
     key = f"objects/{generate_id()}"
     updated = content[:start] + replacement + content[end:]
+    text_changed = updated != content
     await storage.put_immutable(key, updated.encode(), "text/plain; charset=utf-8")
 
     async def write(tx: AsyncManagedTransaction) -> None:
@@ -73,8 +74,9 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
         current = await read_state(tx, edition_id)
         if current.revision != state.revision:
             raise DataConflictError(f"Edition changed: expected revision {state.revision}, current {current.revision}")
-        await db.span.adjust_with_transaction(tx, edition_id, start, end, len(replacement))
-        await ExcerptDatabase.propagate_edit_with_transaction(tx, edition_id, start, end, len(replacement))
+        if text_changed:
+            await db.span.adjust_with_transaction(tx, edition_id, start, end, len(replacement))
+            await ExcerptDatabase.propagate_edit_with_transaction(tx, edition_id, start, end, len(replacement))
         await tx.run(
             """
             MATCH (e:Edition {id: $id})

@@ -2,6 +2,7 @@
 """Repository integration and span tests using the disposable Neo4j fixture."""
 
 import pytest
+from database.span_database import adjust_annotation_span
 from exceptions import DataNotFoundError, DataValidationError
 from identifier import generate_id
 from models.annotation import Page, PaginationInput, Span, Volume
@@ -1088,67 +1089,49 @@ class TestSpanAdjustmentFunctions:
 
     async def test_annotation_insert_at_start_boundary_shifts(self):
         """Insert at annotation start boundary should shift it."""
-        from database.span_database import _adjust_annotation_for_insert
-
-        result = _adjust_annotation_for_insert(start=10, end=20, insert_pos=10, insert_len=5)
+        result = adjust_annotation_span(10, 20, edit_start=10, edit_end=10, new_len=5)
         assert result == (15, 25)
 
     async def test_annotation_insert_at_end_boundary_unchanged(self):
         """Insert at annotation end boundary should leave it unchanged."""
-        from database.span_database import _adjust_annotation_for_insert
-
-        result = _adjust_annotation_for_insert(start=10, end=20, insert_pos=20, insert_len=5)
+        result = adjust_annotation_span(10, 20, edit_start=20, edit_end=20, new_len=5)
         assert result == (10, 20)
 
     async def test_annotation_insert_inside_expands(self):
         """Insert strictly inside annotation should expand it."""
-        from database.span_database import _adjust_annotation_for_insert
-
-        result = _adjust_annotation_for_insert(start=10, end=20, insert_pos=15, insert_len=5)
+        result = adjust_annotation_span(10, 20, edit_start=15, edit_end=15, new_len=5)
         assert result == (10, 25)
 
     async def test_delete_fully_encompasses_returns_none(self):
         """Delete that fully encompasses span should return None."""
-        from database.span_database import _adjust_span_for_delete
-
-        result = _adjust_span_for_delete(start=10, end=20, del_start=5, del_end=25)
+        result = adjust_annotation_span(10, 20, edit_start=5, edit_end=25, new_len=0)
         assert result is None
 
     async def test_delete_before_shifts_left(self):
         """Delete before span should shift it left."""
-        from database.span_database import _adjust_span_for_delete
-
-        result = _adjust_span_for_delete(start=20, end=30, del_start=5, del_end=10)
+        result = adjust_annotation_span(20, 30, edit_start=5, edit_end=10, new_len=0)
         assert result == (15, 25)
 
     async def test_delete_after_unchanged(self):
         """Delete after span should leave it unchanged."""
-        from database.span_database import _adjust_span_for_delete
-
-        result = _adjust_span_for_delete(start=10, end=20, del_start=25, del_end=30)
+        result = adjust_annotation_span(10, 20, edit_start=25, edit_end=30, new_len=0)
         assert result == (10, 20)
 
     async def test_delete_overlaps_start_trims(self):
         """Delete overlapping start should trim the span and shift."""
-        from database.span_database import _adjust_span_for_delete
-
         # Span (10,20), delete [5,15): del_start <= start < del_end < end
         # Result: (del_start, end - del_len) = (5, 20 - 10) = (5, 10)
-        result = _adjust_span_for_delete(start=10, end=20, del_start=5, del_end=15)
+        result = adjust_annotation_span(10, 20, edit_start=5, edit_end=15, new_len=0)
         assert result == (5, 10)
 
     async def test_delete_overlaps_end_trims(self):
         """Delete overlapping end should trim the span."""
-        from database.span_database import _adjust_span_for_delete
-
-        result = _adjust_span_for_delete(start=10, end=20, del_start=15, del_end=25)
+        result = adjust_annotation_span(10, 20, edit_start=15, edit_end=25, new_len=0)
         assert result == (10, 15)
 
     async def test_delete_inside_shrinks(self):
         """Delete inside span should shrink it."""
-        from database.span_database import _adjust_span_for_delete
-
-        result = _adjust_span_for_delete(start=10, end=30, del_start=15, del_end=20)
+        result = adjust_annotation_span(10, 30, edit_start=15, edit_end=20, new_len=0)
         assert result == (10, 25)
 
     @pytest.mark.parametrize("is_page", [False, True])
@@ -1174,37 +1157,27 @@ class TestSpanAdjustmentFunctions:
 
     async def test_annotation_replace_exact_match_deletes(self):
         """Replace exact match should delete annotation."""
-        from database.span_database import _adjust_annotation_for_replace
-
-        result = _adjust_annotation_for_replace(start=10, end=20, replace_start=10, replace_end=20, new_len=15)
+        result = adjust_annotation_span(10, 20, edit_start=10, edit_end=20, new_len=15)
         assert result is None
 
     async def test_annotation_replace_encompasses_deletes(self):
         """Replace encompassing annotation should delete it."""
-        from database.span_database import _adjust_annotation_for_replace
-
-        result = _adjust_annotation_for_replace(start=10, end=20, replace_start=5, replace_end=25, new_len=10)
+        result = adjust_annotation_span(10, 20, edit_start=5, edit_end=25, new_len=10)
         assert result is None
 
     async def test_replace_partial_overlap_start_trims(self):
         """Replace overlapping start should trim the span."""
-        from database.span_database import _adjust_annotation_for_replace
-
-        result = _adjust_annotation_for_replace(start=10, end=20, replace_start=5, replace_end=15, new_len=3)
+        result = adjust_annotation_span(10, 20, edit_start=5, edit_end=15, new_len=3)
         assert result == (8, 13)
 
     async def test_replace_partial_overlap_end_trims(self):
         """Replace overlapping end should trim the span."""
-        from database.span_database import _adjust_annotation_for_replace
-
-        result = _adjust_annotation_for_replace(start=10, end=20, replace_start=15, replace_end=25, new_len=3)
+        result = adjust_annotation_span(10, 20, edit_start=15, edit_end=25, new_len=3)
         assert result == (10, 18)
 
     async def test_replace_inside_span_adjusts(self):
         """Replace inside span should adjust its size."""
-        from database.span_database import _adjust_annotation_for_replace
-
-        result = _adjust_annotation_for_replace(start=10, end=30, replace_start=15, replace_end=20, new_len=3)
+        result = adjust_annotation_span(10, 30, edit_start=15, edit_end=20, new_len=3)
         assert result == (10, 28)
 
     # Footnotes are empty spans (start == end) in a 10-character text.
@@ -1219,9 +1192,7 @@ class TestSpanAdjustmentFunctions:
         ],
     )
     async def test_footnote_insert(self, point, insert_pos, expected):
-        from database.span_database import _adjust_annotation_for_insert
-
-        assert _adjust_annotation_for_insert(start=point, end=point, insert_pos=insert_pos, insert_len=3) == expected
+        assert adjust_annotation_span(point, point, edit_start=insert_pos, edit_end=insert_pos, new_len=3) == expected
 
     @pytest.mark.parametrize(
         ("point", "del_start", "del_end", "expected"),
@@ -1234,9 +1205,7 @@ class TestSpanAdjustmentFunctions:
         ],
     )
     async def test_footnote_delete(self, point, del_start, del_end, expected):
-        from database.span_database import _adjust_span_for_delete
-
-        assert _adjust_span_for_delete(start=point, end=point, del_start=del_start, del_end=del_end) == expected
+        assert adjust_annotation_span(point, point, edit_start=del_start, edit_end=del_end, new_len=0) == expected
 
     @pytest.mark.parametrize(
         ("point", "replace_start", "replace_end", "expected"),
@@ -1249,14 +1218,7 @@ class TestSpanAdjustmentFunctions:
         ],
     )
     async def test_footnote_replace(self, point, replace_start, replace_end, expected):
-        from database.span_database import _adjust_annotation_for_replace
-
-        assert (
-            _adjust_annotation_for_replace(
-                start=point, end=point, replace_start=replace_start, replace_end=replace_end, new_len=4
-            )
-            == expected
-        )
+        assert adjust_annotation_span(point, point, edit_start=replace_start, edit_end=replace_end, new_len=4) == expected
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -1284,9 +1246,7 @@ class TestSpanAdjustmentEdgeCases:
 
         Operation: Delete [4, 9) on span [4, 9)
         """
-        from database.span_database import _adjust_span_for_delete
-
-        result = _adjust_span_for_delete(start=4, end=9, del_start=4, del_end=9)
+        result = adjust_annotation_span(4, 9, edit_start=4, edit_end=9, new_len=0)
         assert result is None
 
     async def test_delete_across_multiple_spans(self):
@@ -1296,10 +1256,8 @@ class TestSpanAdjustmentEdgeCases:
         Operation: Delete [7, 12) - crosses both spans
         Expected: B2 trims to [4, 7), B3 trims and shifts to [7, 10)
         """
-        from database.span_database import _adjust_span_for_delete
-
-        b2_result = _adjust_span_for_delete(start=4, end=9, del_start=7, del_end=12)
-        b3_result = _adjust_span_for_delete(start=9, end=15, del_start=7, del_end=12)
+        b2_result = adjust_annotation_span(4, 9, edit_start=7, edit_end=12, new_len=0)
+        b3_result = adjust_annotation_span(9, 15, edit_start=7, edit_end=12, new_len=0)
 
         assert b2_result == (4, 7)
         assert b3_result == (7, 10)
@@ -1311,11 +1269,9 @@ class TestSpanAdjustmentEdgeCases:
         Operation: Delete [10, 20) (exactly S2)
         Expected: S1 stays [0, 10), S2 deleted, S3 shifts to [10, 20)
         """
-        from database.span_database import _adjust_span_for_delete
-
-        s1_result = _adjust_span_for_delete(start=0, end=10, del_start=10, del_end=20)
-        s2_result = _adjust_span_for_delete(start=10, end=20, del_start=10, del_end=20)
-        s3_result = _adjust_span_for_delete(start=20, end=30, del_start=10, del_end=20)
+        s1_result = adjust_annotation_span(0, 10, edit_start=10, edit_end=20, new_len=0)
+        s2_result = adjust_annotation_span(10, 20, edit_start=10, edit_end=20, new_len=0)
+        s3_result = adjust_annotation_span(20, 30, edit_start=10, edit_end=20, new_len=0)
 
         assert s1_result == (0, 10)
         assert s2_result is None
@@ -1330,11 +1286,9 @@ class TestSpanAdjustmentEdgeCases:
         Operation: Delete [5, 15) (partial S1, partial S2)
         Expected: S1 [0, 5), S2 [5, 10), S3 [10, 20)
         """
-        from database.span_database import _adjust_span_for_delete
-
-        s1_result = _adjust_span_for_delete(start=0, end=10, del_start=5, del_end=15)
-        s2_result = _adjust_span_for_delete(start=10, end=20, del_start=5, del_end=15)
-        s3_result = _adjust_span_for_delete(start=20, end=30, del_start=5, del_end=15)
+        s1_result = adjust_annotation_span(0, 10, edit_start=5, edit_end=15, new_len=0)
+        s2_result = adjust_annotation_span(10, 20, edit_start=5, edit_end=15, new_len=0)
+        s3_result = adjust_annotation_span(20, 30, edit_start=5, edit_end=15, new_len=0)
 
         assert s1_result == (0, 5)
         assert s2_result == (5, 10)
@@ -1365,10 +1319,8 @@ class TestSpanAdjustmentEdgeCases:
         Operation: Delete [12, 18)
         Expected: N1 trims to [5, 12), N2 shrinks to [10, 14)
         """
-        from database.span_database import _adjust_span_for_delete
-
-        n1_result = _adjust_span_for_delete(start=5, end=15, del_start=12, del_end=18)
-        n2_result = _adjust_span_for_delete(start=10, end=20, del_start=12, del_end=18)
+        n1_result = adjust_annotation_span(5, 15, edit_start=12, edit_end=18, new_len=0)
+        n2_result = adjust_annotation_span(10, 20, edit_start=12, edit_end=18, new_len=0)
 
         assert n1_result == (5, 12)
         assert n2_result == (10, 14)
@@ -1380,26 +1332,20 @@ class TestSpanAdjustmentEdgeCases:
         Operation: Delete [5, 25)
         Expected: Outer shrinks to [0, 20), Inner deleted
         """
-        from database.span_database import _adjust_span_for_delete
-
-        outer_result = _adjust_span_for_delete(start=0, end=40, del_start=5, del_end=25)
-        inner_result = _adjust_span_for_delete(start=10, end=20, del_start=5, del_end=25)
+        outer_result = adjust_annotation_span(0, 40, edit_start=5, edit_end=25, new_len=0)
+        inner_result = adjust_annotation_span(10, 20, edit_start=5, edit_end=25, new_len=0)
 
         assert outer_result == (0, 20)
         assert inner_result is None
 
     async def test_annotation_insert_before_shifts(self):
         """Insert before annotation should shift it."""
-        from database.span_database import _adjust_annotation_for_insert
-
-        result = _adjust_annotation_for_insert(start=10, end=20, insert_pos=5, insert_len=5)
+        result = adjust_annotation_span(10, 20, edit_start=5, edit_end=5, new_len=5)
         assert result == (15, 25)
 
     async def test_annotation_insert_after_unchanged(self):
         """Insert after annotation should leave it unchanged."""
-        from database.span_database import _adjust_annotation_for_insert
-
-        result = _adjust_annotation_for_insert(start=10, end=20, insert_pos=25, insert_len=5)
+        result = adjust_annotation_span(10, 20, edit_start=25, edit_end=25, new_len=5)
         assert result == (10, 20)
 
     async def test_continuous_insert_before_shifts(self):
@@ -1411,14 +1357,10 @@ class TestSpanAdjustmentEdgeCases:
 
     async def test_replace_before_shifts(self):
         """Replace before span should shift it by delta."""
-        from database.span_database import _adjust_annotation_for_replace
-
-        result = _adjust_annotation_for_replace(start=20, end=30, replace_start=5, replace_end=10, new_len=3)
+        result = adjust_annotation_span(20, 30, edit_start=5, edit_end=10, new_len=3)
         assert result == (18, 28)
 
     async def test_replace_after_unchanged(self):
         """Replace after span should leave it unchanged."""
-        from database.span_database import _adjust_annotation_for_replace
-
-        result = _adjust_annotation_for_replace(start=10, end=20, replace_start=25, replace_end=30, new_len=3)
+        result = adjust_annotation_span(10, 20, edit_start=25, edit_end=30, new_len=3)
         assert result == (10, 20)

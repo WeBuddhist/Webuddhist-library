@@ -70,6 +70,33 @@ async def test_each_edit_uses_fresh_storage_and_preserves_the_previous_content(t
     assert [(line.start, line.end) for line in lines] == [(0, 12)]
 
 
+async def test_identical_replacement_preserves_segments_notes_and_alignment(test_database, mock_storage):
+    from tests.test_graph_scenarios import align, graph_edition
+
+    db = test_database
+    edition, segments = await graph_edition(db, "source", [(0, 4), (4, 8), (8, 10)])
+    target, _ = await graph_edition(db, "target")
+    await align(db, edition, target, source_ref="1")
+    links = await db.alignment.get(edition, target, offset=0, limit=20)
+    assert len(links) == 1
+    note_id = await db.annotation.note.add_durchen(edition, NoteInput(span={"start": 2, "end": 4}, text="note"))
+    note = await db.annotation.note.get(note_id)
+    original = await state(db, edition)
+    content = "ab😀defghij"
+    await mock_storage.put_immutable(original.stored_key, content.encode(), "text/plain")
+
+    edit = ContentOperation.model_validate({"type": "replace", "start": 0, "end": 8, "text": content[:8]})
+    await edit_content(db, mock_storage, edition, edit)
+
+    assert await db.annotation.segmentation.get_all_segments_by_edition(edition) == segments
+    assert await db.annotation.note.get(note_id) == note
+    assert await db.alignment.get(edition, target, offset=0, limit=20) == links
+    current = await state(db, edition)
+    assert current.revision == original.revision + 1
+    assert current.stored_key != original.stored_key
+    assert await mock_storage.read_text(current.stored_key) == content
+
+
 async def test_failed_graph_commit_leaves_old_object_and_spans_unchanged(test_database, monkeypatch):
     db = test_database
     storage, _, _, edition = await fixture(db)
@@ -219,7 +246,11 @@ async def test_concurrent_edits_never_overwrite_each_others_state(test_database)
     assert current.length == 7
 
 
-async def test_annotation_change_invalidates_an_edit_prepared_before_it(test_database):
+@pytest.mark.parametrize("operation", [
+    insert(),
+    ContentOperation.model_validate({"type": "replace", "start": 1, "end": 3, "text": "bc"}),
+], ids=["insert", "identical-replacement"])
+async def test_annotation_change_invalidates_an_edit_prepared_before_it(test_database, operation):
     db = test_database
     storage, _, _, edition = await fixture(db)
 
@@ -228,7 +259,7 @@ async def test_annotation_change_invalidates_an_edit_prepared_before_it(test_dat
 
     storage.before_put = annotate
     with pytest.raises(DataConflictError, match="changed"):
-        await edit_content(db, storage, edition, insert())
+        await edit_content(db, storage, edition, operation)
     assert await storage.read_text((await state(db, edition)).object_key) == "abcdef"
     notes = await db.annotation.note.get_all(edition)
     assert len(notes) == 1 and notes[0].span.end == 3

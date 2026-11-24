@@ -152,3 +152,5 @@ async def test_zero_width_lookup_and_alignment_projection(test_database):
     assert marker_pair.target_segment.lines[0].start == marker_pair.target_segment.lines[0].end == 0
     related = await db.segment.get_related(edition, [(5, 5)])
     assert [segment.id for segment in related] == [targets[0].id]
+    related = await db.segment.get_related(edition, [(0, 5), (5, 5)])
+    assert [segment.id for segment in related] == [segment.id for segment in targets]

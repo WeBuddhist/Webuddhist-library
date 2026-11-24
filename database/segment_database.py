@@ -179,7 +179,7 @@ class SegmentDatabase:
                 await tx.run(
                     self.FIND_START_SEGMENTS_QUERY,
                     edition_id=edition_id,
-                    spans=_merge_spans([list(s) for s in starting_spans]),
+                    spans=starting_spans,
                 )
             ).data()
             start_segment_ids = {record["segment_id"] for record in start_records}
@@ -263,19 +263,3 @@ class SegmentDatabase:
 
         async with self._session as session:
             return await session.execute_read(_read)
-
-
-def _merge_spans(spans: list[list[int]]) -> list[list[int]]:
-    if not spans:
-        return []
-
-    spans.sort()
-
-    merged = spans[:1]
-    for curr in spans[1:]:
-        prev = merged[-1]
-        if curr[0] <= prev[1]:
-            prev[1] = max(prev[1], curr[1])
-        else:
-            merged.append(curr)
-    return merged

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, LiteralString
+from typing import TYPE_CHECKING, Literal, LiteralString
 
 from exceptions import DataValidationError
 
@@ -6,80 +6,41 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
 
+def _map_boundary(position: int, start: int, end: int, new_len: int, *, side: Literal["left", "right"]) -> int:
+    """Map an old offset. A boundary touched by the edit attaches before or after the replacement."""
+    if position < start:
+        return position
+    if position > end:
+        return position + new_len - (end - start)
+    return start if side == "left" else start + new_len
+
+
 def _adjust_continuous_for_insert(start: int, end: int, insert_pos: int, insert_len: int) -> tuple[int, int]:
-    """Adjust continuous span (Segmentation/Pagination) for INSERT. Expands at end boundary and position 0."""
-    if start == end == insert_pos == 0:
-        return (start, end)
-    if insert_pos == 0 and start == 0:
-        return (start, end + insert_len)
-    if insert_pos <= start:
-        return (start + insert_len, end + insert_len)
-    if insert_pos <= end:
-        return (start, end + insert_len)
-    return (start, end)
-
-
-def _adjust_annotation_for_insert(start: int, end: int, insert_pos: int, insert_len: int) -> tuple[int, int]:
-    """Adjust annotation span for INSERT. Shifts at boundaries, only expands when strictly inside."""
-    if insert_pos <= start:
-        return (start + insert_len, end + insert_len)
-    if insert_pos < end:
-        return (start, end + insert_len)
-    return (start, end)
-
-
-def _adjust_span_for_delete(start: int, end: int, del_start: int, del_end: int) -> tuple[int, int] | None:
-    """Adjust span for DELETE. Returns None if fully encompassed."""
-    del_len = del_end - del_start
-
-    if del_end <= start:
-        return (start - del_len, end - del_len)
-    if del_start >= end:
-        return (start, end)
-    if del_start <= start and del_end >= end:
-        return None
-    if del_start <= start < del_end < end:
-        return (del_start, end - del_len)
-    if start < del_start < end <= del_end:
-        return (start, del_start)
-    if start < del_start and del_end < end:
-        return (start, end - del_len)
-    return (start, end)
-
-
-def _adjust_annotation_for_replace(
-    start: int,
-    end: int,
-    replace_start: int,
-    replace_end: int,
-    new_len: int,
-) -> tuple[int, int] | None:
-    """Adjust annotation span for REPLACE. Deletes on exact match or encompass."""
-    delta = new_len - (replace_end - replace_start)
-
-    if replace_start >= end:
-        return (start, end)
-    if replace_end <= start:
-        return (start + delta, end + delta)
-    if replace_start <= start and replace_end >= end:
-        return None
-    if start < replace_start and replace_end < end:
-        return (start, end + delta)
-    if replace_start <= start < replace_end < end:
-        return (replace_start + new_len, end + delta)
-
-    return (start, replace_start + new_len)  # start < replace_start < end <= replace_end
+    # The preceding segment owns an insertion at a shared boundary. The document origin stays fixed.
+    side = "left" if insert_pos == 0 else "right"
+    return (
+        _map_boundary(start, insert_pos, insert_pos, insert_len, side=side),
+        _map_boundary(end, insert_pos, insert_pos, insert_len, side=side),
+    )
 
 
 def adjust_annotation_span(
     start: int, end: int, edit_start: int, edit_end: int, new_len: int
 ) -> tuple[int, int] | None:
-    """Span after replacing [edit_start, edit_end) with new_len characters; None when the edit removes it."""
-    if edit_start == edit_end:
-        return _adjust_annotation_for_insert(start, end, edit_start, new_len)
-    if new_len == 0:
-        return _adjust_span_for_delete(start, end, edit_start, edit_end)
-    return _adjust_annotation_for_replace(start, end, edit_start, edit_end, new_len)
+    """Map an independent annotation, removing it when its text or point is fully overwritten."""
+    if start == end:
+        if edit_start < start < edit_end:
+            return None
+        # A point follows inserted text, but stays before a replacement that starts at the point.
+        side = "left" if start == edit_start < edit_end else "right"
+        point = _map_boundary(start, edit_start, edit_end, new_len, side=side)
+        return point, point
+    if edit_start <= start and end <= edit_end:
+        return None
+    return (
+        _map_boundary(start, edit_start, edit_end, new_len, side="right"),
+        _map_boundary(end, edit_start, edit_end, new_len, side="left" if end == edit_start else "right"),
+    )
 
 
 def _adjust_continuous_entities(
@@ -92,27 +53,18 @@ def _adjust_continuous_entities(
             for sid, left, right in lines
         }
     ordered = sorted(entities.items(), key=lambda item: (item[0][0], item[1][0][1], item[1][-1][2], item[0][1]))
-    # One owner per collection: first fully covered entity, otherwise the entity containing the edit's start.
-    # Mapping shared boundaries once prevents replacement text being assigned to two neighbors.
-    owners: dict[str, int] = {}
+    # Split at the first fully covered entity so it owns the replacement. Otherwise split at the edit start.
+    pivots: dict[str, int] = {}
     for (collection_id, _, _), lines in ordered:
         left, right = lines[0][1], lines[-1][2]
         if start <= left < right <= end:
-            owners.setdefault(collection_id, left)
-    for (collection_id, _, _), lines in ordered:
-        left, right = lines[0][1], lines[-1][2]
-        if left <= start < right:
-            owners.setdefault(collection_id, left)
+            pivots.setdefault(collection_id, left)
 
     transformed: dict[str, tuple[int, int]] = {}
     for (collection_id, _, is_page), lines in ordered:
 
-        def boundary(position: int, pivot: int = owners.get(collection_id, start)) -> int:
-            if position <= start:
-                return position
-            if position >= end:
-                return position + new_len - (end - start)
-            return start if position <= pivot else start + new_len
+        def boundary(position: int, pivot: int = pivots.get(collection_id, start)) -> int:
+            return _map_boundary(position, start, end, new_len, side="left" if position <= pivot else "right")
 
         if is_page and boundary(lines[0][1]) == boundary(lines[-1][2]):
             raise DataValidationError("Content edits must leave at least one character on every page")
