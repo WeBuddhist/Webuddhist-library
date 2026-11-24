@@ -15,6 +15,10 @@ type LanguageFilter = Annotated[str, StringConstraints(to_lower=True, pattern=r"
 type NonEmptyStr = Annotated[StrictStr, StringConstraints(min_length=1, pattern=r"\S")]
 
 
+def base_language_code(tag: str) -> str:
+    return tag.partition("-")[0].lower()
+
+
 def _dedupe[T](items: list[T], exclude: T) -> list[T]:
     """Remove duplicates and excluded item from list."""
     seen: list[T] = []

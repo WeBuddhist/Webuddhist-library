@@ -133,10 +133,3 @@ class LanguageCreateRequest(OpenPechaModel):
 
 class ApplicationCreateRequest(OpenPechaModel):
     name: NonEmptyStr
-
-
-class SegmentsQueryParams(OpenPechaModel):
-    search_type: str = Field(default="semantic", description="Type of segment search")
-    limit: int = Field(default=10, ge=1, le=100, description="Maximum number of results")
-    return_text: bool = Field(default=True, description="Include text content")
-    title: str | None = Field(None, description="Filter by title")

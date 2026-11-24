@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING
 from database.content_state import read_at_revision
 from exceptions import DataNotFoundError, DataValidationError
 from models.content_search import ContentSearchResult, ContentSearchSpan
-from search_client import SearchIndex
+from search_client import SearchIndex, term_filters
+
+from .mapping import content_index_body
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -34,7 +36,7 @@ class ContentSearchService:
         self.index = SearchIndex(client, index_name)
 
     async def setup_index(self) -> None:
-        await self.index.setup_index(_index_body())
+        await self.index.setup_index(content_index_body())
 
     async def prepare_documents(self, edition_id: str, db: Database, storage: Storage) -> list[dict]:
         async def eligibility(tx: AsyncManagedTransaction) -> bool:
@@ -136,42 +138,8 @@ class ContentSearchService:
         return results
 
 
-def _index_body() -> dict:
-    return {
-        "settings": {
-            "number_of_shards": 1,
-            "analysis": {
-                "analyzer": {
-                    "content_search_default": {"type": "custom", "tokenizer": "icu_tokenizer", "filter": ["lowercase"]},
-                }
-            },
-        },
-        "mappings": {
-            "_meta": {"projection_version": 3},
-            "dynamic": "strict",
-            "properties": {
-                "id": {"type": "keyword"},
-                "edition_id": {"type": "keyword"},
-                "text_id": {"type": "keyword"},
-                "object_key": {"type": "keyword"},
-                "offset": {"type": "long"},
-                "content": {
-                    "type": "wildcard",
-                    "fields": {
-                        "analyzed": {"type": "text", "analyzer": "content_search_default", "index_options": "offsets"},
-                    },
-                },
-            },
-        },
-    }
-
-
 def _search_body(query: str, search_type: str, text_id: str | None, edition_id: str | None) -> dict:
-    filters: list[dict] = []
-    if text_id is not None:
-        filters.append({"term": {"text_id": text_id}})
-    if edition_id is not None:
-        filters.append({"term": {"edition_id": edition_id}})
+    filters = term_filters(text_id=text_id, edition_id=edition_id)
     clauses: dict = {"filter": filters}
     if search_type == "exact":
         literal = (

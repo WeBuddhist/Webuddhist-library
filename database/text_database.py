@@ -1,10 +1,11 @@
-from typing import TYPE_CHECKING, Any, LiteralString
+from typing import TYPE_CHECKING, Any, Literal, LiteralString
 
 from neo4j.exceptions import ConstraintError
 from pydantic import MISSING
 
 from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from identifier import generate_id
+from models.base import base_language_code
 from models.requests import TextFacetFilter, TextFilter
 from models.responses import TextLanguageResponse
 from models.text import TextBase, TextInput, TextOutput, TextPatch
@@ -265,20 +266,29 @@ class TextDatabase(SessionRepository):
 
         return await self.execute_read(read)
 
+    async def get_work_text_ids(self, source: Literal["work", "text"], source_id: str) -> list[str]:
+        """List texts in the work identified by its own ID or a member text's ID."""
+        async with self.session as session:
+            result = await session.run(
+                """
+                MATCH (t:Text)-[:TEXT_OF]->(w:Work)
+                WHERE w.id = $work_id OR EXISTS { (:Text {id: $text_id})-[:TEXT_OF]->(w) }
+                RETURN t.id AS id
+                """,
+                work_id=source_id if source == "work" else None,
+                text_id=source_id if source == "text" else None,
+            )
+            return await result.value("id")
+
     async def get_all(
         self, offset: int, limit: int, filters: TextFilter | None = None, application: str | None = None
     ) -> list[TextOutput]:
         filters = filters or TextFilter()
 
         async def read(tx: AsyncManagedTransaction) -> list[TextOutput]:
-            if filters.language:
-                await DatabaseValidator.validate_language_code_exists(tx, filters.language.split("-")[0])
+            params = await self._validated_filter_params(tx, filters, filters.language)
             result = await tx.run(
-                TextDatabase.GET_ALL_QUERY,
-                offset=offset,
-                limit=limit,
-                application=application,
-                **TextDatabase._filter_params(filters, filters.language),
+                TextDatabase.GET_ALL_QUERY, offset=offset, limit=limit, application=application, **params
             )
             return [TextOutput.model_validate(record["text"]) for record in await result.data()]
 
@@ -286,16 +296,19 @@ class TextDatabase(SessionRepository):
 
     async def get_languages(self, filters: TextFacetFilter) -> list[TextLanguageResponse]:
         async def read(tx: AsyncManagedTransaction) -> list[TextLanguageResponse]:
-            result = await tx.run(TextDatabase.GET_LANGUAGES_QUERY, **TextDatabase._filter_params(filters))
+            params = await self._validated_filter_params(tx, filters)
+            result = await tx.run(TextDatabase.GET_LANGUAGES_QUERY, **params)
             return [TextLanguageResponse.model_validate(record) for record in await result.data()]
 
         return await self.execute_read(read)
 
     @staticmethod
-    def _filter_params(filters: TextFacetFilter, language: str | None = None) -> dict[str, Any]:
+    async def _validated_filter_params(
+        tx: AsyncManagedTransaction, filters: TextFacetFilter, language: str | None = None
+    ) -> dict[str, Any]:
         return {
             "language": language,
-            "language_base": language.split("-")[0] if language else None,
+            "language_base": await DatabaseValidator.validated_language_code(tx, language),
             "category_id": filters.category_id,
             "author_id": filters.author_id,
             "tag_groups": filters.tag_groups,
@@ -345,8 +358,7 @@ class TextDatabase(SessionRepository):
 
         work_id = generate_id()
         await DatabaseValidator.validate_text_creation(tx, text)
-        base_lang_code = text.language.split("-")[0].lower()
-        await DatabaseValidator.validate_language_code_exists(tx, base_lang_code)
+        language_code = await DatabaseValidator.validated_language_code(tx, text.language)
 
         alt_titles = [title.root for title in text.alt_titles or []]
         title_nomen_id = await NomenDatabase.create_with_transaction(tx, text.title.root, alt_titles)
@@ -356,7 +368,7 @@ class TextDatabase(SessionRepository):
             "bdrc": text.bdrc,
             "wiki": text.wiki,
             "date": text.date,
-            "language_code": base_lang_code,
+            "language_code": language_code,
             "bcp47_tag": text.language,
             "title_nomen_id": title_nomen_id,
             "target_id": text.translation_of or text.commentary_of or text.part_of,
@@ -430,11 +442,10 @@ class TextDatabase(SessionRepository):
                 await tx.run(TextDatabase.UPDATE_LICENSE_QUERY, text_id=text_id, license=patch.license.value)
 
             if patch.language is not MISSING:
-                base_lang_code = patch.language.split("-")[0].lower()
                 await tx.run(
                     TextDatabase.UPDATE_LANGUAGE_QUERY,
                     text_id=text_id,
-                    language_code=base_lang_code,
+                    language_code=base_language_code(patch.language),
                     bcp47_tag=patch.language,
                 )
 

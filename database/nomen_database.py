@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, LiteralString
 
 from identifier import generate_id
+from models.base import base_language_code
 
 from .database_validator import DatabaseValidator
 
@@ -32,7 +33,7 @@ class NomenDatabase:
 
     @staticmethod
     async def create_many_with_transaction(tx: AsyncManagedTransaction, nomens: dict[str, dict[str, str]]) -> None:
-        base_codes = {tag: tag.partition("-")[0].lower() for texts in nomens.values() for tag in texts}
+        base_codes = {tag: base_language_code(tag) for texts in nomens.values() for tag in texts}
         await DatabaseValidator.validate_language_codes_exist(tx, sorted(set(base_codes.values())))
         rows = [{"id": name_id, "translations": list(texts.items())} for name_id, texts in nomens.items()]
         result = await tx.run(NomenDatabase.CREATE_MANY_QUERY, nomens=rows, base_codes=base_codes)

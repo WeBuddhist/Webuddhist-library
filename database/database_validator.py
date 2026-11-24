@@ -5,6 +5,7 @@ from typing import LiteralString
 from neo4j import AsyncManagedTransaction
 
 from exceptions import DataNotFoundError, DataValidationError, ForbiddenError, InvalidRequestError
+from models.base import base_language_code
 from models.contribution import ContributionInputItem, PersonContributionInput
 from models.text import TextInput
 
@@ -24,9 +25,6 @@ RETURN [x IN $references WHERE NOT x IN found] AS missing
 
 
 class DatabaseValidator:
-    def __init__(self) -> None:
-        pass
-
     @staticmethod
     async def validate_contribution_references(
         tx: AsyncManagedTransaction, contributions: Sequence[ContributionInputItem]
@@ -80,6 +78,14 @@ class DatabaseValidator:
 
         if not record or not record["exists"]:
             raise DataNotFoundError(f"Edition with ID '{edition_id}' not found")
+
+    @staticmethod
+    async def validated_language_code(tx: AsyncManagedTransaction, tag: str | None) -> str | None:
+        if tag is None:
+            return None
+        code = base_language_code(tag)
+        await DatabaseValidator.validate_language_code_exists(tx, code)
+        return code
 
     @staticmethod
     async def validate_language_code_exists(tx: AsyncManagedTransaction, language_code: str) -> None:
@@ -194,9 +200,9 @@ class DatabaseValidator:
         tx: AsyncManagedTransaction, title: dict[str, str], text_language: str
     ) -> None:
         """Ensure no text in the same language has the same title text and language combination."""
-        base_language = text_language.split("-", maxsplit=1)[0].lower()
+        base_language = base_language_code(text_language)
         titles_list = [
-            {"text": text, "lang": lang} for lang, text in title.items() if lang.split("-")[0].lower() == base_language
+            {"text": text, "lang": lang} for lang, text in title.items() if base_language_code(lang) == base_language
         ]
         if not titles_list:
             return

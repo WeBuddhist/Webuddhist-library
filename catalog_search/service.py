@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from database.database_validator import DatabaseValidator
 from exceptions import DataNotFoundError
+from models.base import base_language_code
 from models.contribution import PersonContributionOutput
 from models.person import PersonOutput
 from models.text import TextOutput
-from search_client import SearchIndex
+from search_client import SearchIndex, term_filters
+
+from .mapping import catalog_index_body
 
 if TYPE_CHECKING:
     from opensearchpy import AsyncOpenSearch
@@ -31,26 +34,22 @@ _TEXT_MINIMUM_SHOULD_MATCH = "3<75%"
 
 
 class CatalogSearchService:
-    def __init__(
-        self,
-        *,
-        client: AsyncOpenSearch,
-        index_name: str,
-    ) -> None:
+    def __init__(self, *, client: AsyncOpenSearch, index_name: str) -> None:
         self.index = SearchIndex(client, index_name)
 
     async def setup_index(self) -> None:
-        await self.index.setup_index(_index_body())
+        await self.index.setup_index(catalog_index_body())
 
     async def prepare_document(self, kind: str, entity_id: str, db: Database) -> dict:
         try:
             if kind == PERSON_DOCUMENT_TYPE:
-                document = _person_document(await db.person.get(entity_id))
-            else:
-                document = _text_document(await db.text.get(entity_id))
+                return _person_document(await db.person.get(entity_id))
+            return _text_document(await db.text.get(entity_id))
         except DataNotFoundError:
             return {"id": _document_id(kind, entity_id), "document_type": kind, "deleted": True}
-        return document
+
+    async def index_entity(self, kind: str, entity_id: str, db: Database) -> None:
+        await self.index.publish(await self.prepare_document(kind, entity_id, db))
 
     async def search_persons(
         self, *, db: Database, query: str, filters: PersonFilter, offset: int, limit: int
@@ -58,7 +57,7 @@ class CatalogSearchService:
         return await self._search(
             query,
             PERSON_DOCUMENT_TYPE,
-            _person_filters(filters),
+            term_filters(bdrc=filters.bdrc, wiki=filters.wiki),
             offset=offset,
             limit=limit,
             hydrate=db.person.get_by_ids,
@@ -75,9 +74,7 @@ class CatalogSearchService:
         application: str | None = None,
     ) -> list[TextOutput]:
         if filters.language:
-            await db.transactions.execute_read(
-                DatabaseValidator.validate_language_code_exists, filters.language.split("-")[0]
-            )
+            await db.transactions.execute_read(DatabaseValidator.validated_language_code, filters.language)
         return await self._search(
             query,
             TEXT_DOCUMENT_TYPE,
@@ -117,149 +114,6 @@ class CatalogSearchService:
         return items
 
 
-def _index_body() -> dict:
-    return {
-        "settings": {
-            "number_of_shards": 1,
-            "analysis": {
-                "analyzer": {
-                    "catalog_folded": {
-                        "type": "custom",
-                        "tokenizer": "icu_tokenizer",
-                        "filter": ["lowercase", "icu_folding"],
-                    },
-                    "catalog_plain": {
-                        "type": "custom",
-                        "tokenizer": "standard",
-                        "filter": ["lowercase"],
-                    },
-                    "catalog_tibetan": {
-                        "type": "custom",
-                        "tokenizer": "tibetan",
-                        "char_filter": ["catalog_tibetan_lenient_char"],
-                        "filter": ["catalog_tibetan_lenient_filter"],
-                    },
-                    "catalog_tibetan_ewts": {
-                        "type": "custom",
-                        "tokenizer": "tibetan",
-                        "char_filter": ["catalog_tibetan_ewts_char"],
-                        "filter": ["catalog_tibetan_lenient_filter"],
-                    },
-                    "catalog_tibetan_phonetic_index": {
-                        "type": "custom",
-                        "tokenizer": "tibetan",
-                        "char_filter": ["catalog_tibetan_lenient_char"],
-                        "filter": ["tibetan-for-english-phonetic"],
-                    },
-                    "catalog_tibetan_ewts_phonetic_index": {
-                        "type": "custom",
-                        "tokenizer": "tibetan",
-                        "char_filter": ["catalog_tibetan_ewts_char"],
-                        "filter": ["tibetan-for-english-phonetic"],
-                    },
-                    "catalog_tibetan_phonetic_search": {
-                        "type": "custom",
-                        "tokenizer": "tibetan-english-phonetic",
-                        "char_filter": ["tibetan-english-phonetic"],
-                    },
-                    "catalog_sanskrit_roman": {
-                        "type": "custom",
-                        "char_filter": ["catalog_sanskrit_roman_char"],
-                        "tokenizer": "iast",
-                        "filter": ["lowercase"],
-                    },
-                    "catalog_sanskrit_deva": {
-                        "type": "custom",
-                        "char_filter": ["catalog_sanskrit_deva_char"],
-                        "tokenizer": "iast",
-                        "filter": ["lowercase"],
-                    },
-                },
-                "char_filter": {
-                    "catalog_tibetan_lenient_char": {
-                        "type": "tibetan",
-                        "lenient": True,
-                    },
-                    "catalog_tibetan_ewts_char": {
-                        "type": "tibetan",
-                        "lenient": True,
-                        "input_method": "ewts",
-                    },
-                    "catalog_sanskrit_roman_char": {
-                        "type": "iast",
-                        "input_method": "roman",
-                        "lenient": True,
-                        "filter_geminates": True,
-                        "normalize_anusvara": True,
-                    },
-                    "catalog_sanskrit_deva_char": {
-                        "type": "iast",
-                        "input_method": "deva",
-                        "lenient": True,
-                        "filter_geminates": True,
-                        "normalize_anusvara": True,
-                    },
-                },
-                "filter": {
-                    "catalog_tibetan_lenient_filter": {
-                        "type": "tibetan",
-                        "remove_affixes": True,
-                        "normalize_paba": True,
-                    },
-                },
-            },
-        },
-        "mappings": {
-            "_meta": {"projection_version": 2},
-            "properties": {
-                "id": {"type": "keyword"},
-                "document_type": {"type": "keyword"},
-                "person_id": {"type": "keyword"},
-                "text_id": {"type": "keyword"},
-                "bdrc": {"type": "keyword"},
-                "wiki": {"type": "keyword"},
-                "language": {"type": "keyword"},
-                "category_id": {"type": "keyword"},
-                "tag_ids": {"type": "keyword"},
-                "contributor_ids": {"type": "keyword"},
-                "primary_labels": {"type": "text", "analyzer": "catalog_folded"},
-                "alt_labels": {"type": "text", "analyzer": "catalog_folded"},
-                "search_labels_folded": {"type": "text", "analyzer": "catalog_folded"},
-                "search_labels_bo": {
-                    "type": "text",
-                    "analyzer": "catalog_tibetan",
-                    "fields": {
-                        "phonetic": {
-                            "type": "text",
-                            "analyzer": "catalog_tibetan_phonetic_index",
-                            "search_analyzer": "catalog_tibetan_phonetic_search",
-                        },
-                        "ewts": {
-                            "type": "text",
-                            "analyzer": "catalog_tibetan",
-                            "search_analyzer": "catalog_tibetan_ewts",
-                        },
-                    },
-                },
-                "search_labels_bo_ewts": {
-                    "type": "text",
-                    "analyzer": "catalog_tibetan_ewts",
-                    "fields": {
-                        "phonetic": {
-                            "type": "text",
-                            "analyzer": "catalog_tibetan_ewts_phonetic_index",
-                            "search_analyzer": "catalog_tibetan_phonetic_search",
-                        },
-                    },
-                },
-                "search_labels_sa": {"type": "text", "analyzer": "catalog_sanskrit_roman"},
-                "search_labels_sa_deva": {"type": "text", "analyzer": "catalog_sanskrit_deva"},
-                "search_labels_plain": {"type": "text", "analyzer": "catalog_plain"},
-            },
-        },
-    }
-
-
 def _person_document(person: PersonOutput) -> dict:
     labels = _build_label_fields(person.name.root, [alt.root for alt in person.alt_names or []])
     return {
@@ -292,10 +146,6 @@ def _build_label_fields(primary: dict[str, str], alternatives: list[dict[str, st
     primary_labels = list(primary.values())
     alt_labels = [label for alt in alternatives for label in alt.values()]
 
-    localized_labels = list(primary.items())
-    for alt in alternatives:
-        localized_labels.extend(alt.items())
-
     fields: dict[str, list[str]] = {
         "primary_labels": primary_labels,
         "alt_labels": alt_labels,
@@ -306,33 +156,28 @@ def _build_label_fields(primary: dict[str, str], alternatives: list[dict[str, st
         "search_labels_sa_deva": [],
         "search_labels_plain": [],
     }
-    for lang, label in localized_labels:
-        target = _search_field_for_language(lang)
-        if target is not None:
-            fields[target].append(label)
+    for labels in (primary, *alternatives):
+        for lang, label in labels.items():
+            if target := _search_field_for_language(lang):
+                fields[target].append(label)
 
     return {key: _dedupe(value) for key, value in fields.items()}
 
 
 def _search_field_for_language(language: str) -> str | None:
     normalized = language.casefold()
-    base = normalized.split("-")[0]
+    base = base_language_code(normalized)
     if base == "bo":
         if "ewts" in normalized or "wylie" in normalized:
             return "search_labels_bo_ewts"
         return "search_labels_bo"
     if base in {"sa", "pi"}:
-        if "deva" in normalized or "devanagari" in normalized:
+        if "deva" in normalized:
             return "search_labels_sa_deva"
         return "search_labels_sa"
-    if base == "en":
+    if base == "en" or any(token in normalized for token in ("latin", "iast", "roman", "alalc")):
         return "search_labels_plain"
-    return "search_labels_plain" if _is_latinish(language) else None
-
-
-def _is_latinish(language: str) -> bool:
-    normalized = language.casefold()
-    return any(token in normalized for token in ("latin", "iast", "roman", "alalc"))
+    return None
 
 
 def _contributor_ids(text: TextOutput) -> list[str]:
@@ -401,23 +246,8 @@ def _search_fields() -> list[str]:
     ]
 
 
-def _person_filters(filters: PersonFilter) -> list[dict]:
-    return _optional_term_filters(
-        {
-            "bdrc": filters.bdrc,
-            "wiki": filters.wiki,
-        }
-    )
-
-
 def _text_filters(filters: TextFilter) -> list[dict]:
-    filter_clauses = _optional_term_filters(
-        {
-            "category_id": filters.category_id,
-            "bdrc": filters.bdrc,
-            "wiki": filters.wiki,
-        }
-    )
+    filter_clauses = term_filters(category_id=filters.category_id, bdrc=filters.bdrc, wiki=filters.wiki)
     if language := filters.language:
         language_filter: dict = {"term": {"language": language}}
         if "-" not in language:
@@ -427,10 +257,6 @@ def _text_filters(filters: TextFilter) -> list[dict]:
     if filters.author_id:
         filter_clauses.append({"term": {"contributor_ids": filters.author_id}})
     return filter_clauses
-
-
-def _optional_term_filters(values: dict[str, Any | None]) -> list[dict]:
-    return [{"term": {field: value}} for field, value in values.items() if value is not None]
 
 
 def _document_id(document_type: str, entity_id: str) -> str:

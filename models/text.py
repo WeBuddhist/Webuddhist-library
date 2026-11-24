@@ -2,7 +2,7 @@ from typing import Self
 
 from pydantic import MISSING, Field, model_validator
 
-from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel, _dedupe
+from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel, _dedupe, base_language_code
 from .contribution import ContributionInputItem, ContributionOutputItem
 from .enums import LicenseType
 
@@ -26,12 +26,10 @@ class TextBase(OpenPechaModel):
         if self.part_of and (self.commentary_of or self.translation_of):
             raise ValueError("A part of a text cannot also be a commentary or translation")
 
-        base_language = self.language.split("-")[0].lower()
-        title_base_languages = {lang.split("-")[0].lower() for lang in self.title.root}
-        if base_language not in title_base_languages:
+        if base_language_code(self.language) not in map(base_language_code, self.title.root):
             raise ValueError(
                 f"Title must include an entry for the text's language '{self.language}'. "
-                f"Available title languages: {list(self.title.root.keys())}"
+                f"Available title languages: {list(self.title.root)}"
             )
         return self
 

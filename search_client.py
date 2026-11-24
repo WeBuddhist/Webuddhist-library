@@ -13,6 +13,10 @@ BULK_CHUNK_BYTES = 5 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 
+def term_filters(**fields: str | None) -> list[dict]:
+    return [{"term": {name: value}} for name, value in fields.items() if value is not None]
+
+
 def create_search_client(
     *,
     endpoint: str,

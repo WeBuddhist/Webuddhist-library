@@ -7,11 +7,9 @@ from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, LiteralString
 from uuid import uuid4
 
-from catalog_search import CatalogSearchService
-from catalog_search.service import _index_body as catalog_mapping
+from catalog_search import CatalogSearchService, catalog_index_body
 from config import check_environment, settings
-from content_search import ContentSearchService
-from content_search.service import _index_body as content_mapping
+from content_search import ContentSearchService, content_index_body
 from database import Database
 from search_client import create_search_client
 from storage import Storage
@@ -31,15 +29,14 @@ async def rebuild(
     for alias in (catalog_alias, content_alias):
         if await client.indices.exists_alias(name=alias):
             old[alias] = list(await client.indices.get_alias(name=alias))
-        elif await client.indices.exists(index=alias):
-            concrete.add(alias)
-            old[alias] = []
         else:
             old[alias] = []
+            if await client.indices.exists(index=alias):
+                concrete.add(alias)
     suffix = uuid4().hex
     names = {alias: f"{alias}-{suffix}" for alias in old}
-    await client.indices.create(index=names[catalog_alias], body=catalog_mapping())
-    await client.indices.create(index=names[content_alias], body=content_mapping())
+    await client.indices.create(index=names[catalog_alias], body=catalog_index_body())
+    await client.indices.create(index=names[content_alias], body=content_index_body())
     catalog = CatalogSearchService(client=client, index_name=names[catalog_alias])
     content = ContentSearchService(client=client, index_name=names[content_alias])
     counts = await _populate(db, storage, catalog, content, catalog_alias=catalog_alias, content_alias=content_alias)
@@ -71,8 +68,6 @@ async def _populate(
     counts = {catalog_alias: 0, content_alias: 0}
     labels: dict[str, LiteralString] = {"person": "Person", "text": "Text", "edition": "Edition"}
     for kind, label in labels.items():
-        service = content if kind == "edition" else catalog
-        alias = content_alias if kind == "edition" else catalog_alias
         after = ""
         while True:
             async with db.get_session() as session:
@@ -80,20 +75,18 @@ async def _populate(
                     f"MATCH (n:{label}) WHERE n.id > $after RETURN n.id AS id ORDER BY id LIMIT 100",
                     after=after,
                 )
-                ids = [record["id"] for record in await result.data()]
+                ids = await result.value("id")
             if not ids:
                 break
-            documents = []
-            for entity_id in ids:
-                if kind == "edition":
-                    counts[alias] += await content.index.bulk_index(
-                        await content.prepare_documents(entity_id, db, storage), refresh=False
-                    )
-                else:
-                    document = await catalog.prepare_document(kind, entity_id, db)
-                    if not document.get("deleted"):
-                        documents.append(document)
-            counts[alias] += await service.index.bulk_index(documents, refresh=False)
+            if kind == "edition":
+                for edition_id in ids:
+                    chunks = await content.prepare_documents(edition_id, db, storage)
+                    counts[content_alias] += await content.index.bulk_index(chunks, refresh=False)
+            else:
+                documents = [await catalog.prepare_document(kind, entity_id, db) for entity_id in ids]
+                counts[catalog_alias] += await catalog.index.bulk_index(
+                    (doc for doc in documents if not doc.get("deleted")), refresh=False
+                )
             after = ids[-1]
     return counts
 

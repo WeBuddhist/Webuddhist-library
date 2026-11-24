@@ -157,11 +157,7 @@ class AudioDatabase(SessionRepository):
         if audio.title:
             title_nomen_id = await NomenDatabase.create_with_transaction(tx, audio.title.root)
 
-        language_code = None
-        if audio.language:
-            language_code = audio.language.split("-")[0].lower()
-            await DatabaseValidator.validate_language_code_exists(tx, language_code)
-
+        language_code = await DatabaseValidator.validated_language_code(tx, audio.language)
         result = await tx.run(
             AudioDatabase.CREATE_QUERY,
             audio_id=audio_id,
@@ -194,8 +190,7 @@ class AudioDatabase(SessionRepository):
                 await tx.run(AudioDatabase.UPDATE_LICENSE_QUERY, audio_id=audio_id, license=patch.license.value)
 
             if patch.language is not MISSING:
-                language_code = patch.language.split("-")[0].lower()
-                await DatabaseValidator.validate_language_code_exists(tx, language_code)
+                language_code = await DatabaseValidator.validated_language_code(tx, patch.language)
                 await tx.run(
                     AudioDatabase.UPDATE_LANGUAGE_QUERY,
                     audio_id=audio_id,

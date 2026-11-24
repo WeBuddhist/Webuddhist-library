@@ -167,8 +167,7 @@ class SegmentDatabase(SessionRepository):
                     if revisions.setdefault(record["id"], record["revision"]) != record["revision"]:
                         raise DataConflictError("Alignment changed while reading; retry the request")
 
-            if filters.language:
-                await DatabaseValidator.validate_language_code_exists(tx, filters.language.split("-")[0])
+            language_code = await DatabaseValidator.validated_language_code(tx, filters.language)
             starting_spans = spans
             if starting_segment_id is not None:
                 record = await (
@@ -225,6 +224,7 @@ class SegmentDatabase(SessionRepository):
                 offset=offset,
                 limit=limit,
                 filters=filters,
+                language_code=language_code,
             )
             current = await (
                 await tx.run(
@@ -247,6 +247,7 @@ class SegmentDatabase(SessionRepository):
         offset: int,
         limit: int,
         filters: RelatedSegmentsFilter,
+        language_code: str | None,
     ) -> list[SegmentWithContextOutput]:
         records = await (
             await tx.run(
@@ -258,7 +259,7 @@ class SegmentDatabase(SessionRepository):
                 text_id=filters.text_id,
                 filter_edition_id=filters.edition_id,
                 language=filters.language,
-                language_base=filters.language.split("-")[0] if filters.language else None,
+                language_base=language_code,
             )
         ).data()
         return [SegmentWithContextOutput.model_validate(record) for record in records if record["lines"]]

@@ -1,11 +1,9 @@
 # ruff: noqa: ANN001, ANN201, E501, S101
 import pytest
 
-from catalog_search import CatalogSearchService
-from catalog_search.service import _index_body as catalog_index_body
+from catalog_search import CatalogSearchService, catalog_index_body
 from config import settings
-from content_search import ContentSearchService
-from content_search.service import _index_body as content_index_body
+from content_search import ContentSearchService, content_index_body
 from identifier import generate_id
 from main import create_app
 from models.base import LocalizedString

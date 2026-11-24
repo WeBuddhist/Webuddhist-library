@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from database.excerpt_database import ExcerptMap
-from models.annotation import FootnoteInput, NoteInput, NoteOutput, SingleSpanAnnotation, Span
+from models.annotation import FootnoteInput, NoteInput, NoteOutput, Span
 from models.enums import NoteType
 
 from .single_span import (
@@ -124,10 +124,8 @@ class NoteDatabase(SessionRepository):
 
     @staticmethod
     async def add_footnote_with_transaction(tx: AsyncManagedTransaction, edition_id: str, note: FootnoteInput) -> str:
-        point = SingleSpanAnnotation(span=Span(start=note.position, end=note.position), metadata=note.metadata)
-        return await create_single_span_annotation(
-            tx, NoteDatabase.CREATE_QUERY, edition_id, point, text=note.text, note_type=str(NoteType.FOOTNOTE)
-        )
+        point = NoteInput(span=Span(start=note.position, end=note.position), text=note.text, metadata=note.metadata)
+        return await NoteDatabase.add_with_transaction(tx, edition_id, point, NoteType.FOOTNOTE)
 
     @staticmethod
     async def delete_with_transaction(

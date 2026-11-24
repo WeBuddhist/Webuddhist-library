@@ -8,10 +8,6 @@ class IdResponse(OpenPechaModel):
     id: str
 
 
-class IdsResponse(OpenPechaModel):
-    ids: list[str]
-
-
 class LanguageResponse(OpenPechaModel):
     code: str
     name: str
