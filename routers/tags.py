@@ -1,16 +1,13 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Path, status
 
-from dependencies import RequiredAppHeader, get_db
+from dependencies import DatabaseDep, RequiredAppHeader
 from exceptions import DataNotFoundError
 from models.responses import IdResponse
 from models.tag import TagInput, TagOutput
 from search_updates import SearchUpdatesDep
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +20,7 @@ router = APIRouter(prefix="/v2/tags", tags=["Tags"])
     description="Retrieve all tags for an application.",
 )
 async def get_tags(
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
 ) -> list[TagOutput]:
     """List all tags for an application."""
@@ -41,7 +38,7 @@ async def get_tags(
 )
 async def create_tag(
     data: TagInput,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
 ) -> IdResponse:
     """Create a new tag."""
@@ -61,7 +58,7 @@ async def create_tag(
 async def delete_tag(
     search: SearchUpdatesDep,
     tag_id: Annotated[str, Path(description="The ID of the tag")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
 ) -> None:
     """Delete a tag."""

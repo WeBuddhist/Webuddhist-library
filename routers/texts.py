@@ -1,11 +1,11 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from catalog_search import CatalogSearchService
 from content_service import create_edition as publish_edition
-from dependencies import OptionalAppHeader, get_catalog_search, get_db, get_storage
+from dependencies import DatabaseDep, OptionalAppHeader, StorageDep, get_catalog_search
 from exceptions import ServiceUnavailableError
 from models.audio import AudioInput, AudioOutput
 from models.edition import EditionOutput
@@ -13,10 +13,6 @@ from models.requests import EditionRequestModel, EditionsQueryParams, TextFacetF
 from models.responses import IdResponse, PaginatedResponse, TextLanguageResponse
 from models.text import TextInput, TextOutput, TextPatch
 from search_updates import SearchUpdatesDep
-
-if TYPE_CHECKING:
-    from database import Database
-    from storage import Storage
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +26,7 @@ router = APIRouter(prefix="/v2/texts", tags=["Texts"])
 )
 async def get_all_texts(
     params: Annotated[TextsQueryParams, Query()],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     catalog_search: Annotated[CatalogSearchService | None, Depends(get_catalog_search)],
     x_application: OptionalAppHeader = None,
 ) -> PaginatedResponse[TextOutput]:
@@ -64,7 +60,7 @@ async def get_all_texts(
 )
 async def get_text_languages(
     params: Annotated[TextFacetFilter, Query()],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> list[TextLanguageResponse]:
     """List the languages of texts matching the filters, with text counts."""
     return await db.text.get_languages(params)
@@ -78,7 +74,7 @@ async def get_text_languages(
 )
 async def get_text(
     text_id: Annotated[str, Path(description="The ID of the text to retrieve")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> TextOutput:
     """Fetch a text (text) by its ID."""
@@ -94,7 +90,7 @@ async def get_text(
 async def create_text(
     search: SearchUpdatesDep,
     data: TextInput,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> IdResponse:
     """Create a new text (text)."""
@@ -112,7 +108,7 @@ async def create_text(
 async def get_editions(
     text_id: Annotated[str, Path(description="The ID of the text")],
     params: Annotated[EditionsQueryParams, Query()],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> list[EditionOutput]:
     """List all editions for a text."""
     return await db.edition.get_all(
@@ -131,8 +127,8 @@ async def create_edition(
     search: SearchUpdatesDep,
     text_id: Annotated[str, Path(description="The ID of the text")],
     data: EditionRequestModel,
-    db: Annotated[Database, Depends(get_db)],
-    storage: Annotated[Storage, Depends(get_storage)],
+    db: DatabaseDep,
+    storage: StorageDep,
 ) -> IdResponse:
     """Create a new edition for a text."""
     edition_id = await publish_edition(db, storage, text_id, data)
@@ -148,7 +144,7 @@ async def create_edition(
 )
 async def get_audios(
     text_id: Annotated[str, Path(description="The ID of the text")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> list[AudioOutput]:
     return await db.audio.get_all(text_id)
 
@@ -165,7 +161,7 @@ async def get_audios(
 async def create_audio(
     text_id: Annotated[str, Path(description="The ID of the recited text")],
     data: AudioInput,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> IdResponse:
     logger.info("Creating audio for text %s", text_id)
     return IdResponse(id=await db.audio.create(text_id, data))
@@ -180,7 +176,7 @@ async def update_text(
     search: SearchUpdatesDep,
     text_id: Annotated[str, Path(description="The ID of the text to update")],
     data: TextPatch,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> TextOutput:
     """Update a text."""
@@ -199,7 +195,7 @@ async def update_text(
 async def delete_text(
     search: SearchUpdatesDep,
     text_id: Annotated[str, Path(description="The ID of the text to delete")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     """Delete a text."""
     await db.text.delete(text_id)
@@ -216,7 +212,7 @@ async def tag_text(
     search: SearchUpdatesDep,
     text_id: Annotated[str, Path(description="The ID of the text")],
     tag_id: Annotated[str, Path(description="The ID of the tag to add")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> None:
     """Add a tag to a text."""
@@ -235,7 +231,7 @@ async def untag_text(
     search: SearchUpdatesDep,
     text_id: Annotated[str, Path(description="The ID of the text")],
     tag_id: Annotated[str, Path(description="The ID of the tag to remove")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> None:
     """Remove a tag from a text."""

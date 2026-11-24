@@ -1,14 +1,11 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Path, status
 
-from dependencies import get_db
+from dependencies import DatabaseDep
 from models.requests import LanguageCreateRequest
 from models.responses import LanguageResponse
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +18,7 @@ router = APIRouter(prefix="/v2/languages", tags=["Languages"])
     description="Retrieve all available languages.",
 )
 async def get_all_languages(
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> list[LanguageResponse]:
     """List all available languages."""
     return await db.language.get_all()
@@ -35,7 +32,7 @@ async def get_all_languages(
 )
 async def create_language(
     data: LanguageCreateRequest,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> LanguageResponse:
     """Create a new language."""
     created_code = await db.language.create(code=data.code, name=data.name)
@@ -50,7 +47,7 @@ async def create_language(
 )
 async def delete_language(
     code: Annotated[str, Path(description="The language code")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     """Delete an unused language."""
     await db.language.delete(code)

@@ -1,11 +1,9 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from database.content_state import read_value
+from database.content_state import read_at_revision, read_value
 from database.database_validator import DatabaseValidator
 from exceptions import DataConflictError, DataNotFoundError
-from models.annotation import (
-    SegmentWithContextOutput,
-)
+from models.annotation import SegmentWithContextOutput, Span
 from models.requests import RelatedSegmentsFilter
 
 if TYPE_CHECKING:
@@ -125,6 +123,25 @@ class SegmentDatabase:
         if record is None:
             raise DataNotFoundError(f"Segment '{segment_id}' not found")
         return SegmentWithContextOutput.model_validate(record)
+
+    async def get_content_location(
+        self, tx: AsyncManagedTransaction, segment_id: str, application: str | None = None
+    ) -> tuple[str, Span]:
+        """Read the immutable object key and segment span at the same edition revision."""
+        result = await tx.run(
+            """
+            MATCH (:Segment {id: $id})-[:SEGMENT_OF]->(:Segmentation)<-[:HAS_SEGMENTATION]-(e:Edition)
+            RETURN e.id AS id
+            """,
+            id=segment_id,
+        )
+        parent = await result.single()
+        if parent is None:
+            raise DataNotFoundError(f"Segment '{segment_id}' not found")
+        state, segment = await read_at_revision(
+            tx, parent["id"], lambda read_tx: self.get_with_transaction(read_tx, segment_id, application)
+        )
+        return state.stored_key, segment.span
 
     async def get_related(
         self,

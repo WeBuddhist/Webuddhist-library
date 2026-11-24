@@ -1,14 +1,11 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, status
 
-from dependencies import get_admin_key, get_db
+from dependencies import DatabaseDep, get_admin_key
 from models.requests import ApplicationCreateRequest
 from models.responses import ApplicationResponse
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +20,7 @@ router = APIRouter(prefix="/v2/applications", tags=["Applications"], dependencie
 )
 async def create_application(
     data: ApplicationCreateRequest,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> ApplicationResponse:
     """Create a new application."""
     app_id = app_name = data.name.strip().lower()
@@ -39,7 +36,7 @@ async def create_application(
 )
 async def delete_application(
     application_id: Annotated[str, Path(description="The ID of the application")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     """Delete an unused application."""
     await db.application.delete(application_id)

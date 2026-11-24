@@ -10,7 +10,7 @@ from neo4j import AsyncSession
 from neo4j.exceptions import TransientError
 
 import database.content_state as content_state
-from content_service import create_edition, create_recording, edit_content
+from content_service import create_edition, create_recording, edit_content, read_segment_content
 from database.content_state import read_at_revision
 from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from models.annotation import NoteInput
@@ -81,6 +81,22 @@ async def test_managed_transaction_replay_does_not_repeat_upload_or_change_ident
             for s in await db.annotation.segmentation.get_all_segments_by_edition(edition)
             for l in s.lines
         ] == [(0, 7)]
+
+
+async def test_segment_content_retries_when_the_edition_changes_during_the_span_read(test_database, monkeypatch):
+    db = test_database
+    storage, _, _, edition = await fixture(db)
+    segment, = await db.annotation.segmentation.get_all_segments_by_edition(edition)
+    read_segment = db.segment.get_with_transaction
+
+    async def edit_after_read(tx, segment_id, application):
+        result = await read_segment(tx, segment_id, application)
+        if result.span.end == 6:
+            await edit_content(db, storage, edition, insert("X"))
+        return result
+
+    monkeypatch.setattr(db.segment, "get_with_transaction", edit_after_read)
+    assert await read_segment_content(db, storage, segment.id, None) == "abcXdef"
 
 
 @pytest.mark.parametrize("always_changes", [False, True])

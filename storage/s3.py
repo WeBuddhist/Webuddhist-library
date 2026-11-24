@@ -5,6 +5,8 @@ from botocore.exceptions import ClientError
 
 from exceptions import DataNotFoundError
 
+PRESIGNED_URL_TTL_SECONDS = 3600
+
 
 class Storage:
     def __init__(self, bucket_name: str, region: str) -> None:
@@ -42,7 +44,7 @@ class Storage:
                 raise DataNotFoundError(f"Content object '{key}' not found") from exc
             raise
 
-    async def generate_url(self, key: str, expires_in: int = 3600) -> str:
+    async def generate_url(self, key: str, expires_in: int = PRESIGNED_URL_TTL_SECONDS) -> str:
         return await self._client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket_name, "Key": key},

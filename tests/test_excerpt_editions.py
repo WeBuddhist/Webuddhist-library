@@ -156,6 +156,9 @@ async def test_spans_join_in_listed_order(client, test_database):
     assert response.status_code == 201, response.text
     edition = response.json()["id"]
     assert await _content(client, edition) == "Three.One. "
+    assert await _content(client, edition, span_start=4, span_end=8) == "e.On"
+    assert await _content(client, edition, span_start=4) == "Three.One. "
+    assert await _content(client, edition, span_end=8) == "Three.One. "
     assert _lines(await _segments(client, edition)) == [(0, 6), (6, 11)]
     async with test_database.get_session() as session:
         assert (await session.execute_read(read_state, edition)).length == 11

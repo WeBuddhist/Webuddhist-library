@@ -1,13 +1,10 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Path, status
 
-from dependencies import get_db
+from dependencies import DatabaseDep
 from models.annotation import TableOfContentsOutput
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +19,7 @@ router = APIRouter(prefix="/v2/table-of-contents", tags=["Annotations"])
 )
 async def get_table_of_contents(
     toc_id: Annotated[str, Path(description="The ID of the table of contents")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> TableOfContentsOutput:
     return await db.annotation.table_of_contents.get(toc_id)
 
@@ -35,6 +32,6 @@ async def get_table_of_contents(
 )
 async def delete_table_of_contents(
     toc_id: Annotated[str, Path(description="The ID of the table of contents")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     await db.annotation.table_of_contents.delete(toc_id)

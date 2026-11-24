@@ -1,14 +1,11 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Path, status
 
-from dependencies import get_db
+from dependencies import DatabaseDep
 from models.annotation import NoteOutput
 from models.enums import NoteType
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +19,7 @@ router = APIRouter(prefix="/v2/durchens", tags=["Annotations"])
 )
 async def get_durchen(
     durchen_id: Annotated[str, Path(description="The ID of the durchen annotation")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> NoteOutput:
     """Get a durchen annotation."""
     return await db.annotation.note.get(durchen_id, NoteType.DURCHEN)
@@ -36,7 +33,7 @@ async def get_durchen(
 )
 async def delete_durchen(
     durchen_id: Annotated[str, Path(description="The ID of the durchen note")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     """Delete a durchen note annotation."""
     await db.annotation.note.delete(durchen_id, NoteType.DURCHEN)

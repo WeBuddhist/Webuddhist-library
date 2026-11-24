@@ -1,18 +1,15 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from catalog_search import CatalogSearchService
-from dependencies import get_catalog_search, get_db
+from dependencies import DatabaseDep, get_catalog_search
 from exceptions import ServiceUnavailableError
 from models.person import PersonInput, PersonOutput, PersonPatch
 from models.requests import PersonsQueryParams
 from models.responses import IdResponse, PaginatedResponse
 from search_updates import SearchUpdatesDep
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +23,7 @@ router = APIRouter(prefix="/v2/persons", tags=["Persons"])
 )
 async def get_person(
     person_id: Annotated[str, Path(description="The ID of the person")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> PersonOutput:
     """Fetch a person by ID."""
     return await db.person.get(person_id)
@@ -39,7 +36,7 @@ async def get_person(
 )
 async def get_all_persons(
     params: Annotated[PersonsQueryParams, Query()],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     catalog_search: Annotated[CatalogSearchService | None, Depends(get_catalog_search)],
 ) -> PaginatedResponse[PersonOutput]:
     """List all persons with optional filtering."""
@@ -68,7 +65,7 @@ async def get_all_persons(
 async def create_person(
     search: SearchUpdatesDep,
     data: PersonInput,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> IdResponse:
     """Create a new person."""
     logger.info("Creating person: %s", data.model_dump_json())
@@ -86,7 +83,7 @@ async def update_person(
     search: SearchUpdatesDep,
     person_id: Annotated[str, Path(description="The ID of the person")],
     data: PersonPatch,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> PersonOutput:
     """Update a person."""
     logger.info("Updating person %s with: %s", person_id, data.model_dump_json())
@@ -104,7 +101,7 @@ async def update_person(
 async def delete_person(
     search: SearchUpdatesDep,
     person_id: Annotated[str, Path(description="The ID of the person")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     """Delete a person."""
     await db.person.delete(person_id)

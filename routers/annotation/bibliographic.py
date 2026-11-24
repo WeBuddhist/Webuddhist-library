@@ -1,13 +1,10 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Path, status
 
-from dependencies import get_db
+from dependencies import DatabaseDep
 from models.annotation import BibliographicMetadataOutput
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +18,7 @@ router = APIRouter(prefix="/v2/bibliographic", tags=["Annotations"])
 )
 async def get_bibliographic(
     bibliographic_id: Annotated[str, Path(description="The ID of the bibliographic annotation")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> BibliographicMetadataOutput:
     return await db.annotation.bibliographic.get(bibliographic_id)
 
@@ -34,7 +31,7 @@ async def get_bibliographic(
 )
 async def delete_bibliographic(
     bibliographic_id: Annotated[str, Path(description="The ID of the bibliographic metadata")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     """Delete a bibliographic metadata annotation."""
     await db.annotation.bibliographic.delete(bibliographic_id)

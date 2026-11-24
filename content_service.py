@@ -1,5 +1,6 @@
 """Immutable uploads precede a single graph transaction; rollback keeps the previous content active."""
 
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,7 @@ from exceptions import DataConflictError, DataValidationError
 from identifier import generate_id
 from models.content_operation import ContentOperation, DeleteOperation, InsertOperation
 from models.enums import AudioFormat
+from storage import PRESIGNED_URL_TTL_SECONDS, Storage
 
 if TYPE_CHECKING:
     from fastapi import UploadFile
@@ -17,7 +19,6 @@ if TYPE_CHECKING:
     from database import Database
     from models.recording import RecordingInput
     from models.requests import EditionRequestModel
-    from storage import Storage
 
 
 async def create_edition(db: Database, storage: Storage, text_id: str, data: EditionRequestModel) -> str:
@@ -40,16 +41,42 @@ async def create_edition(db: Database, storage: Storage, text_id: str, data: Edi
     )
 
 
-async def read_content(db: Database, storage: Storage, edition_id: str) -> str:
-    """An excerpt edition's content is its spans of the source edition, joined in order."""
+async def read_content(
+    db: Database, storage: Storage, edition_id: str, *, span_start: int | None = None, span_end: int | None = None
+) -> str:
+    """Slice edition content when both bounds are supplied, after assembling an excerpt in reading order."""
     async with db.get_session() as session:
         state, slices = await session.execute_read(
             read_at_revision, edition_id, partial(ExcerptDatabase.get_slices_with_transaction, edition_id=edition_id)
         )
-    if not state.is_excerpt:
-        return await storage.read_text(state.stored_key)
-    source = await storage.read_text(slices[0].key)
-    return "".join(source[piece.start : piece.end] for piece in slices)
+    if state.is_excerpt:
+        source = await storage.read_text(slices[0].key)
+        content = "".join(source[piece.start : piece.end] for piece in slices)
+    else:
+        content = await storage.read_text(state.stored_key)
+    if span_start is not None and span_end is not None:
+        return content[span_start:span_end]
+    return content
+
+
+async def read_segment_content(db: Database, storage: Storage, segment_id: str, application: str | None) -> str:
+    async with db.get_session() as session:
+        key, span = await session.execute_read(db.segment.get_content_location, segment_id, application)
+    content = await storage.read_text(key)
+    return content[span.start : span.end]
+
+
+async def sign_edition_content_url(db: Database, storage: Storage, edition_id: str) -> tuple[str, datetime]:
+    async with db.get_session() as session:
+        state = await session.execute_read(read_state, edition_id)
+    expires_at = datetime.now(UTC) + timedelta(seconds=PRESIGNED_URL_TTL_SECONDS)
+    url = await storage.generate_url(state.stored_key)
+    return url, expires_at
+
+
+async def sign_recording_audio_url(db: Database, storage: Storage, recording_id: str) -> str:
+    key = await db.recording.get_storage_location(recording_id)
+    return await storage.generate_url(key)
 
 
 async def edit_content(db: Database, storage: Storage, edition_id: str, data: ContentOperation) -> None:

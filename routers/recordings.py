@@ -1,19 +1,17 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Path, status
+from fastapi import APIRouter, Body, Path, status
 from fastapi.responses import RedirectResponse
 
-from dependencies import get_db, get_storage
+from content_service import sign_recording_audio_url
+from dependencies import DatabaseDep, StorageDep
 from models.recording import RecordingAudioUrl, RecordingCue, RecordingCues, RecordingOutput, RecordingPatch
-
-if TYPE_CHECKING:
-    from database import Database
-    from storage import Storage
+from storage import PRESIGNED_URL_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
-AUDIO_URL_EXPIRES_IN = 3600
+RecordingId = Annotated[str, Path(description="The ID of the recording")]
 
 router = APIRouter(prefix="/v2/recordings", tags=["Recordings"])
 
@@ -24,10 +22,7 @@ router = APIRouter(prefix="/v2/recordings", tags=["Recordings"])
     description="Retrieve metadata for an audio recording.",
     response_model_exclude_none=True,
 )
-async def get_recording(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
-    db: Annotated[Database, Depends(get_db)],
-) -> RecordingOutput:
+async def get_recording(recording_id: RecordingId, db: DatabaseDep) -> RecordingOutput:
     """Fetch a recording by ID."""
     return await db.recording.get(recording_id)
 
@@ -40,13 +35,12 @@ async def get_recording(
     response_class=RedirectResponse,
 )
 async def get_recording_audio(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
-    db: Annotated[Database, Depends(get_db)],
-    storage: Annotated[Storage, Depends(get_storage)],
+    recording_id: RecordingId,
+    db: DatabaseDep,
+    storage: StorageDep,
 ) -> RedirectResponse:
     """Redirect to the recording's audio in storage, which serves range requests directly."""
-    key = await db.recording.get_storage_location(recording_id)
-    url = await storage.generate_url(key, expires_in=AUDIO_URL_EXPIRES_IN)
+    url = await sign_recording_audio_url(db, storage, recording_id)
     return RedirectResponse(url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
@@ -59,13 +53,12 @@ async def get_recording_audio(
     ),
 )
 async def get_recording_audio_url(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
-    db: Annotated[Database, Depends(get_db)],
-    storage: Annotated[Storage, Depends(get_storage)],
+    recording_id: RecordingId,
+    db: DatabaseDep,
+    storage: StorageDep,
 ) -> RecordingAudioUrl:
-    key = await db.recording.get_storage_location(recording_id)
-    url = await storage.generate_url(key, expires_in=AUDIO_URL_EXPIRES_IN)
-    return RecordingAudioUrl(url=url, expires_in=AUDIO_URL_EXPIRES_IN)
+    url = await sign_recording_audio_url(db, storage, recording_id)
+    return RecordingAudioUrl(url=url, expires_in=PRESIGNED_URL_TTL_SECONDS)
 
 
 @router.get(
@@ -73,10 +66,7 @@ async def get_recording_audio_url(
     summary="Get recording cues",
     description="Retrieve every cue of a recording, ordered by start time.",
 )
-async def get_recording_cues(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
-    db: Annotated[Database, Depends(get_db)],
-) -> list[RecordingCue]:
+async def get_recording_cues(recording_id: RecordingId, db: DatabaseDep) -> list[RecordingCue]:
     return await db.recording.get_cues(recording_id)
 
 
@@ -87,9 +77,9 @@ async def get_recording_cues(
     description="Replace all cues of a recording.",
 )
 async def replace_recording_cues(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
+    recording_id: RecordingId,
     data: Annotated[RecordingCues, Body(min_length=1)],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     logger.info("Replacing %d cues for recording %s", len(data), recording_id)
     await db.recording.replace_cues(recording_id, data)
@@ -101,10 +91,7 @@ async def replace_recording_cues(
     summary="Delete recording cues",
     description="Delete all cues of a recording.",
 )
-async def delete_recording_cues(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
-    db: Annotated[Database, Depends(get_db)],
-) -> None:
+async def delete_recording_cues(recording_id: RecordingId, db: DatabaseDep) -> None:
     await db.recording.delete_cues(recording_id)
 
 
@@ -118,9 +105,9 @@ async def delete_recording_cues(
     ),
 )
 async def set_recording_edition(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
+    recording_id: RecordingId,
     edition_id: Annotated[str, Path(description="The ID of the edition to follow")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     await db.recording.set_follows(recording_id, edition_id)
 
@@ -131,10 +118,7 @@ async def set_recording_edition(
     summary="Stop following an edition",
     description="Remove the recording's link to its edition and delete its cues.",
 )
-async def delete_recording_edition(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
-    db: Annotated[Database, Depends(get_db)],
-) -> None:
+async def delete_recording_edition(recording_id: RecordingId, db: DatabaseDep) -> None:
     await db.recording.remove_follows(recording_id)
 
 
@@ -145,9 +129,9 @@ async def delete_recording_edition(
     response_model_exclude_none=True,
 )
 async def update_recording(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
+    recording_id: RecordingId,
     data: RecordingPatch,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> RecordingOutput:
     """Update a recording's metadata. The audio file itself is replaced by deleting and re-uploading."""
     logger.info("Updating recording %s with: %s", recording_id, data.model_dump_json())
@@ -160,9 +144,6 @@ async def update_recording(
     summary="Delete recording",
     description="Delete a recording's metadata. Its audio remains in storage.",
 )
-async def delete_recording(
-    recording_id: Annotated[str, Path(description="The ID of the recording")],
-    db: Annotated[Database, Depends(get_db)],
-) -> None:
+async def delete_recording(recording_id: RecordingId, db: DatabaseDep) -> None:
     """Delete a recording."""
     await db.recording.delete(recording_id)

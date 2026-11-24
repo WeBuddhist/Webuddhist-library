@@ -47,6 +47,10 @@ def get_storage(request: Request) -> Storage:
     return request.app.state.storage
 
 
+DatabaseDep = Annotated[Database, Depends(get_db)]
+StorageDep = Annotated[Storage, Depends(get_storage)]
+
+
 def get_content_search(request: Request) -> ContentSearchService:
     """Dependency that provides the content search service from app.state."""
     service = getattr(request.app.state, "content_search", None)

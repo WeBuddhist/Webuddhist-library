@@ -1,23 +1,15 @@
-import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Path, Query, status
 
-from database.content_state import read_at_revision
-from dependencies import OptionalAppHeader, get_db, get_storage
+from content_service import read_segment_content
+from dependencies import DatabaseDep, OptionalAppHeader, StorageDep
 from exceptions import DataNotFoundError
 from models.annotation import SegmentWithContextOutput
 from models.requests import DirectRelatedSegmentsQueryParams
 from models.responses import PaginatedResponse
 
-if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction
-
-    from database import Database
-    from database.content_state import ContentState
-    from storage import Storage
-
-logger = logging.getLogger(__name__)
+SegmentId = Annotated[str, Path(description="The ID of the segment")]
 
 router = APIRouter(prefix="/v2/segments", tags=["Segments"])
 
@@ -28,9 +20,9 @@ router = APIRouter(prefix="/v2/segments", tags=["Segments"])
     description="Retrieve segments related to a given segment.",
 )
 async def get_related(
-    segment_id: Annotated[str, Path(description="The ID of the segment")],
+    segment_id: SegmentId,
     params: Annotated[DirectRelatedSegmentsQueryParams, Query()],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> PaginatedResponse[SegmentWithContextOutput]:
     """Get related segments."""
@@ -56,32 +48,13 @@ async def get_related(
     description="Retrieve the text content of a segment.",
 )
 async def get_segment_content(
-    segment_id: Annotated[str, Path(description="The ID of the segment")],
-    db: Annotated[Database, Depends(get_db)],
-    storage: Annotated[Storage, Depends(get_storage)],
+    segment_id: SegmentId,
+    db: DatabaseDep,
+    storage: StorageDep,
     x_application: OptionalAppHeader = None,
 ) -> str:
     """Get segment content."""
-
-    async def read(tx: AsyncManagedTransaction) -> tuple[ContentState, SegmentWithContextOutput]:
-        result = await tx.run(
-            """
-            MATCH (:Segment {id: $id})-[:SEGMENT_OF]->(:Segmentation)<-[:HAS_SEGMENTATION]-(e:Edition)
-            RETURN e.id AS id
-            """,
-            id=segment_id,
-        )
-        parent = await result.single()
-        if parent is None:
-            raise DataNotFoundError(f"Segment '{segment_id}' not found")
-        return await read_at_revision(
-            tx, parent["id"], lambda tx: db.segment.get_with_transaction(tx, segment_id, x_application)
-        )
-
-    async with db.get_session() as session:
-        state, segment = await session.execute_read(read)
-    base_text = await storage.read_text(state.stored_key)
-    return base_text[segment.span.start : segment.span.end]
+    return await read_segment_content(db, storage, segment_id, x_application)
 
 
 @router.post(
@@ -91,9 +64,9 @@ async def get_segment_content(
     description="Add a tag to a segment.",
 )
 async def tag_segment(
-    segment_id: Annotated[str, Path(description="The ID of the segment")],
+    segment_id: SegmentId,
     tag_id: Annotated[str, Path(description="The ID of the tag")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> None:
     """Add a tag to a segment."""
@@ -107,9 +80,9 @@ async def tag_segment(
     description="Remove a tag from a segment.",
 )
 async def untag_segment(
-    segment_id: Annotated[str, Path(description="The ID of the segment")],
+    segment_id: SegmentId,
     tag_id: Annotated[str, Path(description="The ID of the tag")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> None:
     """Remove a tag from a segment."""
@@ -123,8 +96,8 @@ async def untag_segment(
     response_model_exclude_none=True,
 )
 async def get_segment(
-    segment_id: Annotated[str, Path(description="The ID of the segment")],
-    db: Annotated[Database, Depends(get_db)],
+    segment_id: SegmentId,
+    db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> SegmentWithContextOutput:
     """Get a segment with context."""

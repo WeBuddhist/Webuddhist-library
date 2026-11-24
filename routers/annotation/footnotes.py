@@ -1,14 +1,11 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Path, status
 
-from dependencies import get_db
+from dependencies import DatabaseDep
 from models.annotation import FootnoteOutput
 from models.enums import NoteType
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +19,7 @@ router = APIRouter(prefix="/v2/footnotes", tags=["Annotations"])
 )
 async def get_footnote(
     footnote_id: Annotated[str, Path(description="The ID of the footnote annotation")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> FootnoteOutput:
     """Get a footnote annotation."""
     return FootnoteOutput.from_note(await db.annotation.note.get(footnote_id, NoteType.FOOTNOTE))
@@ -36,7 +33,7 @@ async def get_footnote(
 )
 async def delete_footnote(
     footnote_id: Annotated[str, Path(description="The ID of the footnote annotation")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
 ) -> None:
     """Delete a footnote annotation."""
     await db.annotation.note.delete(footnote_id, NoteType.FOOTNOTE)

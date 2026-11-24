@@ -1,15 +1,12 @@
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Path, Query, status
 
-from dependencies import RequiredAppHeader, get_db
+from dependencies import DatabaseDep, RequiredAppHeader
 from exceptions import DataNotFoundError
 from models.category import CategoryInput, CategoryOutput, CategoryPatch
 from models.responses import IdResponse
-
-if TYPE_CHECKING:
-    from database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +19,7 @@ router = APIRouter(prefix="/v2/categories", tags=["Categories"])
     description="Retrieve categories for an application.",
 )
 async def get_categories(
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
     parent_id: Annotated[str | None, Query(description="Filter by parent category ID")] = None,
 ) -> list[CategoryOutput]:
@@ -40,7 +37,7 @@ async def get_categories(
 )
 async def get_category_by_id(
     category_id: str,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
 ) -> CategoryOutput:
     """Get a single category by ID."""
@@ -62,7 +59,7 @@ async def get_category_by_id(
 )
 async def create_category(
     data: CategoryInput,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
 ) -> IdResponse:
     """Create a new category."""
@@ -84,7 +81,7 @@ async def create_category(
 async def update_category(
     category_id: Annotated[str, Path(description="The ID of the category")],
     data: CategoryPatch,
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
 ) -> CategoryOutput:
     """Update a category's title and description localizations."""
@@ -103,7 +100,7 @@ async def update_category(
 )
 async def delete_category(
     category_id: Annotated[str, Path(description="The ID of the category")],
-    db: Annotated[Database, Depends(get_db)],
+    db: DatabaseDep,
     x_application: RequiredAppHeader,
 ) -> None:
     """Delete a category and its child categories."""
