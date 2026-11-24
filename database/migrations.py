@@ -3,7 +3,7 @@
 import logging
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, LiteralString, cast
+from typing import LiteralString, cast
 
 from neo4j import AsyncDriver, AsyncManagedTransaction, AsyncSession
 
@@ -122,22 +122,17 @@ UPGRADE_RECORDING_QUERY: LiteralString = """
 """
 
 
-async def _ids(
-    runner: AsyncSession | AsyncManagedTransaction, query: LiteralString, parameters: dict[str, Any] | None = None
-) -> list[str]:
-    result = await runner.run(query, parameters)
-    return [record.value() async for record in result]
-
-
 async def legacy_recording_ids(driver: AsyncDriver, database: str) -> list[str]:
     """Recordings still attached to an edition, waiting for `migrate`."""
     async with driver.session(database=database) as session:
-        return await _ids(session, LEGACY_RECORDINGS_QUERY)
+        result = await session.run(LEGACY_RECORDINGS_QUERY)
+        return await result.value()
 
 
 async def unconvertible_recording_ids(driver: AsyncDriver, database: str) -> list[str]:
     async with driver.session(database=database) as session:
-        return await _ids(session, UNCONVERTIBLE_RECORDINGS_QUERY, {"roles": list(AUDIO_ROLES)})
+        result = await session.run(UNCONVERTIBLE_RECORDINGS_QUERY, roles=list(AUDIO_ROLES))
+        return await result.value()
 
 
 async def audit_schema(driver: AsyncDriver, database: str) -> dict[str, list[str]]:
@@ -165,7 +160,8 @@ async def upgrade_recordings(driver: AsyncDriver, database: str) -> int:
     """
 
     async def convert(tx: AsyncManagedTransaction) -> int:
-        pending = await _ids(tx, LEGACY_RECORDINGS_QUERY)
+        result = await tx.run(LEGACY_RECORDINGS_QUERY)
+        pending = await result.value()
         for recording_id in pending:
             result = await tx.run(UPGRADE_RECORDING_QUERY, recording_id=recording_id, audio_id=generate_id())
             await result.single(strict=True)
@@ -175,6 +171,14 @@ async def upgrade_recordings(driver: AsyncDriver, database: str) -> int:
         converted = await session.execute_write(convert)
     logger.info("Converted %d legacy recording(s)", converted)
     return converted
+
+
+async def install_constraints(session: AsyncSession) -> None:
+    """Apply the checked-in constraints and indexes in file order."""
+    constraints = Path(__file__).with_name("neo4j_constraints.cypher").read_text()
+    for statement in constraints.split(";"):
+        if statement.strip():
+            await (await session.run(cast(LiteralString, statement))).consume()
 
 
 async def migrate(driver: AsyncDriver, database: str) -> None:
@@ -188,10 +192,7 @@ async def migrate(driver: AsyncDriver, database: str) -> None:
             logger.error("%s: %s", name, ids[:20])
         raise RuntimeError("Schema audit failed; repair reported records before applying migrations")
     async with driver.session(database=database) as session:
-        constraints = Path(__file__).with_name("neo4j_constraints.cypher").read_text()
-        for statement in constraints.split(";"):
-            if statement.strip():
-                await (await session.run(cast(LiteralString, statement))).consume()
+        await install_constraints(session)
         lookups: dict[LiteralString, type[StrEnum]] = {
             "RoleType": ContributorRole,
             "EditionType": EditionType,

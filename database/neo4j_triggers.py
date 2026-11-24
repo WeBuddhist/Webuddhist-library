@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Literal
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
@@ -21,6 +22,33 @@ SYSTEM_DATABASE_NAME = "system"
 # plus target-type enforcement for optional typed relationships.
 
 
+def _affected_sources(
+    source_label: str,
+    rel_type: str,
+    relationships: Literal["changedRelationships", "$deletedRelationships"] = "changedRelationships",
+) -> str:
+    """Select changed source nodes and the source endpoints of the relevant relationships."""
+    return f"""CALL (*) {{
+            UNWIND changedNodes AS n
+            WITH n WHERE n:{source_label}
+            RETURN n AS node
+          UNION ALL
+            UNWIND {relationships} AS rel
+            WITH rel WHERE type(rel) = '{rel_type}'
+            WITH startNode(rel) AS n
+            WHERE n:{source_label}
+            RETURN n AS node
+        }}
+        WITH DISTINCT node"""
+
+
+def _multiple_outgoing(node: str, rel_type: str, target_label: str | None = None) -> str:
+    """Keep nodes with more than one matching outgoing relationship."""
+    target = f":{target_label}" if target_label else ""
+    return f"""WITH {node}, count {{ ({node})-[:{rel_type}]->({target}) }} AS cnt
+        WHERE cnt > 1"""
+
+
 def _required_rel_trigger(
     name: str,
     description: str,
@@ -30,91 +58,33 @@ def _required_rel_trigger(
     *,
     cardinality: str = "one",
 ) -> list[dict]:
-    """Generate trigger + audit pairs for a required relationship.
-
-    Returns a list of dicts:
-      - Existence: a single trigger that fires on both node creation and
-        relationship deletion, using CALL (*) { UNION ALL } to collect affected nodes.
-      - If cardinality is 'one', also includes a uniqueness trigger (at most one).
-    """
-    triggers = [
-        {
-            "name": name,
-            "description": description,
-            "phase": "before",
-            "query": f"""
-                CALL (*) {{
-                    UNWIND changedNodes AS n
-                    WITH n WHERE n:{source_label}
-                    RETURN n AS node
-                  UNION ALL
-                    UNWIND $deletedRelationships AS rel
-                    WITH rel WHERE type(rel) = '{rel_type}'
-                    WITH startNode(rel) AS n
-                    WHERE n:{source_label}
-                    RETURN n AS node
-                }}
-                WITH DISTINCT node
-                WHERE NOT (node IN $deletedNodes)
-                  AND NOT (node)-[:{rel_type}]->(:{target_label})
-                WITH collect(coalesce(node.id, elementId(node))) AS ids
-                WHERE size(ids) > 0
-                CALL apoc.util.validate(
-                    true,
-                    '{name}: {source_label} must have {rel_type}->{target_label}. IDs: %s',
-                    [string.join(ids, ', ')]
-                )
-                RETURN null
-            """,
-            "audit": f"""
-                MATCH (n:{source_label})
-                WHERE NOT (n)-[:{rel_type}]->(:{target_label})
-                RETURN coalesce(n.id, elementId(n)) AS violating_id
-            """,
-        },
-    ]
-
-    if cardinality == "one":
-        cardinality_name = name + "_max_one"
-        triggers.append(
-            {
-                "name": cardinality_name,
-                "description": f"{source_label} must have at most one {rel_type}->{target_label}",
-                "phase": "before",
-                "query": f"""
-                CALL (*) {{
-                    UNWIND changedNodes AS n
-                    WITH n WHERE n:{source_label}
-                    RETURN n AS node
-                  UNION ALL
-                    UNWIND changedRelationships AS rel
-                    WITH rel WHERE type(rel) = '{rel_type}'
-                    WITH startNode(rel) AS n
-                    WHERE n:{source_label}
-                    RETURN n AS node
-                }}
-                WITH DISTINCT node
-                WITH node, count {{ (node)-[:{rel_type}]->(:{target_label}) }} AS cnt
-                WHERE cnt > 1
-                WITH collect(coalesce(node.id, elementId(node))) AS ids
-                WHERE size(ids) > 0
-                CALL apoc.util.validate(
-                    true,
-                    '{cardinality_name}: {source_label} must have at most one {rel_type}. IDs: %s',
-                    [string.join(ids, ', ')]
-                )
-                RETURN null
-            """,
-                "audit": f"""
-                MATCH (n:{source_label})
-                WITH n, count {{ (n)-[:{rel_type}]->(:{target_label}) }} AS cnt
-                WHERE cnt > 1
-                RETURN coalesce(n.id, elementId(n)) AS violating_id
-            """,
-            }
+    """Require a matching target and, for cardinality 'one', reject a second match."""
+    existence = {
+        "name": name,
+        "description": description,
+        "phase": "before",
+        "query": f"""
+        {_affected_sources(source_label, rel_type, "$deletedRelationships")}
+        WHERE NOT (node IN $deletedNodes)
+          AND NOT (node)-[:{rel_type}]->(:{target_label})
+        WITH collect(coalesce(node.id, elementId(node))) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(
+            true,
+            '{name}: {source_label} must have {rel_type}->{target_label}. IDs: %s',
+            [string.join(ids, ', ')]
         )
-
-    return triggers
+        RETURN null
+        """,
+        "audit": f"""
+        MATCH (n:{source_label})
+        WHERE NOT (n)-[:{rel_type}]->(:{target_label})
+        RETURN coalesce(n.id, elementId(n)) AS violating_id
+        """,
+    }
+    if cardinality == "one":
+        return [existence, _max_one_trigger(f"{name}_max_one", source_label, rel_type, target_label)]
+    return [existence]
 
 
 def _rel_target_type_trigger(
@@ -152,26 +122,14 @@ def _rel_target_type_trigger(
 
 
 def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: str) -> dict:
-    """Generate a trigger + audit pair limiting an optional relationship to at most one."""
+    """Generate a trigger and audit limiting a relationship to at most one matching target."""
     return {
         "name": name,
         "description": f"{source_label} must have at most one {rel_type}->{target_label}",
         "phase": "before",
         "query": f"""
-        CALL (*) {{
-            UNWIND changedNodes AS n
-            WITH n WHERE n:{source_label}
-            RETURN n AS node
-          UNION ALL
-            UNWIND changedRelationships AS rel
-            WITH rel WHERE type(rel) = '{rel_type}'
-            WITH startNode(rel) AS n
-            WHERE n:{source_label}
-            RETURN n AS node
-        }}
-        WITH DISTINCT node
-        WITH node, count {{ (node)-[:{rel_type}]->(:{target_label}) }} AS cnt
-        WHERE cnt > 1
+        {_affected_sources(source_label, rel_type)}
+        {_multiple_outgoing("node", rel_type, target_label)}
         WITH collect(coalesce(node.id, elementId(node))) AS ids
         WHERE size(ids) > 0
         CALL apoc.util.validate(
@@ -183,8 +141,7 @@ def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: 
         """,
         "audit": f"""
         MATCH (n:{source_label})
-        WITH n, count {{ (n)-[:{rel_type}]->(:{target_label}) }} AS cnt
-        WHERE cnt > 1
+        {_multiple_outgoing("n", rel_type, target_label)}
         RETURN coalesce(n.id, elementId(n)) AS violating_id
         """,
     }
@@ -236,30 +193,11 @@ for name, source, relationship, target, cardinality in [
 
 
 # Text — target type enforcement for optional typed rels
-TRIGGERS.append(
+TRIGGERS.extend(
     _rel_target_type_trigger(
-        "enforce_translation_of_target",
-        "TRANSLATION_OF must point to a Text node",
-        "TRANSLATION_OF",
-        "Text",
+        f"enforce_{relationship.lower()}_target", f"{relationship} must point to a Text node", relationship, "Text"
     )
-)
-TRIGGERS.append(
-    _rel_target_type_trigger(
-        "enforce_commentary_of_target",
-        "COMMENTARY_OF must point to a Text node",
-        "COMMENTARY_OF",
-        "Text",
-    )
-)
-
-TRIGGERS.append(
-    _rel_target_type_trigger(
-        "enforce_part_of_target",
-        "PART_OF must point to a Text node",
-        "PART_OF",
-        "Text",
-    )
+    for relationship in ("TRANSLATION_OF", "COMMENTARY_OF", "PART_OF")
 )
 TRIGGERS.append(_max_one_trigger("enforce_text_part_of_max_one", "Text", "PART_OF", "Text"))
 
@@ -276,21 +214,9 @@ TRIGGERS.append(
         "name": "enforce_edition_has_segmentation_max_one",
         "description": "Edition must have at most one HAS_SEGMENTATION relationship",
         "phase": "before",
-        "query": """
-        CALL (*) {
-            UNWIND changedNodes AS n
-            WITH n WHERE n:Edition
-            RETURN n AS node
-          UNION ALL
-            UNWIND changedRelationships AS rel
-            WITH rel WHERE type(rel) = 'HAS_SEGMENTATION'
-            WITH startNode(rel) AS n
-            WHERE n:Edition
-            RETURN n AS node
-        }
-        WITH DISTINCT node
-        WITH node, count { (node)-[:HAS_SEGMENTATION]->(:Segmentation) } AS cnt
-        WHERE cnt > 1
+        "query": f"""
+        {_affected_sources("Edition", "HAS_SEGMENTATION")}
+        {_multiple_outgoing("node", "HAS_SEGMENTATION", "Segmentation")}
         WITH collect(coalesce(node.id, elementId(node))) AS ids
         WHERE size(ids) > 0
         CALL apoc.util.validate(
@@ -300,10 +226,9 @@ TRIGGERS.append(
         )
         RETURN null
         """,
-        "audit": """
+        "audit": f"""
         MATCH (e:Edition)
-        WITH e, count { (e)-[:HAS_SEGMENTATION]->(:Segmentation) } AS cnt
-        WHERE cnt > 1
+        {_multiple_outgoing("e", "HAS_SEGMENTATION", "Segmentation")}
         RETURN coalesce(e.id, elementId(e)) AS violating_id
         """,
     }
@@ -436,19 +361,8 @@ TRIGGERS.append(
             "TableOfContentsSection, Cue, Edition"
         ),
         "phase": "before",
-        "query": """
-        CALL (*) {
-            UNWIND changedNodes AS n
-            WITH n WHERE n:Span
-            RETURN n AS node
-          UNION ALL
-            UNWIND $deletedRelationships AS rel
-            WITH rel WHERE type(rel) = 'SPAN_OF'
-            WITH startNode(rel) AS n
-            WHERE n:Span
-            RETURN n AS node
-        }
-        WITH DISTINCT node
+        "query": f"""
+        {_affected_sources("Span", "SPAN_OF", "$deletedRelationships")}
         WHERE NOT (node IN $deletedNodes)
           AND NOT (node)-[:SPAN_OF]->(
             :Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition
@@ -476,21 +390,9 @@ TRIGGERS.append(
         "name": "enforce_span_span_of_max_one",
         "description": "Span must have at most one SPAN_OF relationship",
         "phase": "before",
-        "query": """
-        CALL (*) {
-            UNWIND changedNodes AS n
-            WITH n WHERE n:Span
-            RETURN n AS node
-          UNION ALL
-            UNWIND changedRelationships AS rel
-            WITH rel WHERE type(rel) = 'SPAN_OF'
-            WITH startNode(rel) AS n
-            WHERE n:Span
-            RETURN n AS node
-        }
-        WITH DISTINCT node
-        WITH node, count { (node)-[:SPAN_OF]->() } AS cnt
-        WHERE cnt > 1
+        "query": f"""
+        {_affected_sources("Span", "SPAN_OF")}
+        {_multiple_outgoing("node", "SPAN_OF")}
         WITH collect(coalesce(toString(node.start) + '-' + toString(node.end), 'unknown')) AS ids
         WHERE size(ids) > 0
         CALL apoc.util.validate(
@@ -500,10 +402,9 @@ TRIGGERS.append(
         )
         RETURN null
     """,
-        "audit": """
+        "audit": f"""
         MATCH (s:Span)
-        WITH s, count { (s)-[:SPAN_OF]->() } AS cnt
-        WHERE cnt > 1
+        {_multiple_outgoing("s", "SPAN_OF")}
         RETURN elementId(s) AS violating_id
     """,
     }
@@ -748,19 +649,8 @@ TRIGGERS.append(
         "name": "enforce_contribution_by",
         "description": "Every Contribution must have BY->Person or BY->AI",
         "phase": "before",
-        "query": """
-        CALL (*) {
-            UNWIND changedNodes AS n
-            WITH n WHERE n:Contribution
-            RETURN n AS node
-          UNION ALL
-            UNWIND $deletedRelationships AS rel
-            WITH rel WHERE type(rel) = 'BY'
-            WITH startNode(rel) AS n
-            WHERE n:Contribution
-            RETURN n AS node
-        }
-        WITH DISTINCT node
+        "query": f"""
+        {_affected_sources("Contribution", "BY", "$deletedRelationships")}
         WHERE NOT (node IN $deletedNodes)
           AND NOT (node)-[:BY]->(:Person|AI)
         WITH collect(elementId(node)) AS ids
@@ -784,21 +674,9 @@ TRIGGERS.append(
         "name": "enforce_contribution_by_max_one",
         "description": "Contribution must have at most one BY relationship",
         "phase": "before",
-        "query": """
-        CALL (*) {
-            UNWIND changedNodes AS n
-            WITH n WHERE n:Contribution
-            RETURN n AS node
-          UNION ALL
-            UNWIND changedRelationships AS rel
-            WITH rel WHERE type(rel) = 'BY'
-            WITH startNode(rel) AS n
-            WHERE n:Contribution
-            RETURN n AS node
-        }
-        WITH DISTINCT node
-        WITH node, count { (node)-[:BY]->() } AS cnt
-        WHERE cnt > 1
+        "query": f"""
+        {_affected_sources("Contribution", "BY")}
+        {_multiple_outgoing("node", "BY")}
         WITH collect(elementId(node)) AS ids
         WHERE size(ids) > 0
         CALL apoc.util.validate(
@@ -808,10 +686,9 @@ TRIGGERS.append(
         )
         RETURN null
     """,
-        "audit": """
+        "audit": f"""
         MATCH (c:Contribution)
-        WITH c, count { (c)-[:BY]->() } AS cnt
-        WHERE cnt > 1
+        {_multiple_outgoing("c", "BY")}
         RETURN elementId(c) AS violating_id
     """,
     }
@@ -851,15 +728,12 @@ TRIGGERS.append(
 # A relationship must not point back to the same node it originates from.
 
 
-def _no_self_ref_trigger(
-    name: str,
-    description: str,
-    rel_type: str,
-) -> dict:
+def _no_self_ref_trigger(rel_type: str, description: str | None = None) -> dict:
     """Generate a trigger + audit pair preventing a relationship from pointing to itself."""
+    name = f"enforce_no_self_{rel_type.lower()}"
     return {
         "name": name,
-        "description": description,
+        "description": description or f"{rel_type} must not point to self",
         "phase": "before",
         "query": f"""
             UNWIND changedRelationships AS rel
@@ -883,47 +757,9 @@ def _no_self_ref_trigger(
     }
 
 
-TRIGGERS.append(
-    _no_self_ref_trigger(
-        "enforce_no_self_translation_of",
-        "TRANSLATION_OF must not point to self",
-        "TRANSLATION_OF",
-    )
-)
-TRIGGERS.append(
-    _no_self_ref_trigger(
-        "enforce_no_self_commentary_of",
-        "COMMENTARY_OF must not point to self",
-        "COMMENTARY_OF",
-    )
-)
-TRIGGERS.append(
-    _no_self_ref_trigger(
-        "enforce_no_self_part_of",
-        "PART_OF must not point to self",
-        "PART_OF",
-    )
-)
-TRIGGERS.append(
-    _no_self_ref_trigger(
-        "enforce_no_self_alternative_of",
-        "ALTERNATIVE_OF must not point to self",
-        "ALTERNATIVE_OF",
-    )
-)
-TRIGGERS.append(
-    _no_self_ref_trigger(
-        "enforce_no_self_has_parent",
-        "HAS_PARENT must not point to self",
-        "HAS_PARENT",
-    )
-)
-TRIGGERS.append(
-    _no_self_ref_trigger(
-        "enforce_no_self_aligned_to",
-        "ALIGNED_TO must not point to self",
-        "ALIGNED_TO",
-    )
+TRIGGERS.extend(
+    _no_self_ref_trigger(relationship)
+    for relationship in ("TRANSLATION_OF", "COMMENTARY_OF", "PART_OF", "ALTERNATIVE_OF", "HAS_PARENT", "ALIGNED_TO")
 )
 
 # --- Span: start must not be greater than end ------------------------------
@@ -1070,9 +906,7 @@ for name, source, relationship, target in [
 ]:
     TRIGGERS.extend(_required_rel_trigger(name, f"{source} requires {relationship}", source, relationship, target))
 
-TRIGGERS.append(
-    _no_self_ref_trigger("enforce_no_self_subsection_of", "Sections cannot parent themselves", "SUBSECTION_OF")
-)
+TRIGGERS.append(_no_self_ref_trigger("SUBSECTION_OF", "Sections cannot parent themselves"))
 TRIGGERS.append(
     _rel_target_type_trigger("enforce_has_parent_target", "HAS_PARENT targets Category", "HAS_PARENT", "Category")
 )
