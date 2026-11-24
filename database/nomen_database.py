@@ -13,10 +13,11 @@ class NomenDatabase:
     UNWIND $nomens AS data
     CREATE (n:Nomen {id: data.id})
     CALL (n, data) {
-        UNWIND data.localizations AS item
-        MATCH (l:Language {code: item.base})
-        CREATE (n)-[:HAS_LOCALIZATION]->(:LocalizedText {text: item.text})
-            -[:HAS_LANGUAGE {bcp47: item.language}]->(l)
+        UNWIND data.translations AS pair
+        WITH n, pair[0] AS tag, pair[1] AS text
+        MATCH (l:Language {code: $base_codes[tag]})
+        CREATE (n)-[:HAS_LOCALIZATION]->(:LocalizedText {text: text})
+            -[:HAS_LANGUAGE {bcp47: tag}]->(l)
     }
     RETURN n.id AS id
     """
@@ -31,20 +32,10 @@ class NomenDatabase:
 
     @staticmethod
     async def create_many_with_transaction(tx: AsyncManagedTransaction, nomens: dict[str, dict[str, str]]) -> None:
-        await DatabaseValidator.validate_language_codes_exist(
-            tx, sorted({language.split("-")[0].lower() for texts in nomens.values() for language in texts})
-        )
-        rows = [
-            {
-                "id": nomen_id,
-                "localizations": [
-                    {"base": language.split("-")[0].lower(), "language": language, "text": text}
-                    for language, text in texts.items()
-                ],
-            }
-            for nomen_id, texts in nomens.items()
-        ]
-        result = await tx.run(NomenDatabase.CREATE_MANY_QUERY, nomens=rows)
+        base_codes = {tag: tag.partition("-")[0].lower() for texts in nomens.values() for tag in texts}
+        await DatabaseValidator.validate_language_codes_exist(tx, sorted(set(base_codes.values())))
+        rows = [{"id": name_id, "translations": list(texts.items())} for name_id, texts in nomens.items()]
+        result = await tx.run(NomenDatabase.CREATE_MANY_QUERY, nomens=rows, base_codes=base_codes)
         if {record["id"] for record in await result.data()} != set(nomens):
             raise RuntimeError("Incomplete nomen creation")
 
@@ -63,3 +54,34 @@ class NomenDatabase:
             )
             await result.consume()
         return primary_id
+
+    @classmethod
+    async def replace_with_transaction(
+        cls,
+        tx: AsyncManagedTransaction,
+        owner_label: LiteralString,
+        owner_id: str,
+        primary_text: dict[str, str],
+        *,
+        relationship: LiteralString = "HAS_TITLE",
+        alternative_texts: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Replace a locked owner's name. Pass a list for fields that own aliases, including [] to clear them."""
+        nomen_id = await cls.create_with_transaction(tx, primary_text, alternative_texts)
+        await tx.run(
+            f"""
+            MATCH (owner:{owner_label} {{id: $owner_id}}), (replacement:Nomen {{id: $nomen_id}})
+            CALL (owner) {{
+                MATCH (owner)-[:{relationship}]->(old:Nomen)
+                OPTIONAL MATCH (old)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
+                OPTIONAL MATCH (old)<-[:ALTERNATIVE_OF]-(alt:Nomen)-[:HAS_LOCALIZATION]->(alt_lt:LocalizedText)
+                WHERE $replace_alternatives
+                DETACH DELETE old, lt, alt, alt_lt
+            }}
+            CREATE (owner)-[:{relationship}]->(replacement)
+            FINISH
+            """,
+            owner_id=owner_id,
+            nomen_id=nomen_id,
+            replace_alternatives=alternative_texts is not None,
+        )

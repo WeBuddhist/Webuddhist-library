@@ -159,21 +159,6 @@ class TextDatabase:
     RETURN e.id as text_id
     """
 
-    DELETE_TITLE_QUERY: LiteralString = """
-    MATCH (e:Text {id: $text_id})-[:HAS_TITLE]->(n:Nomen)
-    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-    OPTIONAL MATCH (n)<-[:ALTERNATIVE_OF]-(alt:Nomen)-[:HAS_LOCALIZATION]->(alt_lt:LocalizedText)
-    DETACH DELETE n, lt, alt, alt_lt
-    FINISH
-    """
-
-    LINK_TITLE_QUERY: LiteralString = """
-    MATCH (e:Text {id: $text_id})
-    MATCH (n:Nomen {id: $nomen_id})
-    CREATE (e)-[:HAS_TITLE]->(n)
-    FINISH
-    """
-
     _CREATE_TEXT_LINKS: LiteralString = """
     MATCH (n:Nomen {id: $title_nomen_id}), (l:Language {code: $language_code})
     MATCH (license:LicenseType {name: $license})
@@ -377,8 +362,8 @@ class TextDatabase:
         base_lang_code = text.language.split("-")[0].lower()
         await DatabaseValidator.validate_language_code_exists(tx, base_lang_code)
 
-        alt_titles = [dict(t.root) for t in text.alt_titles] if text.alt_titles else []
-        title_nomen_id = await NomenDatabase.create_with_transaction(tx, dict(text.title.root), alt_titles)
+        alt_titles = [title.root for title in text.alt_titles or []]
+        title_nomen_id = await NomenDatabase.create_with_transaction(tx, text.title.root, alt_titles)
 
         params: dict[str, Any] = {
             "text_id": text_id,
@@ -443,19 +428,17 @@ class TextDatabase:
             record = await TextDatabase._get_for_update(tx, text_id)
             if record is None:
                 raise DataNotFoundError(f"Text with ID '{text_id}' not found")
-            existing = {key: value for key, value in record["text"].items() if key in TextBase.model_fields}
-            updated = TextBase.model_validate(existing | patch.model_dump(include=set(TextBase.model_fields)))
+            updated = TextBase.model_validate(record["text"] | patch.model_dump(), extra="ignore")
 
             properties = patch.model_dump(include={"bdrc", "wiki", "date"})
             if properties:
                 await tx.run(TextDatabase.UPDATE_PROPERTIES_QUERY, text_id=text_id, properties=properties)
 
             if patch.model_fields_set & {"title", "alt_titles"}:
-                await tx.run(TextDatabase.DELETE_TITLE_QUERY, text_id=text_id)
-                title_nomen_id = await NomenDatabase.create_with_transaction(
-                    tx, updated.title.root, [alt.root for alt in updated.alt_titles or []]
+                aliases = [title.root for title in updated.alt_titles or []]
+                await NomenDatabase.replace_with_transaction(
+                    tx, TEXT_LABEL, text_id, updated.title.root, alternative_texts=aliases
                 )
-                await tx.run(TextDatabase.LINK_TITLE_QUERY, text_id=text_id, nomen_id=title_nomen_id)
 
             if patch.license is not MISSING:
                 await tx.run(TextDatabase.UPDATE_LICENSE_QUERY, text_id=text_id, license=patch.license.value)

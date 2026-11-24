@@ -96,34 +96,6 @@ class CategoryDatabase:
         } AS exists
     """
 
-    DELETE_TITLE_QUERY: LiteralString = """
-    MATCH (c:Category {id: $category_id})-[:HAS_TITLE]->(n:Nomen)
-    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-    DETACH DELETE n, lt
-    FINISH
-    """
-
-    LINK_TITLE_QUERY: LiteralString = """
-    MATCH (c:Category {id: $category_id})
-    MATCH (n:Nomen {id: $nomen_id})
-    CREATE (c)-[:HAS_TITLE]->(n)
-    FINISH
-    """
-
-    DELETE_DESCRIPTION_QUERY: LiteralString = """
-    MATCH (c:Category {id: $category_id})-[:HAS_DESCRIPTION]->(n:Nomen)
-    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-    DETACH DELETE n, lt
-    FINISH
-    """
-
-    LINK_DESCRIPTION_QUERY: LiteralString = """
-    MATCH (c:Category {id: $category_id})
-    MATCH (n:Nomen {id: $nomen_id})
-    CREATE (c)-[:HAS_DESCRIPTION]->(n)
-    FINISH
-    """
-
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (root:Category {id: $category_id})-[:BELONGS_TO]->(app:Application {id: $application})
     OPTIONAL MATCH (c:Category)-[:HAS_PARENT*0..]->(root)
@@ -216,16 +188,14 @@ class CategoryDatabase:
                     tx, application, patch.title.root, existing.parent_id, category_id=category_id
                 )
                 title = _merge_localizations(existing.title.root, patch.title.root)
-                await tx.run(CategoryDatabase.DELETE_TITLE_QUERY, category_id=category_id)
-                nomen_id = await NomenDatabase.create_with_transaction(tx, title)
-                await tx.run(CategoryDatabase.LINK_TITLE_QUERY, category_id=category_id, nomen_id=nomen_id)
+                await NomenDatabase.replace_with_transaction(tx, "Category", category_id, title)
 
             if patch.description is not MISSING:
                 existing_description = existing.description.root if existing.description else {}
                 description = _merge_localizations(existing_description, patch.description.root)
-                await tx.run(CategoryDatabase.DELETE_DESCRIPTION_QUERY, category_id=category_id)
-                nomen_id = await NomenDatabase.create_with_transaction(tx, description)
-                await tx.run(CategoryDatabase.LINK_DESCRIPTION_QUERY, category_id=category_id, nomen_id=nomen_id)
+                await NomenDatabase.replace_with_transaction(
+                    tx, "Category", category_id, description, relationship="HAS_DESCRIPTION"
+                )
 
             updated = await self.get_with_transaction(tx, category_id, application)
             if updated is None:

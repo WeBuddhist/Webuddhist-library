@@ -94,20 +94,6 @@ class RecordingDatabase:
     FINISH
     """
 
-    DELETE_TITLE_QUERY: LiteralString = """
-    MATCH (r:Recording {id: $recording_id})-[:HAS_TITLE]->(n:Nomen)
-    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-    DETACH DELETE n, lt
-    FINISH
-    """
-
-    LINK_TITLE_QUERY: LiteralString = """
-    MATCH (r:Recording {id: $recording_id})
-    MATCH (n:Nomen {id: $nomen_id})
-    CREATE (r)-[:HAS_TITLE]->(n)
-    FINISH
-    """
-
     SET_FOLLOWS_QUERY: LiteralString = """
     MATCH (r:Recording {id: $recording_id})
     OPTIONAL MATCH (r)-[existing:FOLLOWS]->()
@@ -425,9 +411,7 @@ class RecordingDatabase:
                 )
 
             if patch.title is not MISSING:
-                await tx.run(RecordingDatabase.DELETE_TITLE_QUERY, recording_id=recording_id)
-                nomen_id = await NomenDatabase.create_with_transaction(tx, patch.title.root)
-                await tx.run(RecordingDatabase.LINK_TITLE_QUERY, recording_id=recording_id, nomen_id=nomen_id)
+                await NomenDatabase.replace_with_transaction(tx, "Recording", recording_id, patch.title.root)
             return await self.get_with_transaction(tx, recording_id)
 
         async with self.session as session:

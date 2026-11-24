@@ -72,21 +72,6 @@ class PersonDatabase:
     RETURN p.id as person_id
     """
 
-    DELETE_NAME_QUERY: LiteralString = """
-    MATCH (p:Person {id: $person_id})-[:HAS_NAME]->(n:Nomen)
-    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-    OPTIONAL MATCH (n)<-[:ALTERNATIVE_OF]-(alt:Nomen)-[:HAS_LOCALIZATION]->(alt_lt:LocalizedText)
-    DETACH DELETE n, lt, alt, alt_lt
-    FINISH
-    """
-
-    LINK_NAME_QUERY: LiteralString = """
-    MATCH (p:Person {id: $person_id})
-    MATCH (n:Nomen {id: $nomen_id})
-    CREATE (p)-[:HAS_NAME]->(n)
-    FINISH
-    """
-
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (p:Person {id: $person_id})
     RETURN count { (:Contribution)-[:BY]->(p) } AS contribution_count
@@ -187,13 +172,11 @@ class PersonDatabase:
                 await tx.run(PersonDatabase.UPDATE_PROPERTIES_QUERY, id=person_id, properties=properties)
 
             if patch.model_fields_set & {"name", "alt_names"}:
-                existing = {key: value for key, value in record["person"].items() if key in PersonBase.model_fields}
-                updated = PersonBase.model_validate(existing | patch.model_dump())
-                await tx.run(PersonDatabase.DELETE_NAME_QUERY, person_id=person_id)
-                primary_nomen_id = await NomenDatabase.create_with_transaction(
-                    tx, updated.name.root, [alt.root for alt in updated.alt_names or []]
+                updated = PersonBase.model_validate(record["person"] | patch.model_dump(), extra="ignore")
+                aliases = [name.root for name in updated.alt_names or []]
+                await NomenDatabase.replace_with_transaction(
+                    tx, "Person", person_id, updated.name.root, relationship="HAS_NAME", alternative_texts=aliases
                 )
-                await tx.run(PersonDatabase.LINK_NAME_QUERY, person_id=person_id, nomen_id=primary_nomen_id)
             return await self.get_with_transaction(tx, person_id)
 
         async with self.session as session:

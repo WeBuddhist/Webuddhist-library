@@ -102,20 +102,6 @@ class AudioDatabase:
     FINISH
     """
 
-    DELETE_TITLE_QUERY: LiteralString = """
-    MATCH (a:Audio {id: $audio_id})-[:HAS_TITLE]->(n:Nomen)
-    OPTIONAL MATCH (n)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-    DETACH DELETE n, lt
-    FINISH
-    """
-
-    LINK_TITLE_QUERY: LiteralString = """
-    MATCH (a:Audio {id: $audio_id})
-    MATCH (n:Nomen {id: $nomen_id})
-    CREATE (a)-[:HAS_TITLE]->(n)
-    FINISH
-    """
-
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (a:Audio {id: $audio_id})
     RETURN count { (:Recording)-[:RENDITION_OF]->(a) } AS recording_count
@@ -228,9 +214,7 @@ class AudioDatabase:
                 )
 
             if patch.title is not MISSING:
-                await tx.run(AudioDatabase.DELETE_TITLE_QUERY, audio_id=audio_id)
-                nomen_id = await NomenDatabase.create_with_transaction(tx, patch.title.root)
-                await tx.run(AudioDatabase.LINK_TITLE_QUERY, audio_id=audio_id, nomen_id=nomen_id)
+                await NomenDatabase.replace_with_transaction(tx, AUDIO_LABEL, audio_id, patch.title.root)
 
             if patch.contributions is not MISSING:
                 await DatabaseValidator.validate_contribution_references(tx, patch.contributions)
