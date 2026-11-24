@@ -2,12 +2,12 @@ from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import touch_edition
 from database.excerpt_database import read_edition
+from database.repository import SessionRepository
 from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.database import Database
     from database.excerpt_database import ExcerptMap
 from models.annotation import FootnoteInput, NoteInput, NoteOutput, SingleSpanAnnotation, Span
 from models.enums import NoteType
@@ -20,7 +20,7 @@ from .single_span import (
 )
 
 
-class NoteDatabase:
+class NoteDatabase(SessionRepository):
     """Notes of every type share one graph shape; durchen covers a span, footnote marks a point (empty span)."""
 
     GET_BY_ID_QUERY: LiteralString = f"""
@@ -72,9 +72,6 @@ class NoteDatabase:
     {DELETE_SPAN_AND_METADATA}
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
     async def get(self, note_id: str, note_type: NoteType = NoteType.DURCHEN) -> NoteOutput:
         async def read(tx: AsyncManagedTransaction) -> NoteOutput:
             result = await tx.run(NoteDatabase.GET_BY_ID_QUERY, note_id=note_id, note_type=str(note_type))
@@ -83,8 +80,7 @@ class NoteDatabase:
                 raise DataNotFoundError(f"Note with ID '{note_id}' not found")
             return NoteOutput.model_validate(record)
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(self, edition_id: str, note_type: NoteType = NoteType.DURCHEN) -> list[NoteOutput]:
         """An excerpt edition gets the source's notes that lie wholly inside one of its spans."""
@@ -98,8 +94,7 @@ class NoteDatabase:
             notes = [NoteOutput.model_validate(record) for record in await result.data()]
             return excerpt.project_annotations(notes, whole=True) if excerpt else notes
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_edition, edition_id, read)
+        return await self.execute_read(read_edition, edition_id, read)
 
     async def add_durchen(self, edition_id: str, note: NoteInput) -> str:
         return (await self.add_durchens(edition_id, [note]))[0]
@@ -108,15 +103,13 @@ class NoteDatabase:
         async def add_all(tx: AsyncManagedTransaction) -> list[str]:
             return [await NoteDatabase.add_with_transaction(tx, edition_id, note, NoteType.DURCHEN) for note in notes]
 
-        async with self._db.get_session() as session:
-            return await session.execute_write(add_all)
+        return await self.execute_write(add_all)
 
     async def add_footnotes(self, edition_id: str, notes: list[FootnoteInput]) -> list[str]:
         async def add_all(tx: AsyncManagedTransaction) -> list[str]:
             return [await NoteDatabase.add_footnote_with_transaction(tx, edition_id, note) for note in notes]
 
-        async with self._db.get_session() as session:
-            return await session.execute_write(add_all)
+        return await self.execute_write(add_all)
 
     @staticmethod
     async def add_with_transaction(
@@ -149,13 +142,11 @@ class NoteDatabase:
         await tx.run(NoteDatabase.DELETE_QUERY, note_id=note_id, note_type=str(note_type))
 
     async def delete(self, note_id: str, note_type: NoteType = NoteType.DURCHEN) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(NoteDatabase.delete_with_transaction, note_id, note_type)
+        await self.execute_write(NoteDatabase.delete_with_transaction, note_id, note_type)
 
     async def delete_all_footnotes(self, edition_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
             await touch_edition(tx, edition_id)  # raises DataNotFoundError for an unknown edition
             await tx.run(NoteDatabase.DELETE_ALL_BY_TYPE_QUERY, edition_id=edition_id, note_type=str(NoteType.FOOTNOTE))
 
-        async with self._db.get_session() as session:
-            await session.execute_write(write)
+        await self.execute_write(write)

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, LiteralString
 from neo4j.exceptions import ResultNotSingleError
 
 from database.content_state import read_value, touch_annotation, touch_edition
+from database.repository import SessionRepository
 from exceptions import DataConflictError, DataNotFoundError
 from identifier import generate_id
 from models.annotation import PaginationInput, PaginationOutput
@@ -10,10 +11,8 @@ from models.annotation import PaginationInput, PaginationOutput
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.database import Database
 
-
-class PaginationDatabase:
+class PaginationDatabase(SessionRepository):
     _GET_QUERY_BODY: LiteralString = """
     MATCH (pagination)<-[:VOLUME_OF]-(volume:Volume)<-[:PAGE_OF]-(page:Page)<-[:SPAN_OF]-(span:Span)
     WITH pagination, edition, text, volume, page, span ORDER BY span.start, span.end
@@ -83,9 +82,6 @@ class PaginationDatabase:
     {_DELETE_BODY}
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
     async def get(self, pagination_id: str) -> PaginationOutput:
         async def read(tx: AsyncManagedTransaction) -> PaginationOutput:
             result = await tx.run(PaginationDatabase.GET_BY_ID_QUERY, pagination_id=pagination_id)
@@ -94,8 +90,7 @@ class PaginationDatabase:
                 raise DataNotFoundError(f"Pagination with ID '{pagination_id}' not found")
             return PaginationOutput.model_validate(record)
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(self, edition_id: str) -> PaginationOutput | None:
         async def read(tx: AsyncManagedTransaction) -> PaginationOutput | None:
@@ -103,12 +98,10 @@ class PaginationDatabase:
             record = await result.single()
             return PaginationOutput.model_validate(record) if record else None
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_value, edition_id, read)
+        return await self.execute_read(read_value, edition_id, read)
 
     async def add(self, edition_id: str, pagination: PaginationInput) -> str:
-        async with self._db.get_session() as session:
-            return await session.execute_write(self.add_with_transaction, edition_id, pagination)
+        return await self.execute_write(self.add_with_transaction, edition_id, pagination)
 
     @staticmethod
     async def add_with_transaction(
@@ -151,5 +144,4 @@ class PaginationDatabase:
         await tx.run(PaginationDatabase.DELETE_QUERY, pagination_id=pagination_id)
 
     async def delete(self, pagination_id: str) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(self.delete_with_transaction, pagination_id)
+        await self.execute_write(self.delete_with_transaction, pagination_id)

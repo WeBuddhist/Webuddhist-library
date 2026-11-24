@@ -5,6 +5,7 @@ from database.content_state import read_value, touch_annotation, touch_edition
 from database.database_validator import DatabaseValidator
 from database.excerpt_database import read_edition
 from database.nomen_database import NomenDatabase
+from database.repository import SessionRepository
 from exceptions import DataNotFoundError
 from identifier import generate_id
 from models.annotation import (
@@ -17,11 +18,10 @@ from models.annotation import (
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, Record
 
-    from database.database import Database
     from database.excerpt_database import ExcerptMap
 
 
-class TableOfContentsDatabase:
+class TableOfContentsDatabase(SessionRepository):
     CREATE_TOC_QUERY: LiteralString = """
     MATCH (edition:Edition {id: $edition_id})
     CREATE (toc:TableOfContents {id: $toc_id})-[:TOC_OF]->(edition)
@@ -133,9 +133,6 @@ class TableOfContentsDatabase:
     FINISH
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
     @staticmethod
     async def _flatten_sections(
         tx: AsyncManagedTransaction,
@@ -206,8 +203,7 @@ class TableOfContentsDatabase:
                 raise DataNotFoundError(f"Table of contents with ID '{toc_id}' not found")
             return await read_value(tx, record["toc"]["edition_id"], lambda tx: self.get_with_transaction(tx, toc_id))
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(self, edition_id: str) -> list[TableOfContentsOutput]:
         async def read(
@@ -216,16 +212,13 @@ class TableOfContentsDatabase:
             tocs = await TableOfContentsDatabase.get_all_with_transaction(tx, source_id)
             return excerpt.project_tocs(tocs) if excerpt else tocs
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_edition, edition_id, read)
+        return await self.execute_read(read_edition, edition_id, read)
 
     async def add(self, edition_id: str, toc: TableOfContentsInput) -> str:
-        async with self._db.get_session() as session:
-            return await session.execute_write(TableOfContentsDatabase.add_with_transaction, edition_id, toc)
+        return await self.execute_write(TableOfContentsDatabase.add_with_transaction, edition_id, toc)
 
     async def delete(self, toc_id: str) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(TableOfContentsDatabase.delete_with_transaction, toc_id)
+        await self.execute_write(TableOfContentsDatabase.delete_with_transaction, toc_id)
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, toc_id: str) -> TableOfContentsOutput:

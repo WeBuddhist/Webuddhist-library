@@ -1,7 +1,7 @@
 from logging import getLogger
 from typing import Self
 
-from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
+from neo4j import AsyncGraphDatabase, AsyncSession
 
 from .alignment_database import AlignmentDatabase
 from .annotation.bibliographic_database import BibliographicDatabase
@@ -18,6 +18,7 @@ from .edition_database import EditionDatabase
 from .language_database import LanguageDatabase
 from .person_database import PersonDatabase
 from .recording_database import RecordingDatabase
+from .repository import SessionRepository, SessionSource
 from .segment_database import SegmentDatabase
 from .span_database import SpanDatabase
 from .tag_database import TagDatabase
@@ -27,7 +28,7 @@ logger = getLogger(__name__)
 
 
 class AnnotationDatabase:
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: SessionSource) -> None:
         self.segmentation = SegmentationDatabase(db)
         self.pagination = PaginationDatabase(db)
         self.table_of_contents = TableOfContentsDatabase(db)
@@ -39,40 +40,25 @@ class AnnotationDatabase:
 class Database:
     """Async database class for Neo4j operations."""
 
-    api_key: ApiKeyDatabase
-    application: ApplicationDatabase
-    text: TextDatabase
-    edition: EditionDatabase
-    annotation: AnnotationDatabase
-    alignment: AlignmentDatabase
-    segment: SegmentDatabase
-    audio: AudioDatabase
-    recording: RecordingDatabase
-    person: PersonDatabase
-    language: LanguageDatabase
-    category: CategoryDatabase
-    tag: TagDatabase
-    span: SpanDatabase
-
-    _driver: AsyncDriver
-
     def __init__(self, neo4j_uri: str, neo4j_auth: tuple[str, str], neo4j_database: str = "neo4j") -> None:
         self._driver = AsyncGraphDatabase.driver(neo4j_uri, auth=neo4j_auth)
         self._database = neo4j_database
 
+        get_session = self.get_session
+        self.transactions = SessionRepository(get_session)
         self.api_key = ApiKeyDatabase(db=self)
-        self.application = ApplicationDatabase(db=self)
-        self.text = TextDatabase(db=self)
-        self.edition = EditionDatabase(db=self)
-        self.annotation = AnnotationDatabase(db=self)
-        self.alignment = AlignmentDatabase(db=self)
-        self.segment = SegmentDatabase(db=self)
-        self.audio = AudioDatabase(db=self)
-        self.recording = RecordingDatabase(db=self)
-        self.person = PersonDatabase(db=self)
-        self.language = LanguageDatabase(db=self)
-        self.category = CategoryDatabase(db=self)
-        self.tag = TagDatabase(db=self)
+        self.application = ApplicationDatabase(get_session)
+        self.text = TextDatabase(get_session)
+        self.edition = EditionDatabase(get_session)
+        self.annotation = AnnotationDatabase(get_session)
+        self.alignment = AlignmentDatabase(get_session)
+        self.segment = SegmentDatabase(get_session)
+        self.audio = AudioDatabase(get_session)
+        self.recording = RecordingDatabase(get_session)
+        self.person = PersonDatabase(get_session)
+        self.language = LanguageDatabase(get_session)
+        self.category = CategoryDatabase(get_session)
+        self.tag = TagDatabase(get_session)
         self.span = SpanDatabase()
 
     async def verify_connectivity(self) -> None:

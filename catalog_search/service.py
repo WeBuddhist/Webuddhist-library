@@ -75,10 +75,9 @@ class CatalogSearchService:
         application: str | None = None,
     ) -> list[TextOutput]:
         if filters.language:
-            async with db.get_session() as session:
-                await session.execute_read(
-                    DatabaseValidator.validate_language_code_exists, filters.language.split("-")[0]
-                )
+            await db.transactions.execute_read(
+                DatabaseValidator.validate_language_code_exists, filters.language.split("-")[0]
+            )
         return await self._search(
             query,
             TEXT_DOCUMENT_TYPE,

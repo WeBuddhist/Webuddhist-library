@@ -12,24 +12,17 @@ from models.text import TextBase, TextInput, TextOutput, TextPatch
 from .contribution_database import ContributionDatabase, contributions_return
 from .database_validator import DatabaseValidator
 from .nomen_database import NomenDatabase
+from .repository import SessionRepository
 from .tag_database import TagDatabase
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession, Record
+    from neo4j import AsyncManagedTransaction, Record
 
-    from .database import Database
 
 TEXT_LABEL: LiteralString = "Text"
 
 
-class TextDatabase:
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
+class TextDatabase(SessionRepository):
     _TEXT_RETURN: LiteralString = (
         """
     {
@@ -240,8 +233,7 @@ class TextDatabase:
     """
 
     async def get(self, text_id: str, application: str | None = None) -> TextOutput:
-        async with self.session as session:
-            return await session.execute_read(self.get_with_transaction, text_id, application)
+        return await self.execute_read(self.get_with_transaction, text_id, application)
 
     @staticmethod
     async def get_with_transaction(
@@ -261,8 +253,7 @@ class TextDatabase:
             result = await tx.run(TextDatabase.GET_BY_IDS_QUERY, ids=text_ids, application=application)
             return [TextOutput.model_validate(record["text"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_work_id(self, text_id: str) -> str:
         async def read(tx: AsyncManagedTransaction) -> str:
@@ -272,8 +263,7 @@ class TextDatabase:
                 raise DataNotFoundError(f"Text with ID '{text_id}' not found or has no associated Work")
             return record["work_id"]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(
         self, offset: int, limit: int, filters: TextFilter | None = None, application: str | None = None
@@ -292,16 +282,14 @@ class TextDatabase:
             )
             return [TextOutput.model_validate(record["text"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_languages(self, filters: TextFacetFilter) -> list[TextLanguageResponse]:
         async def read(tx: AsyncManagedTransaction) -> list[TextLanguageResponse]:
             result = await tx.run(TextDatabase.GET_LANGUAGES_QUERY, **TextDatabase._filter_params(filters))
             return [TextLanguageResponse.model_validate(record) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     @staticmethod
     def _filter_params(filters: TextFacetFilter, language: str | None = None) -> dict[str, Any]:
@@ -317,8 +305,7 @@ class TextDatabase:
 
     async def create(self, text: TextInput, application: str | None = None) -> str:
         try:
-            async with self.session as session:
-                return await session.execute_write(TextDatabase.create_with_transaction, text, application=application)
+            return await self.execute_write(TextDatabase.create_with_transaction, text, application=application)
         except ConstraintError as e:
             raise DataConflictError(str(e)) from e
 
@@ -347,8 +334,7 @@ class TextDatabase:
 
             await tx.run(TextDatabase.DELETE_QUERY, text_id=text_id)
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     @staticmethod
     async def create_with_transaction(

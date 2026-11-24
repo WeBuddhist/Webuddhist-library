@@ -2,12 +2,12 @@ from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import touch_annotation
 from database.excerpt_database import read_edition
+from database.repository import SessionRepository
 from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.database import Database
     from database.excerpt_database import ExcerptMap
 from models.annotation import MarkInput, MarkOutput
 from models.enums import MarkType
@@ -20,7 +20,7 @@ from .single_span import (
 )
 
 
-class MarkDatabase:
+class MarkDatabase(SessionRepository):
     GET_BY_ID_QUERY: LiteralString = f"""
     MATCH (span:Span)-[:SPAN_OF]->(annotation:Mark {{id: $mark_id}})
         -[:MARK_OF]->(edition:Edition)-[:EDITION_OF]->(text:Text)
@@ -57,9 +57,6 @@ class MarkDatabase:
     {DELETE_SPAN_AND_METADATA}
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
     async def get(self, mark_id: str) -> MarkOutput:
         async def read(tx: AsyncManagedTransaction) -> MarkOutput:
             result = await tx.run(MarkDatabase.GET_BY_ID_QUERY, mark_id=mark_id)
@@ -68,8 +65,7 @@ class MarkDatabase:
                 raise DataNotFoundError(f"Mark with ID '{mark_id}' not found")
             return MarkOutput.model_validate(record)
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(
         self,
@@ -85,8 +81,7 @@ class MarkDatabase:
             marks = [MarkOutput.model_validate(record) for record in await result.data()]
             return excerpt.project_annotations(marks) if excerpt else marks
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_edition, edition_id, read)
+        return await self.execute_read(read_edition, edition_id, read)
 
     async def add_yigchung(self, edition_id: str, mark: MarkInput) -> str:
         return (await self.add_yigchungs(edition_id, [mark]))[0]
@@ -95,8 +90,7 @@ class MarkDatabase:
         async def add_all(tx: AsyncManagedTransaction) -> list[str]:
             return [await MarkDatabase.add_with_transaction(tx, edition_id, mark, MarkType.YIGCHUNG) for mark in marks]
 
-        async with self._db.get_session() as session:
-            return await session.execute_write(add_all)
+        return await self.execute_write(add_all)
 
     @staticmethod
     async def add_with_transaction(
@@ -115,5 +109,4 @@ class MarkDatabase:
         await tx.run(MarkDatabase.DELETE_QUERY, mark_id=mark_id)
 
     async def delete(self, mark_id: str) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(MarkDatabase.delete_with_transaction, mark_id)
+        await self.execute_write(MarkDatabase.delete_with_transaction, mark_id)

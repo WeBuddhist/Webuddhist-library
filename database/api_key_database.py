@@ -3,13 +3,15 @@ import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, LiteralString
 
+from .repository import SessionRepository
+
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
+    from neo4j import AsyncManagedTransaction
 
     from .database import Database
 
 
-class ApiKeyDatabase:
+class ApiKeyDatabase(SessionRepository):
     CREATE_QUERY: LiteralString = """
         CREATE (k:ApiKey {
             id: $key_id,
@@ -55,11 +57,8 @@ class ApiKeyDatabase:
     """
 
     def __init__(self, db: Database) -> None:
+        super().__init__(db.get_session)
         self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
 
     @staticmethod
     def _hash_key(raw_key: str) -> str:
@@ -105,9 +104,8 @@ class ApiKeyDatabase:
             record = await result.single(strict=True)
             return record["id"]
 
-        async with self.session as session:
-            created_id = await session.execute_write(write)
-            return created_id, raw_key
+        created_id = await self.execute_write(write)
+        return created_id, raw_key
 
     async def validate_key(self, raw_key: str) -> dict | None:
         """
@@ -126,8 +124,7 @@ class ApiKeyDatabase:
                 return None
             return {"id": record["id"], "bound_application_id": record["bound_application_id"]}
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def revoke(self, key_id: str) -> bool:
         """
@@ -141,8 +138,7 @@ class ApiKeyDatabase:
             result = await tx.run(self.REVOKE_QUERY, key_id=key_id)
             return await result.single() is not None
 
-        async with self.session as session:
-            return await session.execute_write(write)
+        return await self.execute_write(write)
 
     async def rotate_key(self, key_id: str) -> str | None:
         """
@@ -158,9 +154,8 @@ class ApiKeyDatabase:
             result = await tx.run(self.ROTATE_KEY_QUERY, key_id=key_id, api_key_hash=api_key_hash)
             return await result.single() is not None
 
-        async with self.session as session:
-            found = await session.execute_write(write)
-            return raw_key if found else None
+        found = await self.execute_write(write)
+        return raw_key if found else None
 
     async def list_all(self) -> list[dict]:
         """
@@ -174,5 +169,4 @@ class ApiKeyDatabase:
             result = await tx.run(self.LIST_QUERY)
             return await result.data()
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)

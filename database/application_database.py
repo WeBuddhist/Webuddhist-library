@@ -4,13 +4,13 @@ from neo4j.exceptions import ConstraintError
 
 from exceptions import DataConflictError, DataNotFoundError
 
+from .repository import SessionRepository
+
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
-
-    from .database import Database
+    from neo4j import AsyncManagedTransaction
 
 
-class ApplicationDatabase:
+class ApplicationDatabase(SessionRepository):
     EXISTS_QUERY: LiteralString = "RETURN EXISTS { (:Application {id: $application_id}) } AS exists"
     CREATE_QUERY: LiteralString = "CREATE (a:Application {id: $application_id, name: $name}) RETURN a.id AS id"
     DELETE_CHECK_QUERY: LiteralString = """
@@ -26,21 +26,13 @@ class ApplicationDatabase:
     RETURN id
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def exists(self, application_id: str) -> bool:
         async def read(tx: AsyncManagedTransaction) -> bool:
             result = await tx.run(self.EXISTS_QUERY, application_id=application_id)
             record = await result.single()
             return bool(record and record["exists"])
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def create(self, application_id: str, name: str) -> str:
         async def write(tx: AsyncManagedTransaction) -> str:
@@ -49,8 +41,7 @@ class ApplicationDatabase:
             return str(record["id"])
 
         try:
-            async with self.session as session:
-                return await session.execute_write(write)
+            return await self.execute_write(write)
         except ConstraintError as e:
             raise DataConflictError(str(e)) from e
 
@@ -73,5 +64,4 @@ class ApplicationDatabase:
 
             await tx.run(self.DELETE_QUERY, application_id=application_id)
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)

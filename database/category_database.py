@@ -8,13 +8,12 @@ from models.category import CategoryOutput
 
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
+from .repository import SessionRepository
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
+    from neo4j import AsyncManagedTransaction
 
     from models.category import CategoryInput, CategoryPatch
-
-    from .database import Database
 
 
 def _merge_localizations(existing: dict[str, str], patch: dict[str, str]) -> dict[str, str]:
@@ -28,7 +27,7 @@ def _merge_localizations(existing: dict[str, str], patch: dict[str, str]) -> dic
     return kept | patch
 
 
-class CategoryDatabase:
+class CategoryDatabase(SessionRepository):
     _CATEGORY_RETURN: LiteralString = """
     {
         id: c.id,
@@ -120,16 +119,8 @@ class CategoryDatabase:
     RETURN deleted_count
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def get_by_id(self, category_id: str, application: str) -> CategoryOutput | None:
-        async with self.session as session:
-            return await session.execute_read(self.get_with_transaction, category_id, application)
+        return await self.execute_read(self.get_with_transaction, category_id, application)
 
     @staticmethod
     async def get_with_transaction(
@@ -147,8 +138,7 @@ class CategoryDatabase:
             result = await tx.run(query, application=application, parent_id=parent_id)
             return [CategoryOutput.model_validate(record["category"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def create(self, category: CategoryInput, application: str) -> str:
         async def create_transaction(tx: AsyncManagedTransaction) -> str:
@@ -173,8 +163,7 @@ class CategoryDatabase:
             record = await result.single(strict=True)
             return record["category_id"]
 
-        async with self.session as session:
-            return str(await session.execute_write(create_transaction))
+        return str(await self.execute_write(create_transaction))
 
     async def update(self, category_id: str, patch: CategoryPatch, application: str) -> CategoryOutput:
         async def update_transaction(tx: AsyncManagedTransaction) -> CategoryOutput:
@@ -202,8 +191,7 @@ class CategoryDatabase:
                 raise RuntimeError(f"Category '{category_id}' disappeared during update")
             return updated
 
-        async with self.session as session:
-            return await session.execute_write(update_transaction)
+        return await self.execute_write(update_transaction)
 
     async def _validate_parent_exists_tx(self, tx: AsyncManagedTransaction, application: str, parent_id: str) -> None:
         result = await tx.run(
@@ -255,5 +243,4 @@ class CategoryDatabase:
             if record is None:
                 raise DataNotFoundError(f"Category '{category_id}' not found in application '{application}'")
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)

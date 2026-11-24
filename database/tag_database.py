@@ -7,16 +7,15 @@ from models.tag import TagOutput
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
+from .repository import SessionRepository
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
+    from neo4j import AsyncManagedTransaction
 
     from models.tag import TagInput
 
-    from .database import Database
 
-
-class TagDatabase:
+class TagDatabase(SessionRepository):
     GET_ALL_QUERY: LiteralString = """
     MATCH (t:Tag)-[:BELONGS_TO]->(:Application {id: $application})
     RETURN {
@@ -109,20 +108,12 @@ class TagDatabase:
         RETURN s.id AS segment_id
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def get_all(self, application: str) -> list[TagOutput]:
         async def read(tx: AsyncManagedTransaction) -> list[TagOutput]:
             result = await tx.run(TagDatabase.GET_ALL_QUERY, application=application)
             return [TagOutput.model_validate(record["tag"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def create(self, tag: TagInput, application: str) -> str:
         async def create_transaction(tx: AsyncManagedTransaction) -> str:
@@ -144,8 +135,7 @@ class TagDatabase:
             record = await result.single(strict=True)
             return record["tag_id"]
 
-        async with self.session as session:
-            return str(await session.execute_write(create_transaction))
+        return str(await self.execute_write(create_transaction))
 
     async def delete(self, tag_id: str, application: str) -> list[str]:
         async def write(tx: AsyncManagedTransaction) -> list[str]:
@@ -166,8 +156,7 @@ class TagDatabase:
 
             return sorted(works)
 
-        async with self.session as session:
-            return await session.execute_write(write)
+        return await self.execute_write(write)
 
     async def tag_work(self, work_id: str, tag_id: str, application: str | None = None) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
@@ -181,8 +170,7 @@ class TagDatabase:
                 scope = f" in application '{application}'" if application is not None else ""
                 raise DataNotFoundError(f"Tag '{tag_id}' not found{scope}")
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     async def untag_work(self, work_id: str, tag_id: str, application: str | None = None) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
@@ -192,8 +180,7 @@ class TagDatabase:
             if not await result.single():
                 raise DataNotFoundError(f"Tag '{tag_id}' is not attached to Work '{work_id}'")
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     async def tag_segment(self, segment_id: str, tag_id: str, application: str | None = None) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
@@ -203,8 +190,7 @@ class TagDatabase:
             if not await result.single():
                 raise DataNotFoundError(f"Segment '{segment_id}' or Tag '{tag_id}' not found")
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     async def untag_segment(self, segment_id: str, tag_id: str, application: str | None = None) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
@@ -214,8 +200,7 @@ class TagDatabase:
             if not await result.single():
                 raise DataNotFoundError(f"Tag '{tag_id}' is not attached to Segment '{segment_id}'")
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     @staticmethod
     async def set_work_tags(

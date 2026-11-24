@@ -17,21 +17,21 @@ from .excerpt_database import ExcerptDatabase
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
 from .recording_database import RecordingDatabase
+from .repository import SessionRepository
 from .text_database import TextDatabase
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
+    from neo4j import AsyncManagedTransaction
 
     from models.annotation import PaginationInput, SegmentationInput
     from models.edition import EditionInput, ExcerptSource
     from models.text import TextInput
 
-    from .database import Database
 
 logger = logging.getLogger(__name__)
 
 
-class EditionDatabase:
+class EditionDatabase(SessionRepository):
     DELETE_QUERY: LiteralString = """
     MATCH (m:Edition {id: $edition_id})
     OPTIONAL MATCH (m)-[:HAS_INCIPIT_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
@@ -117,13 +117,6 @@ class EditionDatabase:
     RETURN m.id AS edition_id
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def get(self, edition_id: str) -> EditionOutput:
         async def read(tx: AsyncManagedTransaction) -> EditionOutput:
             result = await tx.run(
@@ -135,12 +128,10 @@ class EditionDatabase:
                 raise DataNotFoundError(f"Edition '{edition_id}' not found")
             return EditionOutput.model_validate(record["edition"])
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(self, text_id: str, edition_type: EditionType | None = None) -> list[EditionOutput]:
-        async with self.session as session:
-            return await session.execute_read(EditionDatabase.get_all_with_transaction, text_id, edition_type)
+        return await self.execute_read(EditionDatabase.get_all_with_transaction, text_id, edition_type)
 
     @staticmethod
     async def get_all_with_transaction(
@@ -161,8 +152,7 @@ class EditionDatabase:
             result = await tx.run(EditionDatabase.GET_RELATED_QUERY, edition_id=edition_id)
             return [EditionOutput.model_validate(record["edition"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def create(
         self,
@@ -196,12 +186,10 @@ class EditionDatabase:
 
             return created_edition_id
 
-        async with self.session as session:
-            return await session.execute_write(transaction_function)
+        return await self.execute_write(transaction_function)
 
     async def delete(self, edition_id: str) -> None:
-        async with self.session as session:
-            await session.execute_write(self.delete_with_transaction, edition_id)
+        await self.execute_write(self.delete_with_transaction, edition_id)
 
     @staticmethod
     async def delete_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> None:

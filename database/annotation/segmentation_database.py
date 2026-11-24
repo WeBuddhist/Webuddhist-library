@@ -4,19 +4,19 @@ from neo4j.exceptions import ResultNotSingleError
 
 from database.content_state import advance_revision, lock_connected_editions, read_value, touch_edition
 from database.excerpt_database import read_edition
+from database.repository import SessionRepository
 from exceptions import DataConflictError, DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.database import Database
     from database.excerpt_database import ExcerptMap
 from database.database_validator import DatabaseValidator
 from identifier import generate_id
 from models.annotation import SegmentationInput, SegmentationOutput, SegmentOutput
 
 
-class SegmentationDatabase:
+class SegmentationDatabase(SessionRepository):
     _GET_PARENT_QUERY_BODY: LiteralString = """
     MATCH (edition)-[:EDITION_OF]->(text:Text)
     RETURN segmentation.id AS id,
@@ -104,9 +104,6 @@ class SegmentationDatabase:
     FINISH
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
     async def get_by_edition(self, edition_id: str) -> SegmentationOutput:
         """An excerpt edition's segmentation is its source's, identified by the excerpt edition."""
 
@@ -116,8 +113,7 @@ class SegmentationDatabase:
                 return segmentation
             return segmentation.model_copy(update=excerpt.owner | {"id": excerpt.edition_id})
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_edition, edition_id, read)
+        return await self.execute_read(read_edition, edition_id, read)
 
     async def get_segments_by_edition(
         self,
@@ -141,16 +137,14 @@ class SegmentationDatabase:
                 segments += piece.project_segments([SegmentOutput.model_validate(r) for r in await result.data()])
             return segments[offset : offset + limit]
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_edition, edition_id, read)
+        return await self.execute_read(read_edition, edition_id, read)
 
     async def get_all_segments_by_edition(self, edition_id: str) -> list[SegmentOutput]:
-        async with self._db.get_session() as session:
-            return await session.execute_read(
-                read_value,
-                edition_id,
-                lambda tx: SegmentationDatabase.get_all_segments_by_edition_with_transaction(tx, edition_id),
-            )
+        return await self.execute_read(
+            read_value,
+            edition_id,
+            lambda tx: SegmentationDatabase.get_all_segments_by_edition_with_transaction(tx, edition_id),
+        )
 
     @staticmethod
     async def add_with_transaction(
@@ -181,8 +175,7 @@ class SegmentationDatabase:
         return str(record["id"])
 
     async def add(self, edition_id: str, segmentation: SegmentationInput) -> str:
-        async with self._db.get_session() as session:
-            return await session.execute_write(SegmentationDatabase.add_with_transaction, edition_id, segmentation)
+        return await self.execute_write(SegmentationDatabase.add_with_transaction, edition_id, segmentation)
 
     @staticmethod
     async def get_by_edition_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> SegmentationOutput:
@@ -236,8 +229,7 @@ class SegmentationDatabase:
             raise DataNotFoundError(f"Segmentation for edition '{edition_id}' not found")
 
     async def delete_by_edition(self, edition_id: str) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(SegmentationDatabase.delete_by_edition_with_transaction, edition_id)
+        await self.execute_write(SegmentationDatabase.delete_by_edition_with_transaction, edition_id)
 
     @staticmethod
     async def delete_by_edition_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> None:

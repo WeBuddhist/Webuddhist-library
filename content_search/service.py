@@ -48,8 +48,7 @@ class ContentSearchService:
             return (await result.single(strict=True))["eligible"]
 
         try:
-            async with db.get_session() as session:
-                state, eligible = await session.execute_read(read_at_revision, edition_id, eligibility)
+            state, eligible = await db.transactions.execute_read(read_at_revision, edition_id, eligibility)
             if not eligible:
                 return []
         except DataNotFoundError:
@@ -285,5 +284,4 @@ async def _join_segments(db: Database, candidates: Sequence[dict]) -> list[Conte
             if revisions.get(match["edition"]) == match["revision"]
         ]
 
-    async with db.get_session() as session:
-        return await session.execute_read(read)
+    return await db.transactions.execute_read(read)

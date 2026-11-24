@@ -2,16 +2,15 @@ from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import read_value, touch_edition
 from database.database_validator import DatabaseValidator
+from database.repository import SessionRepository
 from exceptions import DataNotFoundError, InvalidRequestError
 from models.alignment import EditionAlignmentInput, EditionAlignmentOutput, EditionAlignmentPairOutput
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from .database import Database
 
-
-class AlignmentDatabase:
+class AlignmentDatabase(SessionRepository):
     VALIDATE_EDITION_PAIR_QUERY: LiteralString = """
     RETURN EXISTS { (:Edition {id: $source_edition_id}) } AS source_edition_exists,
            EXISTS { (:Edition {id: $target_edition_id}) } AS target_edition_exists
@@ -125,19 +124,15 @@ class AlignmentDatabase:
     ORDER BY aligned_text_id, aligned_edition_id, target_text_id, target_edition_id
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
     async def replace(
         self,
         source_edition_id: str,
         target_edition_id: str,
         alignment: EditionAlignmentInput,
     ) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(
-                AlignmentDatabase.replace_with_transaction, source_edition_id, target_edition_id, alignment
-            )
+        await self.execute_write(
+            AlignmentDatabase.replace_with_transaction, source_edition_id, target_edition_id, alignment
+        )
 
     async def get(
         self,
@@ -148,31 +143,28 @@ class AlignmentDatabase:
         limit: int,
         application: str | None = None,
     ) -> list[EditionAlignmentPairOutput]:
-        async with self._db.get_session() as session:
-            return await session.execute_read(
-                read_value,
+        return await self.execute_read(
+            read_value,
+            source_edition_id,
+            lambda tx: AlignmentDatabase.get_with_transaction(
+                tx,
                 source_edition_id,
-                lambda tx: AlignmentDatabase.get_with_transaction(
-                    tx,
-                    source_edition_id,
-                    target_edition_id,
-                    offset=offset,
-                    limit=limit,
-                    application=application,
-                ),
-            )
+                target_edition_id,
+                offset=offset,
+                limit=limit,
+                application=application,
+            ),
+        )
 
     async def get_all_for_edition(self, edition_id: str) -> list[EditionAlignmentOutput]:
-        async with self._db.get_session() as session:
-            return await session.execute_read(
-                read_value,
-                edition_id,
-                lambda tx: AlignmentDatabase.get_all_for_edition_with_transaction(tx, edition_id),
-            )
+        return await self.execute_read(
+            read_value,
+            edition_id,
+            lambda tx: AlignmentDatabase.get_all_for_edition_with_transaction(tx, edition_id),
+        )
 
     async def delete(self, source_edition_id: str, target_edition_id: str) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(AlignmentDatabase.delete_with_transaction, source_edition_id, target_edition_id)
+        await self.execute_write(AlignmentDatabase.delete_with_transaction, source_edition_id, target_edition_id)
 
     @staticmethod
     async def replace_with_transaction(

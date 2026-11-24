@@ -8,17 +8,16 @@ from models.person import PersonBase, PersonOutput
 
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
+from .repository import SessionRepository
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
+    from neo4j import AsyncManagedTransaction
 
     from models.person import PersonInput, PersonPatch
     from models.requests import PersonFilter
 
-    from .database import Database
 
-
-class PersonDatabase:
+class PersonDatabase(SessionRepository):
     _PERSON_RETURN: LiteralString = """
     {
         id: p.id,
@@ -86,16 +85,8 @@ class PersonDatabase:
     RETURN $person_id AS person_id
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def get(self, person_id: str) -> PersonOutput:
-        async with self.session as session:
-            return await session.execute_read(self.get_with_transaction, person_id)
+        return await self.execute_read(self.get_with_transaction, person_id)
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, person_id: str) -> PersonOutput:
@@ -114,8 +105,7 @@ class PersonDatabase:
             records = await result.data()
             return [PersonOutput.model_validate(record["person"]) for record in records]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(
         self,
@@ -134,8 +124,7 @@ class PersonDatabase:
             records = await result.data()
             return [PersonOutput.model_validate(record["person"]) for record in records]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def create(self, person: PersonInput) -> str:
         async def create_transaction(tx: AsyncManagedTransaction) -> str:
@@ -198,5 +187,4 @@ class PersonDatabase:
 
             await tx.run(PersonDatabase.DELETE_QUERY, person_id=person_id)
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)

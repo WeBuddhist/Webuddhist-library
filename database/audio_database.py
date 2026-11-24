@@ -10,17 +10,17 @@ from .contribution_database import ContributionDatabase, contributions_return
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
+from .repository import SessionRepository
 from .text_database import TextDatabase
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
+    from neo4j import AsyncManagedTransaction
 
-    from .database import Database
 
 AUDIO_LABEL: LiteralString = "Audio"
 
 
-class AudioDatabase:
+class AudioDatabase(SessionRepository):
     """One performance of a text: an Expression beside the Text, under the same Work."""
 
     _AUDIO_RETURN: LiteralString = f"""
@@ -115,16 +115,8 @@ class AudioDatabase:
     FINISH
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def get(self, audio_id: str) -> AudioOutput:
-        async with self.session as session:
-            return await session.execute_read(self.get_with_transaction, audio_id)
+        return await self.execute_read(self.get_with_transaction, audio_id)
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, audio_id: str) -> AudioOutput:
@@ -140,8 +132,7 @@ class AudioDatabase:
             result = await tx.run(AudioDatabase.GET_BY_TEXT_ID_QUERY, text_id=text_id)
             return [AudioOutput.model_validate(record["audio"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     @staticmethod
     async def _validate_text_exists(tx: AsyncManagedTransaction, text_id: str) -> None:
@@ -152,8 +143,7 @@ class AudioDatabase:
     async def create(self, text_id: str, audio: AudioInput) -> str:
         # Generated outside the transaction function, so a retried transaction reuses the same ID.
         audio_id = generate_id()
-        async with self.session as session:
-            return await session.execute_write(AudioDatabase.create_with_transaction, text_id, audio, audio_id)
+        return await self.execute_write(AudioDatabase.create_with_transaction, text_id, audio, audio_id)
 
     @staticmethod
     async def create_with_transaction(
@@ -223,8 +213,7 @@ class AudioDatabase:
                     await ContributionDatabase.create_with_transaction(tx, AUDIO_LABEL, audio_id, contribution)
             return await self.get_with_transaction(tx, audio_id)
 
-        async with self.session as session:
-            return await session.execute_write(write)
+        return await self.execute_write(write)
 
     async def delete(self, audio_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
@@ -239,5 +228,4 @@ class AudioDatabase:
                 )
             await tx.run(AudioDatabase.DELETE_QUERY, audio_id=audio_id)
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)

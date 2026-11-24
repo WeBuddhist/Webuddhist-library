@@ -2,12 +2,12 @@ from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import touch_annotation
 from database.excerpt_database import read_edition
+from database.repository import SessionRepository
 from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.database import Database
     from database.excerpt_database import ExcerptMap
 from models.annotation import BibliographicMetadataInput, BibliographicMetadataOutput
 
@@ -19,7 +19,7 @@ from .single_span import (
 )
 
 
-class BibliographicDatabase:
+class BibliographicDatabase(SessionRepository):
     GET_BY_ID_QUERY: LiteralString = f"""
     MATCH (span:Span)-[:SPAN_OF]->(annotation:BibliographicMetadata {{id: $bibliographic_id}})
         -[:BIBLIOGRAPHY_OF]->(edition:Edition)-[:EDITION_OF]->(text:Text)
@@ -57,9 +57,6 @@ class BibliographicDatabase:
     {DELETE_SPAN_AND_METADATA}
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
     async def get(self, bibliographic_id: str) -> BibliographicMetadataOutput:
         async def read(tx: AsyncManagedTransaction) -> BibliographicMetadataOutput:
             result = await tx.run(
@@ -71,8 +68,7 @@ class BibliographicDatabase:
                 raise DataNotFoundError(f"Bibliographic metadata with ID '{bibliographic_id}' not found")
             return BibliographicMetadataOutput.model_validate(record)
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all(self, edition_id: str) -> list[BibliographicMetadataOutput]:
         async def read(
@@ -82,16 +78,14 @@ class BibliographicDatabase:
             metadata = [BibliographicMetadataOutput.model_validate(record) for record in await result.data()]
             return excerpt.project_annotations(metadata) if excerpt else metadata
 
-        async with self._db.get_session() as session:
-            return await session.execute_read(read_edition, edition_id, read)
+        return await self.execute_read(read_edition, edition_id, read)
 
     async def add(
         self,
         edition_id: str,
         item: BibliographicMetadataInput,
     ) -> str:
-        async with self._db.get_session() as session:
-            return await session.execute_write(BibliographicDatabase.add_with_transaction, edition_id, item)
+        return await self.execute_write(BibliographicDatabase.add_with_transaction, edition_id, item)
 
     @staticmethod
     async def add_with_transaction(
@@ -109,5 +103,4 @@ class BibliographicDatabase:
         await tx.run(BibliographicDatabase.DELETE_QUERY, bibliographic_id=bibliographic_id)
 
     async def delete(self, bibliographic_id: str) -> None:
-        async with self._db.get_session() as session:
-            await session.execute_write(BibliographicDatabase.delete_with_transaction, bibliographic_id)
+        await self.execute_write(BibliographicDatabase.delete_with_transaction, bibliographic_id)

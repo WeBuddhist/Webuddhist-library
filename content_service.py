@@ -45,10 +45,9 @@ async def read_content(
     db: Database, storage: Storage, edition_id: str, *, span_start: int | None = None, span_end: int | None = None
 ) -> str:
     """Slice edition content when both bounds are supplied, after assembling an excerpt in reading order."""
-    async with db.get_session() as session:
-        state, slices = await session.execute_read(
-            read_at_revision, edition_id, partial(ExcerptDatabase.get_slices_with_transaction, edition_id=edition_id)
-        )
+    state, slices = await db.transactions.execute_read(
+        read_at_revision, edition_id, partial(ExcerptDatabase.get_slices_with_transaction, edition_id=edition_id)
+    )
     if state.is_excerpt:
         source = await storage.read_text(slices[0].key)
         content = "".join(source[piece.start : piece.end] for piece in slices)
@@ -60,15 +59,13 @@ async def read_content(
 
 
 async def read_segment_content(db: Database, storage: Storage, segment_id: str, application: str | None) -> str:
-    async with db.get_session() as session:
-        key, span = await session.execute_read(db.segment.get_content_location, segment_id, application)
+    key, span = await db.transactions.execute_read(db.segment.get_content_location, segment_id, application)
     content = await storage.read_text(key)
     return content[span.start : span.end]
 
 
 async def sign_edition_content_url(db: Database, storage: Storage, edition_id: str) -> tuple[str, datetime]:
-    async with db.get_session() as session:
-        state = await session.execute_read(read_state, edition_id)
+    state = await db.transactions.execute_read(read_state, edition_id)
     expires_at = datetime.now(UTC) + timedelta(seconds=PRESIGNED_URL_TTL_SECONDS)
     url = await storage.generate_url(state.stored_key)
     return url, expires_at
@@ -80,8 +77,7 @@ async def sign_recording_audio_url(db: Database, storage: Storage, recording_id:
 
 
 async def edit_content(db: Database, storage: Storage, edition_id: str, data: ContentOperation) -> None:
-    async with db.get_session() as session:
-        state = await session.execute_read(read_state, edition_id)
+    state = await db.transactions.execute_read(read_state, edition_id)
     edit = data.operation
     start, end = (edit.position, edit.position) if isinstance(edit, InsertOperation) else (edit.start, edit.end)
     replacement = "" if isinstance(edit, DeleteOperation) else edit.text
@@ -116,8 +112,7 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
         for related_id in related:
             await advance_revision(tx, related_id)
 
-    async with db.get_session() as session:
-        await session.execute_write(write)
+    await db.transactions.execute_write(write)
 
 
 async def create_recording(

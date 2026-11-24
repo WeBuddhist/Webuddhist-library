@@ -2,17 +2,16 @@ from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import read_at_revision, read_value
 from database.database_validator import DatabaseValidator
+from database.repository import SessionRepository
 from exceptions import DataConflictError, DataNotFoundError
 from models.annotation import SegmentWithContextOutput, Span
 from models.requests import RelatedSegmentsFilter
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
-
-    from .database import Database
+    from neo4j import AsyncManagedTransaction
 
 
-class SegmentDatabase:
+class SegmentDatabase(SessionRepository):
     GET_QUERY: LiteralString = """
     MATCH (seg:Segment {id: $segment_id})-[:SEGMENT_OF]->(segmentation:Segmentation)
         <-[:HAS_SEGMENTATION]-(edition:Edition)-[:EDITION_OF]->(text:Text)
@@ -103,16 +102,8 @@ class SegmentDatabase:
     ORDER BY segment_id
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def _session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def get(self, segment_id: str, application: str | None = None) -> SegmentWithContextOutput:
-        async with self._session as session:
-            return await session.execute_read(self.get_with_transaction, segment_id, application)
+        return await self.execute_read(self.get_with_transaction, segment_id, application)
 
     @staticmethod
     async def get_with_transaction(
@@ -245,8 +236,7 @@ class SegmentDatabase:
                 raise DataConflictError("Alignment changed while reading; retry the request")
             return result
 
-        async with self._session as session:
-            return await session.execute_read(read_value, edition_id, _read)
+        return await self.execute_read(read_value, edition_id, _read)
 
     async def _resolve_segment_page(
         self,
@@ -278,5 +268,4 @@ class SegmentDatabase:
             result = await tx.run(self.FIND_BY_SPAN_QUERY, edition_id=edition_id, span_start=start, span_end=end)
             return [r["segment_id"] for r in await result.data()]
 
-        async with self._session as session:
-            return await session.execute_read(_read)
+        return await self.execute_read(_read)

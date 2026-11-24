@@ -10,14 +10,13 @@ from .content_state import ContentState, advance_revision, read_state, read_valu
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
+from .repository import SessionRepository
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, AsyncSession
-
-    from .database import Database
+    from neo4j import AsyncManagedTransaction
 
 
-class RecordingDatabase:
+class RecordingDatabase(SessionRepository):
     """One audio file of an Audio. Cues align it with the edition it follows."""
 
     _RECORDING_RETURN: LiteralString = """
@@ -158,16 +157,8 @@ class RecordingDatabase:
     FINISH
     """
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._db.get_session()
-
     async def get(self, recording_id: str) -> RecordingOutput:
-        async with self.session as session:
-            return await session.execute_read(self.get_with_transaction, recording_id)
+        return await self.execute_read(self.get_with_transaction, recording_id)
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, recording_id: str) -> RecordingOutput:
@@ -183,8 +174,7 @@ class RecordingDatabase:
             result = await tx.run(RecordingDatabase.GET_BY_AUDIO_ID_QUERY, audio_id=audio_id)
             return [RecordingOutput.model_validate(record["recording"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_all_by_edition(self, edition_id: str) -> list[RecordingOutput]:
         """The recordings that follow an edition, for follow-along playback."""
@@ -194,8 +184,7 @@ class RecordingDatabase:
             result = await tx.run(RecordingDatabase.GET_BY_EDITION_ID_QUERY, edition_id=edition_id)
             return [RecordingOutput.model_validate(record["recording"]) for record in await result.data()]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def get_storage_location(self, recording_id: str) -> str:
         """Return the immutable audio-object key stored with the recording."""
@@ -207,8 +196,7 @@ class RecordingDatabase:
                 raise DataNotFoundError(f"Recording with ID '{recording_id}' not found")
             return record["key"]
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     @staticmethod
     async def _validate_audio_exists(tx: AsyncManagedTransaction, audio_id: str) -> None:
@@ -234,8 +222,7 @@ class RecordingDatabase:
             )
 
     async def validate_target(self, audio_id: str, edition_id: str | None) -> None:
-        async with self.session as session:
-            await session.execute_read(RecordingDatabase.validate_target_with_transaction, audio_id, edition_id)
+        await self.execute_read(RecordingDatabase.validate_target_with_transaction, audio_id, edition_id)
 
     @staticmethod
     async def _get_links(tx: AsyncManagedTransaction, recording_id: str) -> tuple[str, str | None]:
@@ -276,8 +263,7 @@ class RecordingDatabase:
                 return []
             return await read_value(tx, edition_id, cues)
 
-        async with self.session as session:
-            return await session.execute_read(read)
+        return await self.execute_read(read)
 
     async def replace_cues(self, recording_id: str, cues: list[RecordingCue]) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
@@ -294,16 +280,14 @@ class RecordingDatabase:
                 cues=[cue.model_dump() for cue in cues],
             )
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     async def delete_cues(self, recording_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
             if await RecordingDatabase._lock_followed_edition(tx, recording_id) is not None:
                 await tx.run(RecordingDatabase.DELETE_CUES_QUERY, recording_id=recording_id)
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     async def set_follows(self, recording_id: str, edition_id: str) -> None:
         """Follow an edition. Cues point into the old edition, so a change of edition deletes them."""
@@ -319,8 +303,7 @@ class RecordingDatabase:
             await tx.run(RecordingDatabase.DELETE_CUES_QUERY, recording_id=recording_id)
             await tx.run(RecordingDatabase.SET_FOLLOWS_QUERY, recording_id=recording_id, edition_id=edition_id)
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     async def remove_follows(self, recording_id: str) -> None:
         """Stop following an edition and delete the cues that pointed into it."""
@@ -331,8 +314,7 @@ class RecordingDatabase:
             await tx.run(RecordingDatabase.DELETE_CUES_QUERY, recording_id=recording_id)
             await tx.run(RecordingDatabase.REMOVE_FOLLOWS_QUERY, recording_id=recording_id)
 
-        async with self.session as session:
-            await session.execute_write(write)
+        await self.execute_write(write)
 
     @staticmethod
     async def count_cued_followers_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> int:
@@ -349,16 +331,15 @@ class RecordingDatabase:
         audio_format: AudioFormat,
         size_bytes: int,
     ) -> str:
-        async with self.session as session:
-            return await session.execute_write(
-                RecordingDatabase.add_with_transaction,
-                audio_id,
-                recording,
-                recording_id,
-                audio_key=audio_key,
-                audio_format=audio_format,
-                size_bytes=size_bytes,
-            )
+        return await self.execute_write(
+            RecordingDatabase.add_with_transaction,
+            audio_id,
+            recording,
+            recording_id,
+            audio_key=audio_key,
+            audio_format=audio_format,
+            size_bytes=size_bytes,
+        )
 
     @staticmethod
     async def add_with_transaction(
@@ -414,12 +395,10 @@ class RecordingDatabase:
                 await NomenDatabase.replace_with_transaction(tx, "Recording", recording_id, patch.title.root)
             return await self.get_with_transaction(tx, recording_id)
 
-        async with self.session as session:
-            return await session.execute_write(write)
+        return await self.execute_write(write)
 
     async def delete(self, recording_id: str) -> None:
-        async with self.session as session:
-            await session.execute_write(RecordingDatabase.delete_with_transaction, recording_id)
+        await self.execute_write(RecordingDatabase.delete_with_transaction, recording_id)
 
     @staticmethod
     async def delete_with_transaction(tx: AsyncManagedTransaction, recording_id: str) -> None:
