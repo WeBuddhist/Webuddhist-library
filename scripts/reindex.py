@@ -109,12 +109,8 @@ async def main() -> None:
     parser.parse_args()
     check_environment(settings)
     async with AsyncExitStack() as stack:
-        db = await stack.enter_async_context(
-            Database(settings.neo4j_uri, (settings.neo4j_username, settings.neo4j_password), settings.neo4j_database)
-        )
-        storage = Storage(settings.aws_s3_bucket, settings.aws_region)
-        stack.push_async_callback(storage.close)
-        await storage.connect()
+        db = await stack.enter_async_context(Database.from_settings(settings))
+        storage = await stack.enter_async_context(Storage.open(settings.aws_s3_bucket, settings.aws_region))
         client = create_search_client(
             endpoint=settings.opensearch_endpoint,
             region=settings.aws_region,
@@ -123,16 +119,8 @@ async def main() -> None:
             password=settings.opensearch_password,
         )
         stack.push_async_callback(client.close)
-        logger.info(
-            "Cutover: %s",
-            await rebuild(
-                db,
-                storage,
-                client,
-                settings.opensearch_catalog_index,
-                settings.opensearch_index,
-            ),
-        )
+        result = await rebuild(db, storage, client, settings.opensearch_catalog_index, settings.opensearch_index)
+        logger.info("Cutover: %s", result)
 
 
 if __name__ == "__main__":

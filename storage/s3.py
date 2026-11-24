@@ -1,4 +1,7 @@
-from typing import Any, BinaryIO
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Any, BinaryIO, Self
 
 import aioboto3
 from botocore.exceptions import ClientError
@@ -8,25 +11,16 @@ from exceptions import DataNotFoundError
 PRESIGNED_URL_TTL_SECONDS = 3600
 
 
+@dataclass(eq=False, repr=False)
 class Storage:
-    def __init__(self, bucket_name: str, region: str) -> None:
-        self.bucket_name = bucket_name
-        self.region = region
-        self._session = aioboto3.Session()
-        self._client: Any = None
-        self._client_context: Any = None
+    bucket_name: str
+    _client: Any
 
-    async def connect(self) -> None:
-        """Initialize the S3 client connection."""
-        self._client_context = self._session.client("s3", region_name=self.region)
-        self._client = await self._client_context.__aenter__()
-
-    async def close(self) -> None:
-        """Close the S3 client connection."""
-        if self._client_context is not None:
-            await self._client_context.__aexit__(None, None, None)
-            self._client = None
-            self._client_context = None
+    @classmethod
+    @asynccontextmanager
+    async def open(cls, bucket_name: str, region: str) -> AsyncGenerator[Self]:
+        async with aioboto3.Session().client("s3", region_name=region) as client:
+            yield cls(bucket_name, client)
 
     async def put_immutable(self, key: str, body: bytes | BinaryIO, content_type: str) -> None:
         """Write a fresh object; never replace published bytes. Failures may leave an unused object."""

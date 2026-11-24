@@ -15,32 +15,34 @@ Requires NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD environment variables.
 import argparse
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import settings
 from database import Database
+from database.api_key_database import ApiKeyDatabase
 from identifier import generate_id
+
+
+def _run[T](operation: Callable[[ApiKeyDatabase], Awaitable[T]]) -> T:
+    async def run() -> T:
+        db = Database.from_settings(settings)
+        try:
+            return await operation(db.api_key)
+        finally:
+            await db.close()
+
+    return asyncio.run(run())
 
 
 def create_api_key(name: str, email: str, application_id: str | None = None) -> None:
     """Create a new API key, optionally bound to an application."""
     key_id = generate_id()
 
-    async def _run() -> tuple[str, str]:
-        db = Database(
-            neo4j_uri=settings.neo4j_uri,
-            neo4j_auth=(settings.neo4j_username, settings.neo4j_password),
-            neo4j_database=settings.neo4j_database,
-        )
-        try:
-            return await db.api_key.create(key_id, name, email, application_id)
-        finally:
-            await db.close()
-
     try:
-        created_id, raw_key = asyncio.run(_run())
+        created_id, raw_key = _run(lambda keys: keys.create(key_id, name, email, application_id))
     except ValueError as e:
         print(f"\n❌ {e}\n")
         sys.exit(1)
@@ -49,10 +51,7 @@ def create_api_key(name: str, email: str, application_id: str | None = None) -> 
     print(f"   ID:          {created_id}")
     print(f"   Name:        {name}")
     print(f"   Email:       {email}")
-    if application_id:
-        print(f"   Bound to:    {application_id}")
-    else:
-        print("   Bound to:    (none - master key)")
+    print(f"   Bound to:    {application_id or '(none - master key)'}")
     print(f"   API Key:     {raw_key}")
     print("\n⚠️  IMPORTANT: Save this API key now. It will not be shown again!\n")
 
@@ -60,18 +59,7 @@ def create_api_key(name: str, email: str, application_id: str | None = None) -> 
 def list_api_keys() -> None:
     """List all API keys."""
 
-    async def _run() -> list[dict]:
-        db = Database(
-            neo4j_uri=settings.neo4j_uri,
-            neo4j_auth=(settings.neo4j_username, settings.neo4j_password),
-            neo4j_database=settings.neo4j_database,
-        )
-        try:
-            return await db.api_key.list_all()
-        finally:
-            await db.close()
-
-    keys = asyncio.run(_run())
+    keys = _run(lambda keys: keys.list_all())
 
     if not keys:
         print("\nNo API keys found.\n")
@@ -94,20 +82,7 @@ def list_api_keys() -> None:
 def revoke_api_key(key_id: str) -> None:
     """Revoke an API key."""
 
-    async def _run() -> bool:
-        db = Database(
-            neo4j_uri=settings.neo4j_uri,
-            neo4j_auth=(settings.neo4j_username, settings.neo4j_password),
-            neo4j_database=settings.neo4j_database,
-        )
-        try:
-            return await db.api_key.revoke(key_id)
-        finally:
-            await db.close()
-
-    success = asyncio.run(_run())
-
-    if success:
+    if _run(lambda keys: keys.revoke(key_id)):
         print(f"\n✅ API key '{key_id}' has been revoked.\n")
     else:
         print(f"\n❌ API key '{key_id}' not found.\n")
@@ -117,18 +92,7 @@ def revoke_api_key(key_id: str) -> None:
 def rotate_api_key(key_id: str) -> None:
     """Generate a new value for an API key."""
 
-    async def _run() -> str | None:
-        db = Database(
-            neo4j_uri=settings.neo4j_uri,
-            neo4j_auth=(settings.neo4j_username, settings.neo4j_password),
-            neo4j_database=settings.neo4j_database,
-        )
-        try:
-            return await db.api_key.rotate_key(key_id)
-        finally:
-            await db.close()
-
-    new_key = asyncio.run(_run())
+    new_key = _run(lambda keys: keys.rotate_key(key_id))
 
     if new_key:
         print("\n✅ API key rotated successfully!")

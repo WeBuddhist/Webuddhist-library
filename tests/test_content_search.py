@@ -18,28 +18,27 @@ from search_client import create_search_client
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_non_testing_startup_allows_missing_opensearch_endpoint(monkeypatch) -> None:
-    from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
     import main
-    db = SimpleNamespace(verify_connectivity=AsyncMock(), close=AsyncMock())
-    storage = SimpleNamespace(connect=AsyncMock(), close=AsyncMock())
+    db = AsyncMock()
+    storage = AsyncMock()
     monkeypatch.setattr(settings, "opensearch_endpoint", "")
     monkeypatch.setattr(settings, "neo4j_uri", "bolt://test")
-    monkeypatch.setattr(main, "Database", Mock(return_value=db))
-    monkeypatch.setattr(main, "Storage", Mock(return_value=storage))
+    monkeypatch.setattr(main.Database, "from_settings", Mock(return_value=db))
+    monkeypatch.setattr(main.Storage, "open", Mock(return_value=storage))
     search = Mock(side_effect=AssertionError("Search must stay disabled"))
     monkeypatch.setattr(main, "create_search_client", search)
     monkeypatch.setattr(main, "setup_telemetry", Mock())
     app = create_app(testing=False)
     async with app.router.lifespan_context(app):
-        db.verify_connectivity.assert_awaited_once()
-        storage.connect.assert_awaited_once()
-        assert app.state.db is db and app.state.storage is storage
+        db.__aenter__.assert_awaited_once()
+        storage.__aenter__.assert_awaited_once()
+        assert app.state.db is db.__aenter__.return_value and app.state.storage is storage.__aenter__.return_value
         assert getattr(app.state, "content_search", None) is None
         assert getattr(app.state, "catalog_search", None) is None
     search.assert_not_called()
-    db.close.assert_awaited_once()
-    storage.close.assert_awaited_once()
+    db.__aexit__.assert_awaited_once()
+    storage.__aexit__.assert_awaited_once()
 
 
 def test_search_indexes_use_one_primary_shard() -> None:

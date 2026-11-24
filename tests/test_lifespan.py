@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import aioboto3
 from botocore.exceptions import BotoCoreError
+from neo4j import AsyncGraphDatabase
 from opensearchpy.exceptions import OpenSearchException
 import pytest
 
@@ -18,24 +20,19 @@ async def test_lifespan_cleans_up_every_acquired_resource(monkeypatch, failure):
         if name == failure:
             raise RuntimeError(name)
 
-    class Database:
-        def __init__(self, **kwargs):
-            pass
-
+    class Driver:
         async def verify_connectivity(self):
             step("database")
 
         async def close(self):
             step("close_database")
 
-    class Storage:
-        def __init__(self, **kwargs):
-            pass
-
-        async def connect(self):
+    class S3Context:
+        async def __aenter__(self):
             step("storage")
+            return self
 
-        async def close(self):
+        async def __aexit__(self, *_):
             step("close_storage")
 
     class SearchClient:
@@ -52,8 +49,8 @@ async def test_lifespan_cleans_up_every_acquired_resource(monkeypatch, failure):
         async def setup_index(self):
             step(self.index_name)
 
-    monkeypatch.setattr(main, "Database", Database)
-    monkeypatch.setattr(main, "Storage", Storage)
+    monkeypatch.setattr(AsyncGraphDatabase, "driver", Mock(return_value=Driver()))
+    monkeypatch.setattr(aioboto3.Session, "client", Mock(return_value=S3Context()))
     monkeypatch.setattr(main, "ContentSearchService", Search)
     monkeypatch.setattr(main, "CatalogSearchService", Search)
     factory = Mock(return_value=shared_client)
@@ -93,9 +90,10 @@ async def test_lifespan_cleans_up_every_acquired_resource(monkeypatch, failure):
     else:
         await run()
     assert events[-1:] == ["close_database"]
-    if failure != "database":
+    if failure in {"database", "storage"}:
+        assert "close_storage" not in events
+    else:
         assert events[-2:] == ["close_storage", "close_database"]
-    if failure not in {"database", "storage"}:
         assert events[-3:] == ["close", "close_storage", "close_database"]
         factory.assert_called_once()
 
@@ -107,24 +105,24 @@ async def test_lifespan_cleans_up_every_acquired_resource(monkeypatch, failure):
     ("client", BotoCoreError()),
 ])
 async def test_search_initialization_failure_does_not_block_canonical_startup(monkeypatch, stage, error):
-    db = SimpleNamespace(verify_connectivity=AsyncMock(), close=AsyncMock())
-    storage = SimpleNamespace(connect=AsyncMock(), close=AsyncMock())
+    db = AsyncMock()
+    storage = AsyncMock()
     client = SimpleNamespace(close=AsyncMock())
     search = SimpleNamespace(setup_index=AsyncMock(side_effect=error))
     monkeypatch.setattr(main, "settings", main.settings.model_copy(update={"neo4j_uri": "bolt://test", "opensearch_endpoint": "http://test"}))
-    monkeypatch.setattr(main, "Database", Mock(return_value=db))
-    monkeypatch.setattr(main, "Storage", Mock(return_value=storage))
+    monkeypatch.setattr(main.Database, "from_settings", Mock(return_value=db))
+    monkeypatch.setattr(main.Storage, "open", Mock(return_value=storage))
     monkeypatch.setattr(main, "create_search_client", Mock(return_value=client, side_effect=error if stage == "client" else None))
     monkeypatch.setattr(main, "ContentSearchService", Mock(return_value=search))
     monkeypatch.setattr(main, "CatalogSearchService", Mock(return_value=search))
     monkeypatch.setattr(main, "setup_telemetry", Mock())
     app = main.create_app()
     async with main.lifespan(app):
-        assert app.state.db is db and app.state.storage is storage
+        assert app.state.db is db.__aenter__.return_value and app.state.storage is storage.__aenter__.return_value
         assert not hasattr(app.state, "content_search")
     if stage == "client":
         client.close.assert_not_awaited()
     else:
         client.close.assert_awaited_once()
-    storage.close.assert_awaited_once()
-    db.close.assert_awaited_once()
+    storage.__aexit__.assert_awaited_once()
+    db.__aexit__.assert_awaited_once()

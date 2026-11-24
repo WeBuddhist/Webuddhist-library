@@ -62,7 +62,7 @@ class RootPathMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in {"http", "websocket"}:
-            scope = scope | {"root_path": self.root_path}
+            scope = {**scope, "root_path": self.root_path}
         await self.app(scope, receive, send)
 
 
@@ -101,19 +101,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
         if not app.state.testing and settings.neo4j_uri:
             check_environment(settings)
-            db = Database(
-                neo4j_uri=settings.neo4j_uri,
-                neo4j_auth=(settings.neo4j_username, settings.neo4j_password),
-                neo4j_database=settings.neo4j_database,
+            app.state.db = await stack.enter_async_context(Database.from_settings(settings))
+            app.state.storage = await stack.enter_async_context(
+                Storage.open(settings.aws_s3_bucket, settings.aws_region)
             )
-            stack.push_async_callback(db.close)
-            await db.verify_connectivity()
-            app.state.db = db
-
-            storage = Storage(bucket_name=settings.aws_s3_bucket, region=settings.aws_region)
-            stack.push_async_callback(storage.close)
-            await storage.connect()
-            app.state.storage = storage
 
             if settings.opensearch_endpoint:
                 try:

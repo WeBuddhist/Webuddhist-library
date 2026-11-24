@@ -1,5 +1,5 @@
 from logging import getLogger
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from neo4j import AsyncGraphDatabase, AsyncSession
 
@@ -23,6 +23,9 @@ from .segment_database import SegmentDatabase
 from .span_database import SpanDatabase
 from .tag_database import TagDatabase
 from .text_database import TextDatabase
+
+if TYPE_CHECKING:
+    from config import Settings
 
 logger = getLogger(__name__)
 
@@ -61,6 +64,10 @@ class Database:
         self.tag = TagDatabase(get_session)
         self.span = SpanDatabase()
 
+    @classmethod
+    def from_settings(cls, config: Settings) -> Self:
+        return cls(config.neo4j_uri, (config.neo4j_username, config.neo4j_password), config.neo4j_database)
+
     async def verify_connectivity(self) -> None:
         await self._driver.verify_connectivity()
         logger.info("Async connection to neo4j established.")
@@ -79,10 +86,5 @@ class Database:
             raise
         return self
 
-    async def __aexit__(
-        self,
-        _exc_type: type[BaseException] | None,
-        _exc_val: BaseException | None,
-        _exc_tb: object,
-    ) -> None:
+    async def __aexit__(self, _exc_type: object, _exc_val: object, _exc_tb: object) -> None:
         await self.close()

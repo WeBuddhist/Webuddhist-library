@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import logging
-from contextlib import AsyncExitStack
 
 from config import settings
 from database import Database
@@ -15,10 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def run(*, apply: bool, content: bool = False) -> None:
-    async with AsyncExitStack() as stack:
-        db = await stack.enter_async_context(
-            Database(settings.neo4j_uri, (settings.neo4j_username, settings.neo4j_password), settings.neo4j_database)
-        )
+    async with Database.from_settings(settings) as db:
         driver = db._driver  # noqa: SLF001 - schema DDL needs the migration-owned driver
         if apply:
             await migrate(driver, settings.neo4j_database)
@@ -34,11 +30,9 @@ async def run(*, apply: bool, content: bool = False) -> None:
                 logger.info("%d legacy recording(s) will be converted by --apply: %s", len(pending), pending[:20])
             logger.info("Schema audit passed")
         if content:
-            storage = Storage(settings.aws_s3_bucket, settings.aws_region)
-            stack.push_async_callback(storage.close)
-            await storage.connect()
-            count = await migrate_content(db, storage, apply=apply)
-            logger.info("Verified %d edition content objects", count)
+            async with Storage.open(settings.aws_s3_bucket, settings.aws_region) as storage:
+                count = await migrate_content(db, storage, apply=apply)
+                logger.info("Verified %d edition content objects", count)
 
 
 if __name__ == "__main__":

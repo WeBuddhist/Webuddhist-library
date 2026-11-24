@@ -24,15 +24,14 @@ async def main() -> None:
         logger.error("NEO4J_URI and NEO4J_PASSWORD must be set (via .env or environment)")
         sys.exit(1)
 
-    driver = AsyncGraphDatabase.driver(settings.neo4j_uri, auth=(settings.neo4j_username, settings.neo4j_password))
-    try:
+    async with AsyncGraphDatabase.driver(
+        settings.neo4j_uri, auth=(settings.neo4j_username, settings.neo4j_password)
+    ) as driver:
         await driver.verify_connectivity()
         logger.info("Connected to %s", settings.neo4j_uri)
 
         await install_triggers(driver, settings.neo4j_database)
         logger.info("Neo4j triggers installed successfully.")
-    finally:
-        await driver.close()
 
 
 if __name__ == "__main__":
