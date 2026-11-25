@@ -8,7 +8,7 @@ from .annotation import (
 )
 from .base import LanguageFilter, NonEmptyStr, OpenPechaModel
 from .edition import EditionInput, ExcerptSource
-from .enums import EditionType
+from .enums import EditionType, LicenseType
 
 
 class PaginationParams(OpenPechaModel):
@@ -34,6 +34,7 @@ class TextFacetFilter(OpenPechaModel):
     author_id: str | None = None
     bdrc: str | None = None
     wiki: str | None = None
+    license: list[LicenseType] = Field(default=[], description="Repeat the parameter to match any of several licenses.")
 
     @field_validator("tag_id")
     @classmethod

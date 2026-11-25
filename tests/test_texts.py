@@ -405,6 +405,30 @@ class TestGetAllTextsV2:
         data = _items(response.json())
         assert len(data) == 0
 
+    async def test_get_all_metadata_filter_by_license(self, client, test_database):
+        """License filter matches any of the repeated values and combines with other filters"""
+
+        async def create(title: str, language: str, **fields) -> str:
+            text = TextInput.model_validate(
+                {"title": {language: title}, "language": language, "category_id": "category", **fields}
+            )
+            return await test_database.text.create(text)
+
+        public_id = await create("Public text", "en")
+        cc0_id = await create("CC0 text", "bo", license="cc0")
+        copyrighted_id = await create("Copyrighted text", "en", license="copyrighted")
+
+        async def listed_ids(query: str) -> set[str]:
+            response = await client.get(f"/v2/texts?{query}")
+            assert response.status_code == 200, response.text
+            return {item["id"] for item in _items(response.json())}
+
+        assert await listed_ids("license=copyrighted") == {copyrighted_id}
+        assert await listed_ids("license=public&license=cc0") == {public_id, cc0_id}
+        assert await listed_ids("license=public&license=copyrighted&language=en") == {public_id, copyrighted_id}
+        assert await listed_ids("license=cc0&language=en") == set()
+        assert (await client.get("/v2/texts?license=gpl")).status_code == 422
+
     async def test_get_all_metadata_invalid_limit(self, client, test_database):
         """Test invalid limit parameters"""
 
@@ -497,6 +521,19 @@ class TestGetTextLanguagesV2:
         for language in response.json():
             listed = await client.get(f"/v2/texts?category_id=category&language={language['code']}")
             assert len(_items(listed.json())) == language["text_count"]
+
+    async def test_counts_languages_within_license(self, client, test_database):
+        texts = [("Open", "bo", "public"), ("Closed", "bo", "copyrighted"), ("Closed", "en", "copyrighted")]
+        for title, language, license in texts:
+            text = TextInput.model_validate(
+                {"title": {language: title}, "language": language, "category_id": "category", "license": license}
+            )
+            await test_database.text.create(text)
+
+        response = await client.get("/v2/texts/languages?license=public")
+
+        assert response.status_code == 200
+        assert response.json() == [{"code": "bo", "name": "Tibetan", "text_count": 1}]
 
     async def test_unknown_category_returns_empty_list(self, client, test_database):
         response = await client.get("/v2/texts/languages?category_id=missing")

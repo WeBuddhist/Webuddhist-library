@@ -103,6 +103,7 @@ class TextDatabase(SessionRepository):
           (e)-[:TEXT_OF]->(:Work)-[:HAS_TAG]->(t:Tag) WHERE t.id IN tag_group
       })
       AND ($wiki IS NULL OR e.wiki = $wiki)
+      AND (size($licenses) = 0 OR EXISTS { (e)-[:HAS_LICENSE]->(l:LicenseType) WHERE l.name IN $licenses })
     """
 
     GET_ALL_QUERY: LiteralString = f"""
@@ -314,6 +315,7 @@ class TextDatabase(SessionRepository):
             "tag_groups": filters.tag_groups,
             "bdrc": filters.bdrc,
             "wiki": filters.wiki,
+            "licenses": [license_type.value for license_type in filters.license],
         }
 
     async def create(self, text: TextInput, application: str | None = None) -> str:

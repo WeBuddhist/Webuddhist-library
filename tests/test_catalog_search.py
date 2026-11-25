@@ -4,9 +4,9 @@ import pytest
 
 from models.base import LocalizedString
 from models.contribution import PersonContributionInput
-from models.enums import ContributorRole
+from models.enums import ContributorRole, LicenseType
 from models.person import PersonInput
-from models.text import TextInput
+from models.text import TextInput, TextPatch
 
 
 async def _create_person(
@@ -607,6 +607,26 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
         client, search, title="Filter manuscript", tag_id=[a, b], bdrc="W-match", wiki="Q-match"
     ) == {ids[0]}
     assert await text_search_ids(client, search, title="Filter manuscript", bdrc="W-match", wiki="Q-other") == set()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_catalog_title_search_filters_by_current_license(catalog_client, catalog_search, test_database):
+    db, client, search = test_database, catalog_client, catalog_search
+    public_id, copyrighted_id = [
+        await db.text.create(
+            TextInput(title={"en": f"Licensed manuscript {i}"}, language="en", category_id="category", license=license)
+        )
+        for i, license in enumerate((LicenseType.PUBLIC_DOMAIN_MARK, LicenseType.UNDER_COPYRIGHT))
+    ]
+    await publish_catalog(search, db)
+
+    title = "Licensed manuscript"
+    assert await text_search_ids(client, search, title=title, license="copyrighted") == {copyrighted_id}
+    assert await text_search_ids(client, search, title=title, license=["public", "cc0"]) == {public_id}
+
+    await db.text.update(copyrighted_id, TextPatch(license=LicenseType.CC0))
+    assert await text_search_ids(client, search, title=title, license="copyrighted") == set()
+    assert await text_search_ids(client, search, title=title, license=["public", "cc0"]) == {public_id, copyrighted_id}
 
 
 @pytest.mark.asyncio(loop_scope="session")

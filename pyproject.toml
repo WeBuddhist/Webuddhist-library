@@ -1,6 +1,7 @@
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
+enableExperimentalFeatures = true
 exclude = ["tests", ".venv"]
 include = ["."]
 venvPath = "."

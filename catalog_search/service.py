@@ -75,13 +75,19 @@ class CatalogSearchService:
     ) -> list[TextOutput]:
         if filters.language:
             await db.transactions.execute_read(DatabaseValidator.validated_language_code, filters.language)
+
+        # License is not in the search projection, so it is matched on the hydrated texts.
+        async def hydrate(ids: list[str]) -> list[TextOutput]:
+            texts = await db.text.get_by_ids(ids, application=application)
+            return [text for text in texts if not filters.license or text.license in filters.license]
+
         return await self._search(
             query,
             TEXT_DOCUMENT_TYPE,
             _text_filters(filters),
             offset=offset,
             limit=limit,
-            hydrate=lambda ids: db.text.get_by_ids(ids, application=application),
+            hydrate=hydrate,
         )
 
     async def _search[T: (PersonOutput, TextOutput)](
