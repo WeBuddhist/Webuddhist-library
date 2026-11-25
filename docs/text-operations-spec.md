@@ -107,6 +107,8 @@ Replacing a range with exactly the text it already contains preserves segment ID
 
 For each segmentation or pagination, replacement text belongs to the first fully covered nonempty entity, or the entity containing the replacement's start when none is fully covered. If a replacement starts before the annotated region and ends inside its first entity, that entity starts after the replacement text, preserving the original boundary behavior. All line boundaries use the same monotonic mapping. Neighboring segments therefore meet exactly, including when an edit spans several entities. Existing zero-width markers stay empty at a mapped boundary.
 
+A ranged note stays on the surviving original text when a replacement reaches or crosses one of its edges. A replacement strictly inside the note stays inside it. For example, replacing `efgh` with `XY` in `abcdefghijkl` leaves a note on `cdef` attached to `cd`, a note on `ghij` attached to `ij`, and a note on `cdefghij` attached to `cdXYij`. An excerpt assembled from adjacent slices `cdef` and `ghij` also reads `cdXYij`.
+
 ---
 
 ## Validation Rules

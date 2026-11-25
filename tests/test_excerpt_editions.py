@@ -266,6 +266,28 @@ async def test_source_edits_flow_into_content_spans_and_cues(client, test_databa
     await assert_part("Xwo. ", (10, 15), [(0, 3), (3, 5)])
     assert await _content(client, source) == "Zero. One.Xwo. Three."
 
+    # The slice keeps its bounds, but the replacement fully covers the second cue.
+    assert (await _patch(client, source, {"type": "replace", "start": 13, "end": 15, "text": "!?"})).status_code == 204
+    await assert_part("Xwo!?", (10, 15), [(0, 3)])
+
+
+async def test_replace_across_adjacent_excerpt_slices_clips_only_ranged_notes(client, test_database):
+    source = await _stored(client, await _text(test_database, "Whole"), "abcdefghijkl", [(0, 4), (4, 8), (8, 12)])
+    excerpt = await _excerpt(client, await _text(test_database, "Selection"), source, (2, 6), (6, 10))
+    assert excerpt.status_code == 201, excerpt.text
+    base = f"/v2/editions/{source}"
+    notes = [{"span": _span(2, 6), "text": "left"}, {"span": _span(6, 10), "text": "right"}]
+    assert (await client.post(f"{base}/durchens", json=notes)).status_code == 201
+    assert (await client.post(f"{base}/yigchungs", json=[{"span": _span(2, 6)}])).status_code == 201
+
+    response = await _patch(client, source, {"type": "replace", "start": 4, "end": 8, "text": "XY"})
+    assert response.status_code == 204, response.text
+    assert await _content(client, excerpt.json()["id"]) == "cdXYij"
+    assert [mark["span"] for mark in (await client.get(f"{base}/yigchungs")).json()] == [_span(2, 6)]
+    assert {note["text"]: note["span"] for note in (await client.get(f"{base}/durchens")).json()} == {
+        "left": _span(2, 4), "right": _span(6, 8),
+    }
+
 
 async def test_edit_that_would_remove_a_span_is_rejected(client, test_database):
     _, source, _, edition = await _part(client, test_database)

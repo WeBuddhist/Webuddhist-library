@@ -2086,7 +2086,7 @@ class TestPatchContentWithAnnotations(TestEditionsEndpoints):
         assert span == (0, 13)
 
     async def test_replace_overlaps_note_end_trims_it(self, client, test_database, test_person_data):
-        """Replace overlapping note end should trim it (covers lines 99-100)."""
+        """Replacing the last part of a note leaves it on its surviving prefix."""
         person_id = await self._create_test_person(test_database, test_person_data)
         edition_id, _, note_ids = await self._create_edition_with_notes(
             client, test_database, person_id,
@@ -2101,7 +2101,7 @@ class TestPatchContentWithAnnotations(TestEditionsEndpoints):
         assert response.status_code == 204
 
         span = await self._get_note_span(client, note_ids[0])
-        assert span == (2, 14)
+        assert span == (2, 8)
 
     async def test_multiple_overlapping_notes(self, client, test_database, test_person_data):
         """Multiple overlapping notes should all be adjusted correctly."""
@@ -2134,7 +2134,7 @@ class TestPatchContentWithAnnotations(TestEditionsEndpoints):
         assert span3 == (5, 10)
 
     async def test_insert_before_yigchung_shifts_it(self, client, test_database, test_person_data):
-        """Yigchung marks use the same non-continuous span adjustment as notes."""
+        """Inserting before a yigchung mark shifts both boundaries."""
         person_id = await self._create_test_person(test_database, test_person_data)
         text_id = await self._create_test_text(test_database, person_id)
         edition_id = await self._create_test_edition(client, text_id, "0123456789")

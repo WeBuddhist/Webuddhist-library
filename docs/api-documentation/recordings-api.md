@@ -260,7 +260,7 @@ Deletes all cues of the recording and returns `204 No Content`. The recording an
 
 ### Content edits
 
-Cue spans follow `PATCH /v2/editions/{edition_id}/content` on the followed edition, with the same rules as notes. Only the span moves; the audio times never change.
+Cue spans follow `PATCH /v2/editions/{edition_id}/content` on the followed edition. Each cue keeps its audio start and end times.
 
 - An edit before a cue shifts its span, so it keeps covering the same recited text. An edit after it leaves it unchanged.
 - An insert, delete, or replace strictly inside a span resizes the span to cover the edited text.

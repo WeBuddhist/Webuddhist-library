@@ -25,7 +25,7 @@ def _adjust_continuous_for_insert(start: int, end: int, insert_pos: int, insert_
 
 
 def adjust_annotation_span(
-    start: int, end: int, edit_start: int, edit_end: int, new_len: int
+    start: int, end: int, edit_start: int, edit_end: int, new_len: int, *, clip_replacement_edges: bool = False
 ) -> tuple[int, int] | None:
     """Map an independent annotation, removing it when its text or point is fully overwritten."""
     if start == end:
@@ -37,9 +37,10 @@ def adjust_annotation_span(
         return point, point
     if edit_start <= start and end <= edit_end:
         return None
+    end_side = "left" if clip_replacement_edges or end == edit_start else "right"
     return (
         _map_boundary(start, edit_start, edit_end, new_len, side="right"),
-        _map_boundary(end, edit_start, edit_end, new_len, side="left" if end == edit_start else "right"),
+        _map_boundary(end, edit_start, edit_end, new_len, side=end_side),
     )
 
 
@@ -52,16 +53,15 @@ def _adjust_continuous_entities(
             for lines in entities.values()
             for sid, left, right in lines
         }
-    ordered = sorted(entities.items(), key=lambda item: (item[0][0], item[1][0][1], item[1][-1][2], item[0][1]))
     # Split at the first fully covered entity so it owns the replacement. Otherwise split at the edit start.
     pivots: dict[str, int] = {}
-    for (collection_id, _, _), lines in ordered:
+    for (collection_id, _, _), lines in entities.items():
         left, right = lines[0][1], lines[-1][2]
         if start <= left < right <= end:
-            pivots.setdefault(collection_id, left)
+            pivots[collection_id] = min(left, pivots.get(collection_id, left))
 
     transformed: dict[str, tuple[int, int]] = {}
-    for (collection_id, _, is_page), lines in ordered:
+    for (collection_id, _, is_page), lines in entities.items():
 
         def boundary(position: int, pivot: int = pivots.get(collection_id, start)) -> int:
             return _map_boundary(position, start, end, new_len, side="left" if position <= pivot else "right")
@@ -76,48 +76,28 @@ def _adjust_continuous_entities(
 
 
 class SpanDatabase:
-    FIND_CONTINUOUS_SPANS_QUERY: LiteralString = """
-    CALL {
-        MATCH (m:Edition {id: $edition_id})
-            -[:HAS_SEGMENTATION]->(collection:Segmentation)
-            <-[:SEGMENT_OF]-(entity:Segment)
-            <-[:SPAN_OF]-(span:Span)
-        RETURN collection.id AS collection_id, entity.id AS entity_id, entity:Page AS is_page,
-               elementId(span) AS span_id, span.start AS span_start, span.end AS span_end
+    FIND_SPANS_QUERY: LiteralString = """
+    MATCH (edition:Edition {id: $edition_id})
+    CALL (edition) {
+        MATCH (edition)-[:HAS_SEGMENTATION]->(collection:Segmentation)<-[:SEGMENT_OF]-(entity:Segment)
+        RETURN collection, entity
         UNION ALL
-        MATCH (m:Edition {id: $edition_id})
-            <-[:PAGINATION_OF]-(collection:Pagination)
-            <-[:VOLUME_OF]-(:Volume)
-            <-[:PAGE_OF]-(entity:Page)
-            <-[:SPAN_OF]-(span:Span)
-        RETURN collection.id AS collection_id, entity.id AS entity_id, entity:Page AS is_page,
-               elementId(span) AS span_id, span.start AS span_start, span.end AS span_end
+        MATCH (edition)<-[:PAGINATION_OF]-(collection:Pagination)<-[:VOLUME_OF]-(:Volume)<-[:PAGE_OF]-(entity:Page)
+        RETURN collection, entity
+        UNION ALL
+        MATCH (edition)<-[:NOTE_OF|MARK_OF|BIBLIOGRAPHY_OF|ATTRIBUTE_OF]-(entity)
+        RETURN null AS collection, entity
+        UNION ALL
+        MATCH (edition)<-[:TOC_OF]-(:TableOfContents)<-[:SECTION_OF]-(entity:TableOfContentsSection)
+        RETURN null AS collection, entity
+        UNION ALL
+        MATCH (edition)<-[:FOLLOWS]-(:Recording)<-[:CUE_OF]-(entity:Cue)
+        RETURN null AS collection, entity
     }
-    RETURN collection_id, entity_id, is_page, span_id, span_start, span_end
-    ORDER BY collection_id, span_start, entity_id, span_end, span_id
-    """
-
-    FIND_ANNOTATION_SPANS_QUERY: LiteralString = """
-    CALL {
-        MATCH (m:Edition {id: $edition_id})
-            <-[:NOTE_OF|MARK_OF|BIBLIOGRAPHY_OF|ATTRIBUTE_OF]-(entity)
-            <-[:SPAN_OF]-(span:Span)
-        RETURN elementId(span) AS span_id, span.start AS span_start, span.end AS span_end
-        UNION ALL
-        MATCH (m:Edition {id: $edition_id})
-            <-[:TOC_OF]-(:TableOfContents)
-            <-[:SECTION_OF]-(entity:TableOfContentsSection)
-            <-[:SPAN_OF]-(span:Span)
-        RETURN elementId(span) AS span_id, span.start AS span_start, span.end AS span_end
-        UNION ALL
-        MATCH (m:Edition {id: $edition_id})
-            <-[:FOLLOWS]-(:Recording)
-            <-[:CUE_OF]-(entity:Cue)
-            <-[:SPAN_OF]-(span:Span)
-        RETURN elementId(span) AS span_id, span.start AS span_start, span.end AS span_end
-    }
-    RETURN span_id, span_start, span_end
-    ORDER BY span_start
+    MATCH (span:Span)-[:SPAN_OF]->(entity)
+    RETURN elementId(span) AS span_id, span.start AS start, span.end AS end, entity:Note AS is_note,
+           collection {.id, entity_id: entity.id, is_page: entity:Page} AS line_group
+    ORDER BY start, end, span_id
     """
 
     BATCH_UPDATE_SPANS_QUERY: LiteralString = """
@@ -151,18 +131,6 @@ class SpanDatabase:
     """
 
     @staticmethod
-    async def _flush_batch(
-        tx: AsyncManagedTransaction,
-        updates: list[dict[str, str | int]],
-        deletes: list[str],
-    ) -> None:
-        """Execute batched span updates and deletions."""
-        if updates:
-            await tx.run(SpanDatabase.BATCH_UPDATE_SPANS_QUERY, updates=updates)
-        if deletes:
-            await tx.run(SpanDatabase.BATCH_DELETE_SPANS_QUERY, span_ids=deletes)
-
-    @staticmethod
     async def adjust_with_transaction(
         tx: AsyncManagedTransaction, edition_id: str, start: int, end: int, new_len: int
     ) -> None:
@@ -176,19 +144,23 @@ class SpanDatabase:
             elif new != old:
                 updates.append({"span_id": span_id, "new_start": new[0], "new_end": new[1]})
 
-        result = await tx.run(SpanDatabase.FIND_CONTINUOUS_SPANS_QUERY, edition_id=edition_id)
         entities: dict[tuple[str, str, bool], list[tuple[str, int, int]]] = {}
-        for record in await result.data():
-            key = (record["collection_id"], record["entity_id"], record["is_page"])
-            entities.setdefault(key, []).append((record["span_id"], record["span_start"], record["span_end"]))
+        result = await tx.run(SpanDatabase.FIND_SPANS_QUERY, edition_id=edition_id)
+        async for row in result:
+            sid, left, right = row["span_id"], row["start"], row["end"]
+            if (group := row["line_group"]) is None:
+                new = adjust_annotation_span(left, right, start, end, new_len, clip_replacement_edges=row["is_note"])
+                record_change(sid, (left, right), new)
+            else:
+                key = (group["id"], group["entity_id"], group["is_page"])
+                entities.setdefault(key, []).append((sid, left, right))
+
         adjusted_spans = _adjust_continuous_entities(entities, start, end, new_len)
         for lines in entities.values():
             for sid, left, right in lines:
                 record_change(sid, (left, right), adjusted_spans.get(sid))
 
-        result = await tx.run(SpanDatabase.FIND_ANNOTATION_SPANS_QUERY, edition_id=edition_id)
-        for record in await result.data():
-            old = (record["span_start"], record["span_end"])
-            record_change(record["span_id"], old, adjust_annotation_span(*old, start, end, new_len))
-
-        await SpanDatabase._flush_batch(tx, updates, deletes)
+        if updates:
+            await tx.run(SpanDatabase.BATCH_UPDATE_SPANS_QUERY, updates=updates)
+        if deletes:
+            await tx.run(SpanDatabase.BATCH_DELETE_SPANS_QUERY, span_ids=deletes)

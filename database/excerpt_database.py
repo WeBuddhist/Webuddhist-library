@@ -211,6 +211,10 @@ class ExcerptDatabase:
                 if adjusted != (piece.start, piece.end):
                     updates.append({"index": piece.index, "start": adjusted[0], "end": adjusted[1]})
                 delta += growth
-            for local_start, local_end, inserted in sorted(edits, reverse=True):
+            # Slices are in reading order. Replay from the end to preserve the original local offsets.
+            for local_start, local_end, inserted in reversed(edits):
                 await SpanDatabase.adjust_with_transaction(tx, edition_id, local_start, local_end, inserted)
-            await tx.run(ExcerptDatabase.UPDATE_AFTER_EDIT_QUERY, edition_id=edition_id, delta=delta, updates=updates)
+            if updates:
+                await tx.run(
+                    ExcerptDatabase.UPDATE_AFTER_EDIT_QUERY, edition_id=edition_id, delta=delta, updates=updates
+                )

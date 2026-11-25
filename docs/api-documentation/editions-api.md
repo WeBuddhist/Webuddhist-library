@@ -135,6 +135,8 @@ Validation rules:
 
 Subsequent annotation spans are validated against the patched text, not the original.
 
+For a correction, submit the range the editor actually changed. The submitted range determines which segment keeps its ID and which annotations survive. A ranged durchen note keeps the replacement wording when the edit is strictly inside the note. When the edit replaces the beginning or end of the note, the note covers only the surviving original wording. Replacing all of its text with different wording removes the note.
+
 The server uploads a new immutable content object, then commits its pointer, length, span adjustments, and internal revision in one transaction. Internal edition revisions detect concurrent content or annotation changes; those edits receive `409 Conflict`. Revisions are internal: existing request and response bodies stay unchanged. Bounds violations and edits that would empty the edition or any page receive `422`; the content and annotations remain unchanged.
 
 An edit to an edition is replayed into every excerpt edition of it: their spans, content length and recording cues move with the text. An edit that would remove a span entirely returns `409`. Patching an excerpt edition itself returns `409`; edit its source edition instead.
