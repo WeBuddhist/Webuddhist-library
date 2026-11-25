@@ -1,14 +1,14 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 from aiobotocore.session import AioSession
 from botocore.exceptions import BotoCoreError
 from neo4j import AsyncGraphDatabase
 from opensearchpy.exceptions import OpenSearchException
-import pytest
 
 import main
-from exceptions import InvalidRequestError
+from errors import InvalidRequestError
 
 
 @pytest.mark.parametrize("failure", ["database", "storage", "content", "catalog", "request", "close", None])

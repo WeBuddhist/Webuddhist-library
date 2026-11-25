@@ -10,8 +10,8 @@ from botocore.exceptions import ClientError, FlexibleChecksumError
 from botocore.httpchecksum import Crc32Checksum
 
 from config import Settings
+from errors import DataNotFoundError
 from storage import Storage
-from exceptions import DataNotFoundError
 
 
 def precondition_failed():

@@ -1,16 +1,16 @@
-# ruff: noqa: ANN001, S101
 """Excerpt editions: a text served through spans of another edition, without copying content."""
-
 import json
 
 import pytest
 
+from database import person as person_database
+from database import text
 from database.content_state import read_state
 from identifier import generate_id
-from main import create_app
 from models.base import LocalizedString
 from models.person import PersonInput
 from models.text import TextInput
+from tests.helpers import create_unauthenticated_app
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -19,7 +19,7 @@ SECTIONS = [(0, 5), (5, 10), (10, 16)]
 
 
 async def _text(db, title: str, part_of: str | None = None) -> str:
-    return await db.text.create(TextInput(title={"en": title}, language="en", category_id="category", part_of=part_of))
+    return await text.create(db, TextInput(title={"en": title}, language="en", category_id="category", part_of=part_of))
 
 
 async def _stored(client, text_id: str, content: str, sections: list[tuple[int, int]]) -> str:
@@ -160,8 +160,7 @@ async def test_spans_join_in_listed_order(client, test_database):
     assert await _content(client, edition, span_start=4) == "Three.One. "
     assert await _content(client, edition, span_end=8) == "Three.One. "
     assert _lines(await _segments(client, edition)) == [(0, 6), (6, 11)]
-    async with test_database.get_session() as session:
-        assert (await session.execute_read(read_state, edition)).length == 11
+    assert (await test_database.read(read_state, edition)).length == 11
 
 
 async def test_part_of_a_part_is_stored_as_spans_of_the_source(client, test_database):
@@ -209,7 +208,7 @@ UNPROJECTED_READS = {
 async def test_every_edition_read_is_projected_or_listed_as_not(client, test_database):
     routes = {
         path.split("}", 1)[1]
-        for path, operations in create_app(testing=True).openapi()["paths"].items()
+        for path, operations in create_unauthenticated_app().openapi()["paths"].items()
         if "get" in operations and path.startswith("/v2/editions/{")
     }
     assert routes == PROJECTED_READS | UNPROJECTED_READS.keys()
@@ -233,8 +232,8 @@ async def test_every_edition_read_is_projected_or_listed_as_not(client, test_dat
 
 async def test_source_edits_flow_into_content_spans_and_cues(client, test_database):
     _, source, part, edition = await _part(client, test_database)
-    person = await test_database.person.create(
-        PersonInput(name=LocalizedString({"en": "Singer"}), bdrc=f"P{generate_id()[:8]}")
+    person = await person_database.create(
+        test_database, PersonInput(name=LocalizedString({"en": "Singer"}), bdrc=f"P{generate_id()[:8]}")
     )
     audio = await client.post(
         f"/v2/texts/{part}/audios", json={"contributions": [{"type": "person", "id": person, "role": "singer"}]}
@@ -253,8 +252,7 @@ async def test_source_edits_flow_into_content_spans_and_cues(client, test_databa
         assert await _content(client, edition) == content
         assert (await client.get(f"/v2/editions/{edition}")).json()["excerpt_of"]["spans"] == [_span(*span)]
         assert [(cue["span"]["start"], cue["span"]["end"]) for cue in (await client.get(cues_url)).json()] == cue_spans
-        async with test_database.get_session() as session:
-            assert (await session.execute_read(read_state, edition)).length == len(content)
+        assert (await test_database.read(read_state, edition)).length == len(content)
 
     assert (await _patch(client, source, {"type": "insert", "position": 6, "text": "X"})).status_code == 204
     await assert_part("TXwo. ", (5, 11), [(0, 4), (4, 6)])

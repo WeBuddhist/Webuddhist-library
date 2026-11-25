@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for v2/editions endpoints using real Neo4j test instance.
 
@@ -21,11 +20,14 @@ Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
 - NEO4J_TEST_PASSWORD: Password for test instance
 """
-
 import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
+from database import edition, person
+from database import text as text_database
+from database.annotation import note
 from database.content_state import read_state
 from identifier import generate_id
 from models.annotation import Page, PaginationInput, Span, Volume
@@ -33,8 +35,9 @@ from models.base import LocalizedString
 from models.contribution import PersonContributionInput
 from models.edition import EditionInput, EditionType
 from models.enums import ContributorRole
-from models.text import TextInput
 from models.person import PersonInput
+from models.text import TextInput
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +56,7 @@ class TestEditionsEndpoints:
 
     async def _create_test_person(self, db, person_data: PersonInput) -> str:
         """Helper to create a test person in the database"""
-        return await db.person.create(person_data)
+        return await person.create(db, person_data)
 
     async def _create_test_text(self, db, person_id, title: LocalizedString | None = None):
         """Helper to create a test text"""
@@ -65,7 +68,7 @@ class TestEditionsEndpoints:
             language="bo",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        return await db.text.create(text_data)
+        return await text_database.create(db, text_data)
 
     async def _create_test_edition(self, client, text_id, content="Sample text content", edition_type=EditionType.DIPLOMATIC, bdrc=None):
         """Helper to create a edition via API (uses injected storage)"""
@@ -149,8 +152,7 @@ class TestGetEditionContent(TestEditionsEndpoints):
 
         assert response.status_code == 200
         data = response.json()
-        async with test_database.get_session() as session:
-            state = await session.execute_read(read_state, edition_id)
+        state = await test_database.read(read_state, edition_id)
         assert data["url"] == f"https://mock-s3.example.com/{state.object_key}?signed=1&expires_in=3600"
         expires_at = datetime.fromisoformat(data["expires_at"])
         assert before + timedelta(seconds=3600) <= expires_at <= datetime.now(UTC) + timedelta(seconds=3600)
@@ -207,7 +209,7 @@ class TestGetEditionMetadata(TestEditionsEndpoints):
         pagination = PaginationInput(
             volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=1)])])]
         )
-        await test_database.edition.create(edition_data, edition_id, text_id, content_length=1, pagination=pagination)
+        await edition.create(test_database, edition_data, edition_id, text_id, content_length=1, pagination=pagination)
 
         # Older localizations carry only the base code on the Language node.
         async with test_database.get_session() as session:
@@ -694,7 +696,7 @@ class TestEditionAnnotations(TestEditionsEndpoints):
             source="Test Source",
         )
         edition_id = generate_id()
-        await test_database.edition.create(edition_data, edition_id, text_id, content_length=16)
+        await edition.create(test_database, edition_data, edition_id, text_id, content_length=16)
 
         annotation_data = {
             "volumes": [{
@@ -834,7 +836,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
             translation_of=original_text_id,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.TRANSLATOR)],
         )
-        translation_text_id = await test_database.text.create(translation_data)
+        translation_text_id = await text_database.create(test_database, translation_data)
         translation_edition_id = await self._create_test_edition(client, translation_text_id, "Translated content"
         )
 
@@ -862,7 +864,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
             commentary_of=root_text_id,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        commentary_text_id = await test_database.text.create(commentary_data)
+        commentary_text_id = await text_database.create(test_database, commentary_data)
         commentary_edition_id = await self._create_test_edition(client, commentary_text_id, "Commentary content"
         )
 
@@ -890,7 +892,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
             translation_of=original_text_id,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.TRANSLATOR)],
         )
-        translation_text_id = await test_database.text.create(translation_data)
+        translation_text_id = await text_database.create(test_database, translation_data)
         translation_edition_id = await self._create_test_edition(client, translation_text_id, "Translated content"
         )
 
@@ -918,7 +920,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
             translation_of=original_text_id,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.TRANSLATOR)],
         )
-        translation_text_id = await test_database.text.create(translation_data)
+        translation_text_id = await text_database.create(test_database, translation_data)
         translation_edition_id = await self._create_test_edition(client, translation_text_id, "Translated content"
         )
 
@@ -929,7 +931,7 @@ class TestRelatedEditions(TestEditionsEndpoints):
             commentary_of=original_text_id,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        commentary_text_id = await test_database.text.create(commentary_data)
+        commentary_text_id = await text_database.create(test_database, commentary_data)
         commentary_edition_id = await self._create_test_edition(client, commentary_text_id, "Commentary content"
         )
 
@@ -1846,7 +1848,7 @@ class TestPatchContentWithAnnotations(TestEditionsEndpoints):
         note_inputs = [NoteInput(span=Span(start=n[0], end=n[1]), text=n[2]) for n in notes]
         note_ids = []
         for note_input in note_inputs:
-            note_id = await test_database.annotation.note.add_durchen(edition_id, note_input)
+            note_id = await note.add_durchen(test_database, edition_id, note_input)
             note_ids.append(note_id)
 
         return edition_id, text_id, note_ids
@@ -2194,7 +2196,7 @@ class TestPatchContentWithSegmentationAndAnnotations(TestEditionsEndpoints):
         note_inputs = [NoteInput(span=Span(start=n[0], end=n[1]), text=n[2]) for n in notes]
         note_ids = []
         for note_input in note_inputs:
-            note_id = await test_database.annotation.note.add_durchen(edition_id, note_input)
+            note_id = await note.add_durchen(test_database, edition_id, note_input)
             note_ids.append(note_id)
 
         return edition_id, text_id, note_ids

@@ -10,35 +10,51 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import MISSING
 
-import database.annotation.note_database as note_module
-import database.audio_database as audio_module
-import database.annotation.pagination_database as pagination_module
-import database.annotation.segmentation_database as segmentation_module
 import database.annotation.single_span as single_span_module
-import database.annotation.table_of_contents_database as toc_module
-import database.nomen_database as nomen_module
-import database.person_database as person_module
-import database.text_database as text_module
-from database.annotation.bibliographic_database import BibliographicDatabase
-from database.annotation.mark_database import MarkDatabase
-from database.annotation.note_database import NoteDatabase
-from database.annotation.pagination_database import PaginationDatabase
-from database.annotation.segmentation_database import SegmentationDatabase
-from database.annotation.table_of_contents_database import TableOfContentsDatabase
-from database.api_key_database import ApiKeyDatabase
-from database.application_database import ApplicationDatabase
-from database.category_database import CategoryDatabase
+from database import (
+    api_key,
+    application,
+    contribution,
+    language,
+    nomen,
+)
+from database import (
+    audio as audio_database,
+)
+from database import (
+    category as category_database,
+)
+from database import (
+    edition as edition_database,
+)
+from database import (
+    person as person_database,
+)
+from database import (
+    recording as recording_database,
+)
+from database import (
+    tag as tag_database,
+)
+from database import (
+    text as text_database,
+)
+from database.annotation import (
+    bibliographic,
+    mark,
+    table_of_contents,
+)
+from database.annotation import (
+    note as note_database,
+)
+from database.annotation import (
+    pagination as pagination_database,
+)
+from database.annotation import (
+    segmentation as segmentation_database,
+)
 from database.content_state import ContentState
-from database.database_validator import DatabaseValidator
-from database.edition_database import EditionDatabase
-from database.language_database import LanguageDatabase
-from database.nomen_database import NomenDatabase
-from database.person_database import PersonDatabase
-from database.audio_database import AudioDatabase
-from database.recording_database import RecordingDatabase
-from database.tag_database import TagDatabase
-from database.text_database import TextDatabase
-from exceptions import DataNotFoundError, DataValidationError
+from errors import DataNotFoundError, DataValidationError
 from models.annotation import (
     BibliographicMetadataInput,
     FootnoteInput,
@@ -84,27 +100,19 @@ class FakeTransaction:
         return TrackingResult(self.default_record)
 
 
-class FakeSession:
+class FakeDatabase:
     def __init__(self, tx):
         self.tx = tx
 
-    async def __aenter__(self):
-        return self
+    async def read(self, work, *args, **kwargs):
+        return await work(self.tx, *args, **kwargs)
 
-    async def __aexit__(self, *_args):
-        return None
+    async def write(self, work, *args, **kwargs):
+        return await work(self.tx, *args, **kwargs)
 
-    async def execute_write(self, callback, *args, **kwargs):
-        return await callback(self.tx, *args, **kwargs)
-
-
-class FakeDatabase:
-    def __init__(self, tx):
-        self.session = FakeSession(tx)
-        self.application = SimpleNamespace(exists=AsyncMock(return_value=True))
-
-    def get_session(self):
-        return self.session
+    async def query(self, query, *, write=False, **params):
+        result = await self.tx.run(query, **params)
+        return await result.data()
 
 
 def assert_strict_neo4j_id(result, returned_id, field):
@@ -115,22 +123,17 @@ def assert_strict_neo4j_id(result, returned_id, field):
 @pytest.fixture
 def skip_span_validation(monkeypatch):
     state = ContentState("edition-id", "text-id", "key", 1, 0, is_excerpt=False)
-    for module in (single_span_module, pagination_module, segmentation_module, toc_module):
+    for module in (single_span_module, pagination_database, segmentation_database, table_of_contents):
         monkeypatch.setattr(module, "touch_edition", AsyncMock(return_value=state))
 
 
 async def test_note_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):
     monkeypatch.setattr(single_span_module, "generate_id", lambda: "submitted-note-id")
     create_result = TrackingResult({"id": "neo4j-note-id"})
-    tx = FakeTransaction({NoteDatabase.CREATE_QUERY: create_result})
-
-    returned_id = await NoteDatabase.add_with_transaction(
-        tx,
-        "edition-id",
-        NoteInput(span=Span(start=0, end=1), text="note"),
-        "durchen",
+    tx = FakeTransaction({note_database.CREATE_QUERY: create_result})
+    returned_id = await note_database.add(
+        tx, "edition-id", NoteInput(span=Span(start=0, end=1), text="note"), "durchen"
     )
-
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
@@ -148,14 +151,10 @@ class RecordingTransaction:
 async def test_footnote_create_stores_empty_span_with_note_type(monkeypatch, skip_span_validation, position):
     monkeypatch.setattr(single_span_module, "generate_id", lambda: "submitted-footnote-id")
     tx = RecordingTransaction({"id": "neo4j-footnote-id"})
-
-    returned_id = await NoteDatabase.add_footnote_with_transaction(
-        tx, "edition-id", FootnoteInput(position=position, text="footnote")
-    )
-
+    returned_id = await note_database.add_footnote(tx, "edition-id", FootnoteInput(position=position, text="footnote"))
     assert returned_id == "neo4j-footnote-id"
     [(query, params)] = tx.calls
-    assert query == NoteDatabase.CREATE_QUERY
+    assert query == note_database.CREATE_QUERY
     assert (params["span_start"], params["span_end"]) == (position, position)
     assert params["note_type"] == "footnote"
 
@@ -164,21 +163,19 @@ async def test_footnote_create_rejects_position_beyond_content(monkeypatch):
     state = ContentState("edition-id", "text-id", "key", 5, 0, is_excerpt=False)
     monkeypatch.setattr(single_span_module, "touch_edition", AsyncMock(return_value=state))
     tx = RecordingTransaction()
-
     with pytest.raises(DataValidationError):
-        await NoteDatabase.add_footnote_with_transaction(tx, "edition-id", FootnoteInput(position=6, text="footnote"))
-
+        await note_database.add_footnote(tx, "edition-id", FootnoteInput(position=6, text="footnote"))
     assert tx.calls == []
 
 
 @pytest.mark.parametrize(
     "query",
     [
-        NoteDatabase.GET_BY_ID_QUERY,
-        NoteDatabase.GET_BY_EDITION_ID_QUERY,
-        NoteDatabase.GET_EDITION_ID_QUERY,
-        NoteDatabase.DELETE_QUERY,
-        NoteDatabase.DELETE_ALL_BY_TYPE_QUERY,
+        note_database.GET_BY_ID_QUERY,
+        note_database.GET_BY_EDITION_ID_QUERY,
+        note_database.GET_EDITION_ID_QUERY,
+        note_database.DELETE_QUERY,
+        note_database.DELETE_ALL_BY_TYPE_QUERY,
     ],
 )
 def test_note_queries_filter_by_note_type(query):
@@ -194,9 +191,7 @@ def test_footnote_output_takes_position_from_note_span():
         text="footnote",
         metadata={"name": "Citation"},
     )
-
     footnote = FootnoteOutput.from_note(note)
-
     assert footnote.model_dump() == {
         "id": "note-id",
         "edition_id": "edition-id",
@@ -209,113 +204,80 @@ def test_footnote_output_takes_position_from_note_span():
 
 async def test_delete_note_touches_its_edition_then_deletes(monkeypatch):
     touch = AsyncMock()
-    monkeypatch.setattr(note_module, "touch_edition", touch)
+    monkeypatch.setattr(note_database, "touch_edition", touch)
     tx = RecordingTransaction({"edition_id": "edition-id"})
-
-    await NoteDatabase.delete_with_transaction(tx, "note-id", NoteType.FOOTNOTE)
-
+    await note_database.delete(tx, "note-id", NoteType.FOOTNOTE)
     touch.assert_awaited_once_with(tx, "edition-id")
     params = {"note_id": "note-id", "note_type": "footnote"}
-    assert tx.calls == [(NoteDatabase.GET_EDITION_ID_QUERY, params), (NoteDatabase.DELETE_QUERY, params)]
+    assert tx.calls == [(note_database.GET_EDITION_ID_QUERY, params), (note_database.DELETE_QUERY, params)]
 
 
 async def test_delete_note_of_other_type_touches_nothing(monkeypatch):
     touch = AsyncMock()
-    monkeypatch.setattr(note_module, "touch_edition", touch)
+    monkeypatch.setattr(note_database, "touch_edition", touch)
     tx = RecordingTransaction(None)
-
-    await NoteDatabase.delete_with_transaction(tx, "durchen-id", NoteType.FOOTNOTE)
-
+    await note_database.delete(tx, "durchen-id", NoteType.FOOTNOTE)
     touch.assert_not_awaited()
-    assert tx.calls == [(NoteDatabase.GET_EDITION_ID_QUERY, {"note_id": "durchen-id", "note_type": "footnote"})]
+    assert tx.calls == [(note_database.GET_EDITION_ID_QUERY, {"note_id": "durchen-id", "note_type": "footnote"})]
 
 
 async def test_delete_all_footnotes_touches_edition_and_sends_note_type(monkeypatch):
     touch = AsyncMock()
-    monkeypatch.setattr(note_module, "touch_edition", touch)
+    monkeypatch.setattr(note_database, "touch_edition", touch)
     tx = RecordingTransaction()
-
-    await NoteDatabase(FakeDatabase(tx)).delete_all_footnotes("edition-id")
-
+    await note_database.delete_all_footnotes(FakeDatabase(tx), "edition-id")
     touch.assert_awaited_once_with(tx, "edition-id")
-    assert tx.calls == [(NoteDatabase.DELETE_ALL_BY_TYPE_QUERY, {"edition_id": "edition-id", "note_type": "footnote"})]
+    assert tx.calls == [(note_database.DELETE_ALL_BY_TYPE_QUERY, {"edition_id": "edition-id", "note_type": "footnote"})]
 
 
 async def test_delete_all_footnotes_raises_when_edition_missing(monkeypatch):
-    monkeypatch.setattr(note_module, "touch_edition", AsyncMock(side_effect=DataNotFoundError("missing")))
+    monkeypatch.setattr(note_database, "touch_edition", AsyncMock(side_effect=DataNotFoundError("missing")))
     tx = RecordingTransaction()
-
     with pytest.raises(DataNotFoundError):
-        await NoteDatabase(FakeDatabase(tx)).delete_all_footnotes("missing")
-
+        await note_database.delete_all_footnotes(FakeDatabase(tx), "missing")
     assert tx.calls == []
 
 
 async def test_bibliographic_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):
     monkeypatch.setattr(single_span_module, "generate_id", lambda: "submitted-bibliographic-id")
     create_result = TrackingResult({"id": "neo4j-bibliographic-id"})
-    tx = FakeTransaction({BibliographicDatabase.CREATE_QUERY: create_result})
-
-    returned_id = await BibliographicDatabase.add_with_transaction(
-        tx,
-        "edition-id",
-        BibliographicMetadataInput(
-            span=Span(start=0, end=1),
-            type=BibliographyType.COLOPHON,
-        ),
+    tx = FakeTransaction({bibliographic.CREATE_QUERY: create_result})
+    returned_id = await bibliographic.add(
+        tx, "edition-id", BibliographicMetadataInput(span=Span(start=0, end=1), type=BibliographyType.COLOPHON)
     )
-
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
 async def test_mark_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):
     monkeypatch.setattr(single_span_module, "generate_id", lambda: "submitted-mark-id")
     create_result = TrackingResult({"id": "neo4j-mark-id"})
-    tx = FakeTransaction({MarkDatabase.CREATE_QUERY: create_result})
-
-    returned_id = await MarkDatabase.add_with_transaction(
-        tx,
-        "edition-id",
-        MarkInput(span=Span(start=0, end=1)),
-        MarkType.YIGCHUNG,
-    )
-
+    tx = FakeTransaction({mark.CREATE_QUERY: create_result})
+    returned_id = await mark.add(tx, "edition-id", MarkInput(span=Span(start=0, end=1)), MarkType.YIGCHUNG)
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
 async def test_pagination_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):
-    monkeypatch.setattr(pagination_module, "generate_id", lambda: "submitted-pagination-id")
+    monkeypatch.setattr(pagination_database, "generate_id", lambda: "submitted-pagination-id")
     create_result = TrackingResult({"id": "neo4j-pagination-id"})
-    tx = FakeTransaction({PaginationDatabase.CREATE_QUERY: create_result})
-    pagination = PaginationInput(
-        volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=1)])])]
-    )
-
-    returned_id = await PaginationDatabase.add_with_transaction(tx, "edition-id", pagination)
-
+    tx = FakeTransaction({pagination_database.CREATE_QUERY: create_result})
+    pagination = PaginationInput(volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=1)])])])
+    returned_id = await pagination_database.add(tx, "edition-id", pagination)
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
 async def test_segmentation_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):
-    monkeypatch.setattr(segmentation_module, "generate_id", lambda: "submitted-segmentation-id")
+    monkeypatch.setattr(segmentation_database, "generate_id", lambda: "submitted-segmentation-id")
     create_result = TrackingResult({"id": "neo4j-segmentation-id", "segment_count": 1})
-    tx = FakeTransaction({SegmentationDatabase.CREATE_QUERY: create_result})
-    segmentation = SegmentationInput(
-        segments=[SegmentInput(lines=[Span(start=0, end=1)])]
-    )
-
-    returned_id = await SegmentationDatabase.add_with_transaction(tx, "edition-id", segmentation)
-
+    tx = FakeTransaction({segmentation_database.CREATE_QUERY: create_result})
+    segmentation = SegmentationInput(segments=[SegmentInput(lines=[Span(start=0, end=1)])])
+    returned_id = await segmentation_database.add(tx, "edition-id", segmentation)
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
-async def test_table_of_contents_create_strictly_returns_neo4j_id(
-    monkeypatch,
-    skip_span_validation,
-):
-    monkeypatch.setattr(toc_module, "generate_id", lambda: "submitted-toc-id")
+async def test_table_of_contents_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):
+    monkeypatch.setattr(table_of_contents, "generate_id", lambda: "submitted-toc-id")
     monkeypatch.setattr(
-        TableOfContentsDatabase,
+        table_of_contents,
         "_flatten_sections",
         AsyncMock(return_value=[{"id": "section-id", "parent_id": None}]),
     )
@@ -324,81 +286,54 @@ async def test_table_of_contents_create_strictly_returns_neo4j_id(
     hierarchy_result = TrackingResult({"count": 0})
     tx = FakeTransaction(
         {
-            TableOfContentsDatabase.CREATE_TOC_QUERY: create_result,
-            TableOfContentsDatabase.CREATE_SECTIONS_QUERY: sections_result,
-            TableOfContentsDatabase.CREATE_HIERARCHY_QUERY: hierarchy_result,
+            table_of_contents.CREATE_TOC_QUERY: create_result,
+            table_of_contents.CREATE_SECTIONS_QUERY: sections_result,
+            table_of_contents.CREATE_HIERARCHY_QUERY: hierarchy_result,
         }
     )
-    toc = SimpleNamespace(
-        max_end=1,
-        metadata=None,
-        sections=[SimpleNamespace()],
-    )
-
-    returned_id = await TableOfContentsDatabase.add_with_transaction(tx, "edition-id", toc)
-
+    toc = SimpleNamespace(max_end=1, metadata=None, sections=[SimpleNamespace()])
+    returned_id = await table_of_contents.add(tx, "edition-id", toc)
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
 @pytest.mark.parametrize("returned_ids", [["submitted-nomen-id"], [], ["unexpected-id"]])
 async def test_nomen_create_verifies_persisted_ids(monkeypatch, returned_ids):
-    monkeypatch.setattr(DatabaseValidator, "validate_language_codes_exist", AsyncMock())
-    monkeypatch.setattr(nomen_module, "generate_id", lambda: "submitted-nomen-id")
+    monkeypatch.setattr(language, "validate_language_codes_exist", AsyncMock())
+    monkeypatch.setattr(nomen, "generate_id", lambda: "submitted-nomen-id")
     create_result = SimpleNamespace(value=AsyncMock(return_value=returned_ids))
-    tx = FakeTransaction({NomenDatabase.CREATE_MANY_QUERY: create_result})
-
+    tx = FakeTransaction({nomen.CREATE_MANY_QUERY: create_result})
     if returned_ids == ["submitted-nomen-id"]:
-        assert await NomenDatabase.create_with_transaction(tx, {"en": "Title"}) == "submitted-nomen-id"
+        assert await nomen.create(tx, {"en": "Title"}) == "submitted-nomen-id"
     else:
         with pytest.raises(RuntimeError, match="Incomplete nomen creation"):
-            await NomenDatabase.create_with_transaction(tx, {"en": "Title"})
+            await nomen.create(tx, {"en": "Title"})
 
 
 async def test_person_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(person_module, "generate_id", lambda: "submitted-person-id")
-    monkeypatch.setattr(
-        person_module.NomenDatabase,
-        "create_with_transaction",
-        AsyncMock(return_value="nomen-id"),
-    )
+    monkeypatch.setattr(person_database, "generate_id", lambda: "submitted-person-id")
+    monkeypatch.setattr(nomen, "create", AsyncMock(return_value="nomen-id"))
     create_result = TrackingResult({"person_id": "neo4j-person-id"})
-    database = FakeDatabase(FakeTransaction({PersonDatabase.CREATE_QUERY: create_result}))
-    person = SimpleNamespace(
-        name=SimpleNamespace(root={"en": "Person"}),
-        alt_names=None,
-        bdrc=None,
-        wiki=None,
-    )
-
-    returned_id = await PersonDatabase(database).create(person)
-
+    database = FakeDatabase(FakeTransaction({person_database.CREATE_QUERY: create_result}))
+    person = SimpleNamespace(name=SimpleNamespace(root={"en": "Person"}), alt_names=None, bdrc=None, wiki=None)
+    returned_id = await person_database.create(database, person)
     assert_strict_neo4j_id(create_result, returned_id, "person_id")
 
 
 @pytest.mark.parametrize(
     ("translation_of", "commentary_of", "create_query"),
     [
-        (None, None, TextDatabase.CREATE_STANDALONE_QUERY),
-        ("target-text-id", None, TextDatabase.CREATE_TRANSLATION_QUERY),
-        (None, "target-text-id", TextDatabase.CREATE_COMMENTARY_QUERY),
+        (None, None, text_database.CREATE_STANDALONE_QUERY),
+        ("target-text-id", None, text_database.CREATE_TRANSLATION_QUERY),
+        (None, "target-text-id", text_database.CREATE_COMMENTARY_QUERY),
     ],
 )
-async def test_text_create_strictly_returns_neo4j_id(
-    monkeypatch,
-    translation_of,
-    commentary_of,
-    create_query,
-):
-    monkeypatch.setattr(TextDatabase, "_validate_related_text", AsyncMock())
-    monkeypatch.setattr(DatabaseValidator, "validate_text_creation", AsyncMock())
-    monkeypatch.setattr(DatabaseValidator, "validate_language_code_exists", AsyncMock())
-    monkeypatch.setattr(DatabaseValidator, "validate_category_exists", AsyncMock())
-    monkeypatch.setattr(
-        text_module.NomenDatabase,
-        "create_with_transaction",
-        AsyncMock(return_value="nomen-id"),
-    )
-    monkeypatch.setattr(text_module, "generate_id", lambda: "submitted-work-id")
+async def test_text_create_strictly_returns_neo4j_id(monkeypatch, translation_of, commentary_of, create_query):
+    monkeypatch.setattr(text_database, "_validate_related_text", AsyncMock())
+    monkeypatch.setattr(text_database, "validate_text_creation", AsyncMock())
+    monkeypatch.setattr(language, "validate_language_code_exists", AsyncMock())
+    monkeypatch.setattr(category_database, "validate_category_exists", AsyncMock())
+    monkeypatch.setattr(nomen, "create", AsyncMock(return_value="nomen-id"))
+    monkeypatch.setattr(text_database, "generate_id", lambda: "submitted-work-id")
     create_result = TrackingResult({"text_id": "neo4j-text-id", "work_id": "neo4j-work-id"})
     tx = FakeTransaction({create_query: create_result})
     text = SimpleNamespace(
@@ -416,43 +351,27 @@ async def test_text_create_strictly_returns_neo4j_id(
         contributions=[],
         tag_ids=[],
     )
-
-    returned_id = await TextDatabase.create_with_transaction(tx, text, "submitted-text-id")
-
+    returned_id = await text_database.create_in_transaction(tx, text, "submitted-text-id")
     assert_strict_neo4j_id(create_result, returned_id, "text_id")
 
 
 async def test_edition_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(EditionDatabase, "_validate_create", AsyncMock())
+    monkeypatch.setattr(edition_database, "_validate_create", AsyncMock())
     create_result = TrackingResult({"edition_id": "neo4j-edition-id"})
-    tx = FakeTransaction({EditionDatabase.CREATE_QUERY: create_result})
+    tx = FakeTransaction({edition_database.CREATE_QUERY: create_result})
     edition = SimpleNamespace(
-        incipit_title=None,
-        bdrc=None,
-        wiki=None,
-        type=SimpleNamespace(value="critical"),
-        colophon=None,
-        source=None,
+        incipit_title=None, bdrc=None, wiki=None, type=SimpleNamespace(value="critical"), colophon=None, source=None
     )
-
-    returned_id = await EditionDatabase.create_with_transaction(
-        tx,
-        edition,
-        "text-id",
-        "submitted-edition-id",
-        1,
-    )
-
+    returned_id = await edition_database._create(tx, edition, "text-id", "submitted-edition-id", 1)
     assert_strict_neo4j_id(create_result, returned_id, "edition_id")
 
 
 async def test_recording_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(RecordingDatabase, "validate_target_with_transaction", AsyncMock())
+    monkeypatch.setattr(recording_database, "validate_target", AsyncMock())
     create_result = TrackingResult({"recording_id": "neo4j-recording-id"})
-    tx = FakeTransaction({RecordingDatabase.CREATE_QUERY: create_result})
+    tx = FakeTransaction({recording_database.CREATE_QUERY: create_result})
     recording = SimpleNamespace(title=None, duration_ms=None, edition_id=None)
-
-    returned_id = await RecordingDatabase.add_with_transaction(
+    returned_id = await recording_database.add(
         tx,
         "audio-id",
         recording,
@@ -461,102 +380,58 @@ async def test_recording_create_strictly_returns_neo4j_id(monkeypatch):
         audio_format=AudioFormat.MP3,
         size_bytes=10,
     )
-
     assert_strict_neo4j_id(create_result, returned_id, "recording_id")
 
 
 async def test_audio_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(audio_module, "require_node", AsyncMock())
-    monkeypatch.setattr(DatabaseValidator, "validate_contribution_references", AsyncMock())
+    monkeypatch.setattr(audio_database, "require_node", AsyncMock())
+    monkeypatch.setattr(contribution, "validate_contribution_references", AsyncMock())
     create_result = TrackingResult({"audio_id": "neo4j-audio-id"})
-    tx = FakeTransaction({AudioDatabase.CREATE_QUERY: create_result})
+    tx = FakeTransaction({audio_database.CREATE_QUERY: create_result})
     audio = SimpleNamespace(
-        title=None,
-        language=None,
-        date=None,
-        license=SimpleNamespace(value="public"),
-        contributions=[],
+        title=None, language=None, date=None, license=SimpleNamespace(value="public"), contributions=[]
     )
-
-    returned_id = await AudioDatabase.create_with_transaction(tx, "text-id", audio, "submitted-audio-id")
-
+    returned_id = await audio_database.create(tx, "text-id", audio, "submitted-audio-id")
     assert_strict_neo4j_id(create_result, returned_id, "audio_id")
 
 
 async def test_application_create_strictly_returns_neo4j_id():
     create_result = TrackingResult({"id": "neo4j-application-id"})
-    database = FakeDatabase(
-        FakeTransaction({ApplicationDatabase.CREATE_QUERY: create_result})
-    )
-
-    returned_id = await ApplicationDatabase(database).create(
-        "submitted-application-id",
-        "Application",
-    )
-
+    database = FakeDatabase(FakeTransaction({application.CREATE_QUERY: create_result}))
+    returned_id = await application.create(database, "submitted-application-id", "Application")
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
 async def test_language_create_strictly_returns_neo4j_id():
     create_result = TrackingResult({"code": "neo4j-language-code"})
-    database = FakeDatabase(FakeTransaction({LanguageDatabase.CREATE_QUERY: create_result}))
-
-    returned_id = await LanguageDatabase(database).create(
-        "submitted-language-code",
-        "Language",
-    )
-
+    database = FakeDatabase(FakeTransaction({language.CREATE_QUERY: create_result}))
+    returned_id = await language.create(database, "submitted-language-code", "Language")
     assert_strict_neo4j_id(create_result, returned_id, "code")
 
 
 async def test_api_key_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(ApiKeyDatabase, "_generate_api_key", staticmethod(lambda: "raw-key"))
+    monkeypatch.setattr(api_key, "_generate_api_key", lambda: "raw-key")
     create_result = TrackingResult({"id": "neo4j-key-id"})
-    database = FakeDatabase(FakeTransaction({ApiKeyDatabase.CREATE_QUERY: create_result}))
-
-    returned_id, _raw_key = await ApiKeyDatabase(database).create(
-        "submitted-key-id",
-        "Key",
-        "key@example.com",
-    )
-
+    database = FakeDatabase(FakeTransaction({api_key.CREATE_QUERY: create_result}))
+    returned_id, _raw_key = await api_key.create(database, "submitted-key-id", "Key", "key@example.com")
     assert_strict_neo4j_id(create_result, returned_id, "id")
 
 
 async def test_category_create_keeps_strict_neo4j_id_contract(monkeypatch):
     create_result = TrackingResult({"category_id": "neo4j-category-id"})
-    database = FakeDatabase(FakeTransaction({CategoryDatabase.CREATE_QUERY: create_result}))
-    category_database = CategoryDatabase(database)
-    monkeypatch.setattr(category_database, "_validate_not_exists_tx", AsyncMock())
-    monkeypatch.setattr(
-        "database.category_database.NomenDatabase.create_with_transaction",
-        AsyncMock(return_value="nomen-id"),
-    )
-    category = SimpleNamespace(
-        parent_id=None,
-        title=SimpleNamespace(root={"en": "Category"}),
-        description=None,
-    )
-
-    returned_id = await category_database.create(category, "application-id")
-
+    database = FakeDatabase(FakeTransaction({category_database.CREATE_QUERY: create_result}))
+    monkeypatch.setattr(category_database, "_validate_not_exists", AsyncMock())
+    monkeypatch.setattr(nomen, "create", AsyncMock(return_value="nomen-id"))
+    category = SimpleNamespace(parent_id=None, title=SimpleNamespace(root={"en": "Category"}), description=None)
+    returned_id = await category_database.create(database, category, "application-id")
     assert_strict_neo4j_id(create_result, returned_id, "category_id")
 
 
 async def test_tag_create_keeps_strict_neo4j_id_contract(monkeypatch):
     create_result = TrackingResult({"tag_id": "neo4j-tag-id"})
-    database = FakeDatabase(FakeTransaction({TagDatabase.CREATE_QUERY: create_result}))
-    tag_database = TagDatabase(database)
-    monkeypatch.setattr(tag_database, "_validate_not_exists_tx", AsyncMock())
-    monkeypatch.setattr(
-        "database.tag_database.NomenDatabase.create_with_transaction",
-        AsyncMock(return_value="nomen-id"),
-    )
-    tag = SimpleNamespace(
-        title=SimpleNamespace(root={"en": "Tag"}),
-        description=None,
-    )
-
-    returned_id = await tag_database.create(tag, "application-id")
-
+    database = FakeDatabase(FakeTransaction({tag_database.CREATE_QUERY: create_result}))
+    monkeypatch.setattr(tag_database, "_validate_not_exists", AsyncMock())
+    monkeypatch.setattr(nomen, "create", AsyncMock(return_value="nomen-id"))
+    tag = SimpleNamespace(title=SimpleNamespace(root={"en": "Tag"}), description=None)
+    returned_id = await tag_database.create(database, tag, "application-id")
     assert_strict_neo4j_id(create_result, returned_id, "tag_id")

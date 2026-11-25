@@ -1,8 +1,7 @@
-# pylint: disable=redefined-outer-name
 """Integration tests for direct edition-pair alignment endpoints."""
-
 import pytest
 
+from database import person, text
 from identifier import generate_id
 from models.base import LocalizedString
 from models.contribution import PersonContributionInput
@@ -12,22 +11,24 @@ from models.text import TextInput
 
 
 async def _create_person(db) -> str:
-    return await db.person.create(
+    return await person.create(
+        db,
         PersonInput(
             name=LocalizedString({"en": f"Alignment Person {generate_id()}"}),
             bdrc="P" + generate_id()[:8],
-        )
+        ),
     )
 
 
 async def _create_text(db, person_id: str, title: str) -> str:
-    return await db.text.create(
+    return await text.create(
+        db,
         TextInput(
             category_id="category",
             title=LocalizedString({"en": title}),
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
-        )
+        ),
     )
 
 

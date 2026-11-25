@@ -134,5 +134,5 @@ Deleting a text fails with `409 Conflict` while an audio recites it.
 
 - Routers: `routers/audios.py`; the text-scoped list and create routes live in `routers/texts.py`.
 - Models: `models/audio.py` and `models/contribution.py`.
-- Database: `database/audio_database.py`, with the shared `Contribution` queries in `database/contribution_database.py`.
+- Database: `database/audio.py`, with the shared `Contribution` queries in `database/contribution.py`.
 - Graph: `(:Audio)-[:AUDIO_OF]->(:Work)` and `(:Audio)-[:RECITATION_OF]->(:Text)`. The Work is taken from the recited text when the audio is created, and a trigger keeps the two in agreement. Title, language, license, and contributions use the same relationships as on a text.

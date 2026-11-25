@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for v2 annotation endpoints using real Neo4j test instance.
 
@@ -20,13 +19,18 @@ Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
 - NEO4J_TEST_PASSWORD: Password for test instance
 """
-
 import logging
 
 import pytest
+
+from database import edition, person, text
+from database.annotation import bibliographic
+from database.annotation import mark as mark_database
+from database.annotation import note as note_database
+from database.annotation import pagination as pagination_database
+from database.annotation import segmentation as segmentation_database
 from identifier import generate_id
 from models.annotation import (
-    AnnotationMetadata,
     BibliographicMetadataInput,
     FootnoteInput,
     MarkInput,
@@ -63,7 +67,7 @@ class TestAnnotationsEndpoints:
 
     async def _create_test_person(self, db, person_data: PersonInput) -> str:
         """Helper to create a test person in the database"""
-        return await db.person.create(person_data)
+        return await person.create(db, person_data)
 
     async def _create_test_text(self, db, person_id: str, title: LocalizedString | None = None) -> str:
         """Helper to create a test text"""
@@ -75,7 +79,7 @@ class TestAnnotationsEndpoints:
             language="bo",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        return await db.text.create(text_data)
+        return await text.create(db, text_data)
 
     async def _create_test_edition(
         self,
@@ -103,8 +107,8 @@ class TestAnnotationsEndpoints:
             pagination = PaginationInput(
                 volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=max(len(content), 1))])])]
             )
-        await db.edition.create(
-            edition_data, edition_id, text_id, content_length=max(len(content), 1), pagination=pagination
+        await edition.create(
+            db, edition_data, edition_id, text_id, content_length=max(len(content), 1), pagination=pagination
         )
         return edition_id
 
@@ -124,7 +128,7 @@ class TestGetSegmentation(TestAnnotationsEndpoints):
                 SegmentInput(lines=[Span(start=5, end=10)]),
             ]
         )
-        segmentation_id = await test_database.annotation.segmentation.add(edition_id, segmentation)
+        segmentation_id = await segmentation_database.add(test_database, edition_id, segmentation)
 
         response = await client.get(f"/v2/editions/{edition_id}/segmentation")
 
@@ -161,7 +165,7 @@ class TestGetSegmentation(TestAnnotationsEndpoints):
                 SegmentInput(lines=[Span(start=8, end=16)]),
             ]
         )
-        await test_database.annotation.segmentation.add(edition_id, segmentation)
+        await segmentation_database.add(test_database, edition_id, segmentation)
 
         response = await client.get(f"/v2/editions/{edition_id}/segmentation/segments")
 
@@ -183,7 +187,7 @@ class TestDeleteSegmentation(TestAnnotationsEndpoints):
         segmentation = SegmentationInput(
             segments=[SegmentInput(reference="source-1", lines=[Span(start=0, end=10)])]
         )
-        segmentation_id = await test_database.annotation.segmentation.add(edition_id, segmentation)
+        segmentation_id = await segmentation_database.add(test_database, edition_id, segmentation)
 
         get_response = await client.get(f"/v2/editions/{edition_id}/segmentation")
         assert get_response.status_code == 200
@@ -210,7 +214,7 @@ class TestDeleteSegmentation(TestAnnotationsEndpoints):
         segmentation = SegmentationInput(
             segments=[SegmentInput(lines=[Span(start=0, end=10)])]
         )
-        await test_database.annotation.segmentation.add(edition_id, segmentation)
+        await segmentation_database.add(test_database, edition_id, segmentation)
 
         first_delete = await client.delete(f"/v2/editions/{edition_id}/segmentation")
         assert first_delete.status_code == 204
@@ -235,19 +239,21 @@ class TestDeleteSegmentation(TestAnnotationsEndpoints):
             test_database, target_text_id, "Target text"
         )
 
-        await test_database.annotation.segmentation.add(
+        await segmentation_database.add(
+            test_database,
             source_edition_id,
             SegmentationInput(segments=[SegmentInput(reference="source-1", lines=[Span(start=0, end=11)])]),
         )
-        await test_database.annotation.segmentation.add(
+        await segmentation_database.add(
+            test_database,
             target_edition_id,
             SegmentationInput(segments=[SegmentInput(reference="target-1", lines=[Span(start=0, end=11)])]),
         )
         source_segment = (
-            await test_database.annotation.segmentation.get_segments_by_edition(source_edition_id, offset=0, limit=1)
+            await segmentation_database.get_segments_by_edition(test_database, source_edition_id, offset=0, limit=1)
         )[0]
         target_segment = (
-            await test_database.annotation.segmentation.get_segments_by_edition(target_edition_id, offset=0, limit=1)
+            await segmentation_database.get_segments_by_edition(test_database, target_edition_id, offset=0, limit=1)
         )[0]
 
         response = await client.put(
@@ -287,7 +293,7 @@ class TestGetPagination(TestAnnotationsEndpoints):
                 )
             ]
         )
-        pagination_id = await test_database.annotation.pagination.add(edition_id, pagination)
+        pagination_id = await pagination_database.add(test_database, edition_id, pagination)
 
         response = await client.get(f"/v2/paginations/{pagination_id}")
 
@@ -328,7 +334,7 @@ class TestGetPagination(TestAnnotationsEndpoints):
                 )
             ]
         )
-        pagination_id = await test_database.annotation.pagination.add(edition_id, pagination)
+        pagination_id = await pagination_database.add(test_database, edition_id, pagination)
 
         response = await client.get(f"/v2/paginations/{pagination_id}")
 
@@ -355,7 +361,7 @@ class TestDeletePagination(TestAnnotationsEndpoints):
                 )
             ]
         )
-        pagination_id = await test_database.annotation.pagination.add(edition_id, pagination)
+        pagination_id = await pagination_database.add(test_database, edition_id, pagination)
 
         get_response = await client.get(f"/v2/paginations/{pagination_id}")
         assert get_response.status_code == 200
@@ -390,7 +396,7 @@ class TestGetDurchen(TestAnnotationsEndpoints):
         edition_id = await self._create_test_edition(test_database, text_id, "0123456789")
 
         note = NoteInput(span=Span(start=0, end=5), text="Variant reading note")
-        note_id = await test_database.annotation.note.add_durchen(edition_id, note)
+        note_id = await note_database.add_durchen(test_database, edition_id, note)
 
         response = await client.get(f"/v2/durchens/{note_id}")
 
@@ -427,7 +433,7 @@ class TestDeleteDurchen(TestAnnotationsEndpoints):
         edition_id = await self._create_test_edition(test_database, text_id, "0123456789")
 
         note = NoteInput(span=Span(start=0, end=5), text="Note to delete")
-        note_id = await test_database.annotation.note.add_durchen(edition_id, note)
+        note_id = await note_database.add_durchen(test_database, edition_id, note)
 
         get_response = await client.get(f"/v2/durchens/{note_id}")
         assert get_response.status_code == 200
@@ -732,7 +738,7 @@ class TestGetBibliographic(TestAnnotationsEndpoints):
         edition_id = await self._create_test_edition(test_database, text_id, "0123456789")
 
         item = BibliographicMetadataInput(span=Span(start=0, end=10), type=BibliographyType.COLOPHON)
-        bibliographic_id = await test_database.annotation.bibliographic.add(edition_id, item)
+        bibliographic_id = await bibliographic.add(test_database, edition_id, item)
 
         response = await client.get(f"/v2/bibliographic/{bibliographic_id}")
 
@@ -764,15 +770,15 @@ class TestGetBibliographic(TestAnnotationsEndpoints):
             BibliographicMetadataInput(span=Span(start=8, end=16), type=BibliographyType.INCIPIT),
         ]
         bibliographic_ids = [
-            await test_database.annotation.bibliographic.add(edition_id, items[0]),
-            await test_database.annotation.bibliographic.add(edition_id, items[1])
+            await bibliographic.add(test_database, edition_id, items[0]),
+            await bibliographic.add(test_database, edition_id, items[1]),
         ]
 
         responses = [
             await client.get(f"/v2/bibliographic/{bibliographic_ids[0]}"),
             await client.get(f"/v2/bibliographic/{bibliographic_ids[1]}")
         ]
-        
+
         types = [resp.json()["type"] for resp in responses]
         assert "colophon" in types
         assert "incipit" in types
@@ -795,7 +801,7 @@ class TestDeleteBibliographic(TestAnnotationsEndpoints):
         edition_id = await self._create_test_edition(test_database, text_id, "0123456789")
 
         item = BibliographicMetadataInput(span=Span(start=0, end=10), type=BibliographyType.COLOPHON)
-        bibliographic_id = await test_database.annotation.bibliographic.add(edition_id, item)
+        bibliographic_id = await bibliographic.add(test_database, edition_id, item)
 
         get_response = await client.get(f"/v2/bibliographic/{bibliographic_id}")
         assert get_response.status_code == 200
@@ -926,7 +932,7 @@ class TestAddAnnotationEditionNotFound(TestAnnotationsEndpoints):
 
     async def test_add_bibliographic_edition_not_found(self, test_database):
         """Test that adding bibliographic metadata with non-existent edition raises DataNotFoundError"""
-        from exceptions import DataNotFoundError
+        from errors import DataNotFoundError
 
         async with test_database.get_session() as session:
             await session.run("MERGE (:BibliographyType {name: 'colophon'})")
@@ -934,39 +940,39 @@ class TestAddAnnotationEditionNotFound(TestAnnotationsEndpoints):
         item = BibliographicMetadataInput(span=Span(start=0, end=10), type=BibliographyType.COLOPHON)
 
         with pytest.raises(DataNotFoundError) as exc_info:
-            await test_database.annotation.bibliographic.add("nonexistent_edition_id", item)
+            await bibliographic.add(test_database, "nonexistent_edition_id", item)
 
         assert "Edition with ID 'nonexistent_edition_id' not found" in str(exc_info.value)
 
     async def test_add_segmentation_edition_not_found(self, test_database):
         """Test that adding segmentation with non-existent edition raises DataNotFoundError"""
-        from exceptions import DataNotFoundError
+        from errors import DataNotFoundError
 
         segmentation = SegmentationInput(
             segments=[SegmentInput(lines=[Span(start=0, end=10)])]
         )
 
         with pytest.raises(DataNotFoundError) as exc_info:
-            await test_database.annotation.segmentation.add("nonexistent_edition_id", segmentation)
+            await segmentation_database.add(test_database, "nonexistent_edition_id", segmentation)
 
         assert "Edition with ID 'nonexistent_edition_id' not found" in str(exc_info.value)
 
     async def test_add_pagination_edition_not_found(self, test_database):
         """Test that adding pagination with non-existent edition raises DataNotFoundError"""
-        from exceptions import DataNotFoundError
+        from errors import DataNotFoundError
 
         pagination = PaginationInput(
             volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=10)])])]
         )
 
         with pytest.raises(DataNotFoundError) as exc_info:
-            await test_database.annotation.pagination.add("nonexistent_edition_id", pagination)
+            await pagination_database.add(test_database, "nonexistent_edition_id", pagination)
 
         assert "Edition with ID 'nonexistent_edition_id' not found" in str(exc_info.value)
 
     async def test_add_note_edition_not_found(self, test_database):
         """Test that adding durchen notes with non-existent edition raises DataNotFoundError"""
-        from exceptions import DataNotFoundError
+        from errors import DataNotFoundError
 
         async with test_database.get_session() as session:
             await session.run("MERGE (:NoteType {name: 'durchen'})")
@@ -974,17 +980,17 @@ class TestAddAnnotationEditionNotFound(TestAnnotationsEndpoints):
         note = NoteInput(span=Span(start=0, end=10), text="Test note")
 
         with pytest.raises(DataNotFoundError) as exc_info:
-            await test_database.annotation.note.add_durchen("nonexistent_edition_id", note)
+            await note_database.add_durchen(test_database, "nonexistent_edition_id", note)
 
         assert "Edition with ID 'nonexistent_edition_id' not found" in str(exc_info.value)
 
     async def test_add_yigchung_edition_not_found(self, test_database):
-        from exceptions import DataNotFoundError
+        from errors import DataNotFoundError
 
         mark = MarkInput(span=Span(start=0, end=10))
 
         with pytest.raises(DataNotFoundError) as exc_info:
-            await test_database.annotation.mark.add_yigchung("nonexistent_edition_id", mark)
+            await mark_database.add_yigchung(test_database, "nonexistent_edition_id", mark)
 
         assert "Edition with ID 'nonexistent_edition_id' not found" in str(exc_info.value)
 
@@ -1007,35 +1013,36 @@ class TestDeleteEditionWithAnnotations(TestAnnotationsEndpoints):
         segmentation = SegmentationInput(
             segments=[SegmentInput(reference="source-1", lines=[Span(start=0, end=10)])]
         )
-        await test_database.annotation.segmentation.add(source_edition_id, segmentation)
+        await segmentation_database.add(test_database, source_edition_id, segmentation)
 
         pagination = PaginationInput(
             volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=10)])])]
         )
-        pagination_id = await test_database.annotation.pagination.add(source_edition_id, pagination)
+        pagination_id = await pagination_database.add(test_database, source_edition_id, pagination)
 
         bibliographic_item = BibliographicMetadataInput(span=Span(start=0, end=5), type=BibliographyType.COLOPHON)
-        bibliographic_id = await test_database.annotation.bibliographic.add(source_edition_id, bibliographic_item)
+        bibliographic_id = await bibliographic.add(test_database, source_edition_id, bibliographic_item)
 
         note_item = NoteInput(span=Span(start=5, end=10), text="Test note")
-        note_id = await test_database.annotation.note.add_durchen(source_edition_id, note_item)
+        note_id = await note_database.add_durchen(test_database, source_edition_id, note_item)
 
-        [footnote_id] = await test_database.annotation.note.add_footnotes(
-            source_edition_id, [FootnoteInput(position=20, text="Test footnote")]
+        [footnote_id] = await note_database.add_footnotes(
+            test_database, source_edition_id, [FootnoteInput(position=20, text="Test footnote")]
         )
 
         mark_item = MarkInput(span=Span(start=10, end=15))
-        mark_id = await test_database.annotation.mark.add_yigchung(source_edition_id, mark_item)
+        mark_id = await mark_database.add_yigchung(test_database, source_edition_id, mark_item)
 
-        await test_database.annotation.segmentation.add(
+        await segmentation_database.add(
+            test_database,
             target_edition_id,
             SegmentationInput(segments=[SegmentInput(reference="target-1", lines=[Span(start=0, end=10)])]),
         )
         source_segment = (
-            await test_database.annotation.segmentation.get_segments_by_edition(source_edition_id, offset=0, limit=1)
+            await segmentation_database.get_segments_by_edition(test_database, source_edition_id, offset=0, limit=1)
         )[0]
         target_segment = (
-            await test_database.annotation.segmentation.get_segments_by_edition(target_edition_id, offset=0, limit=1)
+            await segmentation_database.get_segments_by_edition(test_database, target_edition_id, offset=0, limit=1)
         )[0]
         alignment_response = await client.put(
             f"/v2/editions/{source_edition_id}/alignments/{target_edition_id}",
@@ -1058,7 +1065,7 @@ class TestDeleteEditionWithAnnotations(TestAnnotationsEndpoints):
         assert alignment_get_response.status_code == 200
         assert len(alignment_get_response.json()["items"]) == 1
 
-        await test_database.edition.delete(source_edition_id)
+        await edition.delete(test_database, source_edition_id)
 
         assert (await client.get(f"/v2/editions/{source_edition_id}/segmentation")).status_code == 404
         assert (await client.get(f"/v2/paginations/{pagination_id}")).status_code == 404
@@ -1104,7 +1111,7 @@ class TestAnnotationRoundTrip(TestAnnotationsEndpoints):
                 SegmentInput(lines=[Span(start=10, end=23)]),
             ]
         )
-        segmentation_id = await test_database.annotation.segmentation.add(edition_id, segmentation)
+        segmentation_id = await segmentation_database.add(test_database, edition_id, segmentation)
 
         get_response = await client.get(f"/v2/editions/{edition_id}/segmentation")
         assert get_response.status_code == 200
@@ -1139,7 +1146,7 @@ class TestAnnotationRoundTrip(TestAnnotationsEndpoints):
                 )
             ]
         )
-        pagination_id = await test_database.annotation.pagination.add(edition_id, pagination)
+        pagination_id = await pagination_database.add(test_database, edition_id, pagination)
 
         get_response = await client.get(f"/v2/paginations/{pagination_id}")
         assert get_response.status_code == 200
@@ -1194,16 +1201,16 @@ class TestAddPagination(TestAnnotationsEndpoints):
         get_response = await client.get(f"/v2/paginations/{pagination_id}")
         assert get_response.status_code == 200
         data = get_response.json()
-        
+
         assert "volumes" in data
         assert len(data["volumes"]) == 2
-        
+
         # Verify first volume
         assert data["volumes"][0]["index"] == 1
         assert len(data["volumes"][0]["pages"]) == 2
         assert data["volumes"][0]["pages"][0]["reference"] == "1a"
         assert data["volumes"][0]["pages"][1]["reference"] == "1b"
-        
+
         # Verify second volume
         assert data["volumes"][1]["index"] == 2
         assert len(data["volumes"][1]["pages"]) == 2
@@ -1288,7 +1295,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
 
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 201
-        stored = await test_database.annotation.pagination.get_all(edition_id)
+        stored = await pagination_database.get_all(test_database, edition_id)
         assert stored is not None
         assert [(volume.index, [(page.reference, [(line.start, line.end) for line in page.lines]) for page in volume.pages]) for volume in stored.volumes] == [(1, [("1a", [(0, 8)])]), (2, [("2a", [(8, 16)])])]
 
@@ -1315,7 +1322,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
 
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 422, response.json()
-        assert await test_database.annotation.pagination.get_all(edition_id) is None
+        assert await pagination_database.get_all(test_database, edition_id) is None
 
         response = await client.post(
             f"/v2/texts/{text_id}/editions",
@@ -1353,7 +1360,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 422
         errors = response.json()["errors"]
-        
+
         # Should have validation error about missing index or invalid sequence
         assert any("index" in str(error).lower() or "sequence" in str(error).lower() for error in errors)
 
@@ -1385,7 +1392,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 422
         errors = response.json()["errors"]
-        
+
         # Should have validation error about duplicate indexes
         assert any("unique" in str(error).lower() or "duplicate" in str(error).lower() for error in errors)
 
@@ -1475,6 +1482,6 @@ class TestAddPagination(TestAnnotationsEndpoints):
         get_response = await client.get(f"/v2/paginations/{pagination_id}")
         assert get_response.status_code == 200
         data = get_response.json()
-        
+
         assert len(data["volumes"]) == 1
         assert data["volumes"][0]["index"] == None

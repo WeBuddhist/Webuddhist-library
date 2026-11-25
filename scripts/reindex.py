@@ -6,12 +6,14 @@ import logging
 from typing import TYPE_CHECKING, LiteralString
 from uuid import uuid4
 
-from catalog_search import CatalogSearchService, catalog_index_body
 from config import check_environment, settings
-from content_search import ContentSearchService, content_index_body
 from database import Database
 from database.repository import iter_id_batches
-from search_client import create_search_client
+from search.catalog import CatalogSearchService
+from search.catalog_mapping import catalog_index_body
+from search.client import create_search_client
+from search.content import ContentSearchService
+from search.content_mapping import content_index_body
 from storage import Storage
 
 if TYPE_CHECKING:

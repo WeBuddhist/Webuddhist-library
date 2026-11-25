@@ -580,5 +580,5 @@ curl -X POST "https://dev.library.webuddhist.com/api/v2/editions/ED123/table-of-
 - Direct-by-ID routes live in `routers/annotations.py`.
 - Models live in `models/annotation.py`.
 - Content changes through `PATCH /v2/editions/{edition_id}/content` adjust affected spans automatically.
-- Neo4j deployment for Yigchung support must apply `database/neo4j_constraints.cypher` and reinstall triggers. Creation automatically merges the `yigchung` mark type.
+- Neo4j deployment for Yigchung support must apply the constraints declared in `database/neo4j_schema.yaml` (`python -m scripts.install_neo4j_schema`) and reinstall triggers. Creation automatically merges the `yigchung` mark type.
 - A footnote is stored as an empty `Span` (`start == end == position`) on a `Note` node with `HAS_TYPE -> NoteType {name: 'footnote'}`, so content edits move it like any other annotation. Text inserted exactly at a footnote's position lands before the marker, and the footnote is removed only when an edit deletes or replaces text on both sides of it, so footnotes at either end of the content always survive. Creation merges the `footnote` note type, so no data migration is needed.

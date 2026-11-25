@@ -1,13 +1,17 @@
 """Documented graph behaviors with explicit membership and preservation checks."""
-
 import pytest
 
+from database import alignment, application
+from database import category as category_database
+from database import edition as edition_database
+from database import text as text_database
 from identifier import generate_id
 from models.alignment import EditionAlignmentInput
 from models.annotation import SegmentationInput
 from models.category import CategoryInput
 from models.edition import EditionInput
 from models.text import TextInput
+from tests.helpers import find_by_span, get_all_segments_by_edition, get_related_by_spans
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 HEADERS = {"X-Application": "test_application"}
@@ -19,7 +23,8 @@ async def test_delete_unused_category_tree_cleans_localizations_only(client, tes
     parent = None
     deleted = []
     for level in range(depth):
-        parent = await db.category.create(
+        parent = await category_database.create(
+            db,
             CategoryInput(
                 title={"en": f"Deleted title {level}"},
                 description={"en": f"Deleted description {level}"},
@@ -28,10 +33,10 @@ async def test_delete_unused_category_tree_cleans_localizations_only(client, tes
             "test_application",
         )
         deleted.append(parent)
-    sibling = await db.category.create(CategoryInput(title={"en": "Preserved sibling"}), "test_application")
-    await db.application.create("foreign", "Foreign")
-    foreign = await db.category.create(CategoryInput(title={"en": "Foreign category"}), "foreign")
-    text = await db.text.create(TextInput(title={"en": "Unrelated work"}, language="en", category_id="category"))
+    sibling = await category_database.create(db, CategoryInput(title={"en": "Preserved sibling"}), "test_application")
+    await application.create(db, "foreign", "Foreign")
+    foreign = await category_database.create(db, CategoryInput(title={"en": "Foreign category"}), "foreign")
+    text = await text_database.create(db, TextInput(title={"en": "Unrelated work"}, language="en", category_id="category"))
     async with db.get_session() as session:
         owned = await (
             await session.run(
@@ -44,9 +49,9 @@ async def test_delete_unused_category_tree_cleans_localizations_only(client, tes
     assert response.status_code == 204, response.text
     for category in deleted:
         assert (await client.get(f"/v2/categories/{category}", headers=HEADERS)).status_code == 404
-    assert await db.category.get_by_id(sibling, "test_application") is not None
-    assert await db.category.get_by_id(foreign, "foreign") is not None
-    assert (await db.text.get(text)).category_id == "category"
+    assert await category_database.get(db, sibling, "test_application") is not None
+    assert await category_database.get(db, foreign, "foreign") is not None
+    assert (await text_database.get(db, text)).category_id == "category"
     async with db.get_session() as session:
         assert (
             await (
@@ -56,11 +61,12 @@ async def test_delete_unused_category_tree_cleans_localizations_only(client, tes
 
 
 async def graph_edition(db, index, lines=None, language="en"):
-    text = await db.text.create(
-        TextInput(title={language: f"Traversal {index}"}, language=language, category_id="category")
+    text = await text_database.create(
+        db, TextInput(title={language: f"Traversal {index}"}, language=language, category_id="category")
     )
     edition = generate_id()
-    await db.edition.create(
+    await edition_database.create(
+        db,
         EditionInput(type="critical"),
         edition,
         text,
@@ -72,11 +78,12 @@ async def graph_edition(db, index, lines=None, language="en"):
             ]
         ),
     )
-    return edition, await db.annotation.segmentation.get_all_segments_by_edition(edition)
+    return edition, await get_all_segments_by_edition(db, edition)
 
 
 async def align(db, source, target, source_ref="0", target_ref="0"):
-    await db.alignment.replace(
+    await alignment.replace(
+        db,
         source,
         target,
         EditionAlignmentInput(
@@ -133,9 +140,10 @@ async def test_zero_width_lookup_and_alignment_projection(test_database):
         (5, 10, {2, 3}),
         (0, 10, {0, 1, 2, 3}),
     ]:
-        assert set(await db.segment.find_by_span(edition, start, end)) == {ids[i] for i in expected}, (start, end)
+        assert set(await find_by_span(db, edition, start, end)) == {ids[i] for i in expected}, (start, end)
     target, targets = await graph_edition(db, "target", [(0, 0), (0, 10)])
-    await db.alignment.replace(
+    await alignment.replace(
+        db,
         edition,
         target,
         EditionAlignmentInput(
@@ -145,12 +153,12 @@ async def test_zero_width_lookup_and_alignment_projection(test_database):
             ]
         ),
     )
-    pairs = await db.alignment.get(edition, target, offset=0, limit=20)
+    pairs = await alignment.get(db, edition, target, offset=0, limit=20)
     assert len(pairs) == 2
     marker_pair = next(pair for pair in pairs if pair.source_segment.id == ids[2])
     assert marker_pair.target_segment.id == targets[0].id
     assert marker_pair.target_segment.lines[0].start == marker_pair.target_segment.lines[0].end == 0
-    related = await db.segment.get_related(edition, [(5, 5)])
+    related = await get_related_by_spans(db, edition, [(5, 5)])
     assert [segment.id for segment in related] == [targets[0].id]
-    related = await db.segment.get_related(edition, [(0, 5), (5, 5)])
+    related = await get_related_by_spans(db, edition, [(0, 5), (5, 5)])
     assert [segment.id for segment in related] == [segment.id for segment in targets]

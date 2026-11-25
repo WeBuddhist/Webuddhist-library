@@ -3,15 +3,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from opensearchpy.serializer import JSONSerializer
 from opensearchpy.exceptions import RequestError
+from opensearchpy.serializer import JSONSerializer
 
-import search_client
-from catalog_search import CatalogSearchService
+import search.client as search_client
 from config import Settings
-from content_search import ContentSearchService
-from exceptions import InvalidRequestError
-from search_client import SearchIndex
+from errors import InvalidRequestError
+from search.catalog import CatalogSearchService
+from search.client import SearchIndex
+from search.content import ContentSearchService
 
 
 def transport_for_bulk(responder=None):
@@ -110,10 +110,17 @@ async def test_bulk_exhausts_bounded_retries(monkeypatch):
 async def test_scroll_context_is_released_for_every_exit(ending):
     import asyncio
     from contextlib import aclosing
+
     from opensearchpy.exceptions import OpenSearchException
 
     client = SimpleNamespace(
-        search=AsyncMock(return_value={"_scroll_id": "first", "hits": {"hits": [{"_id": "a"}]}}),
+        search=AsyncMock(
+            return_value={
+                "_scroll_id": "first",
+                "_shards": {"successful": 1, "skipped": 0, "total": 1},
+                "hits": {"hits": [{"_id": "a"}]},
+            }
+        ),
         scroll=AsyncMock(return_value={"_scroll_id": "second", "hits": {"hits": []}}),
         clear_scroll=AsyncMock(),
     )
@@ -123,7 +130,7 @@ async def test_scroll_context_is_released_for_every_exit(ending):
         client.scroll.side_effect = asyncio.CancelledError()
 
     async def consume():
-        async with aclosing(SearchIndex(client, "index").pages({"query": {"match_all": {}}})) as pages:
+        async with aclosing(SearchIndex(client, "index").pages({"size": 1, "query": {"match_all": {}}})) as pages:
             assert await anext(pages) == [{"_id": "a"}]
             if ending == "early":
                 return
@@ -135,23 +142,30 @@ async def test_scroll_context_is_released_for_every_exit(ending):
             await consume()
     else:
         await consume()
-    client.clear_scroll.assert_awaited_once_with(body={"scroll_id": ["second" if ending == "exhausted" else "first"]})
+    client.clear_scroll.assert_awaited_once_with(
+        body={"scroll_id": ["second" if ending == "exhausted" else "first"]}, ignore=(404,)
+    )
     if ending == "early":
         client.scroll.assert_not_awaited()
 
 
-async def test_scroll_cleanup_failure_preserves_original_error(caplog):
+async def test_scroll_cleanup_failure_surfaces_from_async_scan():
     from opensearchpy.exceptions import OpenSearchException
 
     client = SimpleNamespace(
-        search=AsyncMock(return_value={"_scroll_id": "one", "hits": {"hits": [{}]}}),
+        search=AsyncMock(
+            return_value={
+                "_scroll_id": "one",
+                "_shards": {"successful": 1, "skipped": 0, "total": 1},
+                "hits": {"hits": [{}]},
+            }
+        ),
         scroll=AsyncMock(side_effect=ValueError("original")),
         clear_scroll=AsyncMock(side_effect=OpenSearchException("cleanup")),
     )
-    with pytest.raises(ValueError, match="original"):
-        async for _ in SearchIndex(client, "index").pages({}):
+    with pytest.raises(OpenSearchException, match="cleanup"):
+        async for _ in SearchIndex(client, "index").pages({"size": 1}):
             pass
-    assert "Unable to clear search scroll" in caplog.text
 
 
 @pytest.mark.parametrize("mapping", [{}, {"projection_version": 1}])
@@ -275,7 +289,6 @@ async def test_search_auth_configuration(monkeypatch, mode):
     "endpoint,mode,match",
     [
         ("", "none", "ENDPOINT is required"),
-        ("http://test", "unsupported", "Unsupported"),
         ("http://test", "aws", "AWS credentials"),
     ],
 )
@@ -286,3 +299,10 @@ def test_search_auth_configuration_errors(monkeypatch, endpoint, mode, match):
     config = Settings(opensearch_endpoint=endpoint, aws_region="test", opensearch_auth_mode=mode)
     with pytest.raises(InvalidRequestError, match=match):
         search_client.create_search_client(config)
+
+
+def test_unsupported_search_auth_mode_is_rejected_at_startup():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="opensearch_auth_mode"):
+        Settings(opensearch_auth_mode="unsupported")

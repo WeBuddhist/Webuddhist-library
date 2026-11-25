@@ -455,5 +455,5 @@ curl -X DELETE "https://dev.library.webuddhist.com/api/v2/persons/P12345678" \
 - Implemented in `routers/persons.py`.
 - Models live in `models/person.py`.
 - List filters are grouped in `PersonsQueryParams`.
-- Persistence and uniqueness checks live behind `db.person`.
+- Persistence and uniqueness checks live in `database.person` (`from database import person as person_database`).
 ---

@@ -5,8 +5,8 @@ import re
 import httpx
 import pytest
 
-from main import create_app
 from config import settings
+from main import create_app
 
 # From the OpenAPI schema: FastAPI keeps included routers as one entry each in app.routes,
 # so filtering app.routes for APIRoute finds none of the /v2 routes.
@@ -21,7 +21,7 @@ assert ROUTES, "no /v2 routes found; the check below would pass without testing 
 
 @pytest.mark.parametrize("method,path", ROUTES)
 async def test_protected_route_rejects_missing_key(monkeypatch, method, path):
-    app = create_app(testing=False)
+    app = create_app()
     # Dev is public too, so it checks keys like testing and prod.
     monkeypatch.setattr(settings, "environment", "dev")
     # These sentinels also catch accidental entry into a handler before authentication.
@@ -35,7 +35,7 @@ async def test_protected_route_rejects_missing_key(monkeypatch, method, path):
 
 
 async def test_health_schema_and_documentation_are_public(monkeypatch):
-    app = create_app(testing=False)
+    app = create_app()
     monkeypatch.setattr(settings, "environment", "test")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.get("/__/health")).json()["status"] == "healthy"

@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for v2/persons endpoints using real Neo4j test instance.
 
@@ -11,10 +10,11 @@ Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
 - NEO4J_TEST_PASSWORD: Password for test instance
 """
-
 import logging
 
 import pytest
+
+from database import person as person_database
 from models.person import PersonInput
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class TestGetAllPersonsV2:
         """Test getting all persons when database has data"""
         # Create test person directly via DB
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.get("/v2/persons/")
 
@@ -82,7 +82,7 @@ class TestGetAllPersonsV2:
                 "bdrc": f"P{i+1:06d}",
             }
             person = PersonInput.model_validate(person_data)
-            person_id = await test_database.person.create(person)
+            person_id = await person_database.create(test_database, person)
             person_ids.append(person_id)
 
         response = await client.get("/v2/persons/")
@@ -108,7 +108,7 @@ class TestGetAllPersonsV2:
             ],
         }
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.get("/v2/persons/")
 
@@ -129,7 +129,7 @@ class TestGetAllPersonsV2:
         for i in range(25):
             person_data = {"name": {"en": f"Person {i+1}"}}
             person = PersonInput.model_validate(person_data)
-            await test_database.person.create(person)
+            await person_database.create(test_database, person)
 
         # Request without pagination params (should use defaults)
         response = await client.get("/v2/persons/")
@@ -149,7 +149,7 @@ class TestGetAllPersonsV2:
         for i in range(15):
             person_data = {"name": {"en": f"Person {i+1}"}}
             person = PersonInput.model_validate(person_data)
-            await test_database.person.create(person)
+            await person_database.create(test_database, person)
 
         # Request with limit=5
         response = await client.get("/v2/persons/?limit=5")
@@ -168,7 +168,7 @@ class TestGetAllPersonsV2:
         for i in range(10):
             person_data = {"name": {"en": f"Person {i+1:02d}"}}
             person = PersonInput.model_validate(person_data)
-            person_id = await test_database.person.create(person)
+            person_id = await person_database.create(test_database, person)
             created_ids.append(person_id)
 
         # Request first page (offset=0, limit=5)
@@ -194,7 +194,7 @@ class TestGetAllPersonsV2:
         for i in range(5):
             person_data = {"name": {"en": f"Person {i+1}"}}
             person = PersonInput.model_validate(person_data)
-            await test_database.person.create(person)
+            await person_database.create(test_database, person)
 
         # Test limit=1
         response = await client.get("/v2/persons/?limit=1")
@@ -238,7 +238,7 @@ class TestGetAllPersonsV2:
         for i in range(5):
             person_data = {"name": {"en": f"Person {i+1}"}}
             person = PersonInput.model_validate(person_data)
-            await test_database.person.create(person)
+            await person_database.create(test_database, person)
 
         # Request with offset=100 (beyond all results)
         response = await client.get("/v2/persons/?offset=100")
@@ -253,7 +253,7 @@ class TestGetAllPersonsV2:
         for i in range(30):
             person_data = {"name": {"en": f"Person {i+1:02d}"}}
             person = PersonInput.model_validate(person_data)
-            person_id = await test_database.person.create(person)
+            person_id = await person_database.create(test_database, person)
             all_created_ids.append(person_id)
 
         # Fetch all persons using pagination (3 pages of 10)
@@ -299,7 +299,7 @@ class TestGetAllPersonsV2:
 
     async def test_get_all_persons_filter_by_name_requires_catalog_search(self, client, test_database):
         """Name search is backed by catalog OpenSearch, not Neo4j substring filtering."""
-        await test_database.person.create(PersonInput.model_validate({"name": {"en": "John Smith"}}))
+        await person_database.create(test_database, PersonInput.model_validate({"name": {"en": "John Smith"}}))
 
         response = await client.get("/v2/persons/?name=John")
 
@@ -316,8 +316,8 @@ class TestGetAllPersonsV2:
         """Test filtering persons by BDRC ID"""
         person1 = PersonInput.model_validate({"name": {"en": "Person 1"}, "bdrc": "P111111"})
         person2 = PersonInput.model_validate({"name": {"en": "Person 2"}, "bdrc": "P222222"})
-        person1_id = await test_database.person.create(person1)
-        await test_database.person.create(person2)
+        person1_id = await person_database.create(test_database, person1)
+        await person_database.create(test_database, person2)
 
         response = await client.get("/v2/persons/?bdrc=P111111")
 
@@ -331,8 +331,8 @@ class TestGetAllPersonsV2:
         """Test filtering persons by Wiki ID"""
         person1 = PersonInput.model_validate({"name": {"en": "Person 1"}, "wiki": "Q111111"})
         person2 = PersonInput.model_validate({"name": {"en": "Person 2"}, "wiki": "Q222222"})
-        person1_id = await test_database.person.create(person1)
-        await test_database.person.create(person2)
+        person1_id = await person_database.create(test_database, person1)
+        await person_database.create(test_database, person2)
 
         response = await client.get("/v2/persons/?wiki=Q111111")
 
@@ -354,8 +354,8 @@ class TestGetAllPersonsV2:
             "bdrc": "P444444",
             "wiki": "Q444444",
         })
-        person1_id = await test_database.person.create(person1)
-        await test_database.person.create(person2)
+        person1_id = await person_database.create(test_database, person1)
+        await person_database.create(test_database, person2)
 
         response = await client.get("/v2/persons/?bdrc=P333333&wiki=Q333333")
 
@@ -373,7 +373,7 @@ class TestGetSinglePersonV2:
         """Test successfully retrieving a single person"""
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.get(f"/v2/persons/{person_id}")
 
@@ -384,7 +384,7 @@ class TestGetSinglePersonV2:
         assert data["name"]["bo"] == "རྩོམ་པ་པོ།"
         assert data["bdrc"] == "P123456"
         assert len(data["alt_names"]) == 1
-    
+
     async def test_get_single_person_not_found_returns_error_message(
         self, client, test_database
     ):
@@ -404,7 +404,7 @@ class TestGetSinglePersonV2:
         """Test retrieving person with minimal data (only required fields)"""
         # Create minimal person
         person = PersonInput.model_validate(test_person_data_minimal)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.get(f"/v2/persons/{person_id}")
 
@@ -422,7 +422,7 @@ class TestGetSinglePersonV2:
             "wiki": "Q123456",
         }
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.get(f"/v2/persons/{person_id}")
 
@@ -439,7 +439,7 @@ class TestGetSinglePersonV2:
             "wiki": "Q654321",
         }
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.get(f"/v2/persons/{person_id}")
 
@@ -513,7 +513,7 @@ class TestPostPersonV2:
         assert response.status_code == 422
         data = response.json()
         assert "detail" in data
-    
+
     async def test_create_person_name_null_is_invalid(self, client, test_database):
         """Explicit null for name should be rejected as invalid."""
         person_data = {"name": None}
@@ -1041,7 +1041,7 @@ class TestPatchPersonV2:
         """Test updating only the bdrc field"""
         person_data = {"name": {"en": "Original Person"}, "bdrc": "P111111"}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"bdrc": "P222222"}
         response = await client.patch(
@@ -1065,7 +1065,7 @@ class TestPatchPersonV2:
         """Test updating only the wiki field"""
         person_data = {"name": {"en": "Wiki Person"}, "wiki": "Q111111"}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"wiki": "Q222222"}
         response = await client.patch(
@@ -1089,7 +1089,7 @@ class TestPatchPersonV2:
         """Test updating only the name field"""
         person_data = {"name": {"en": "Original Name", "bo": "བོད་མིང་།"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"name": {"en": "Updated Name", "bo": "གསར་བསྒྱུར་མིང་།"}}
         response = await client.patch(
@@ -1116,7 +1116,7 @@ class TestPatchPersonV2:
             "alt_names": [{"en": "Old Alt Name"}],
         }
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"alt_names": [{"en": "New Alt Name 1"}, {"en": "New Alt Name 2"}]}
         response = await client.patch(
@@ -1150,7 +1150,7 @@ class TestPatchPersonV2:
             "wiki": "Q333333",
         }
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {
             "name": {"en": "Updated"},
@@ -1191,7 +1191,7 @@ class TestPatchPersonV2:
         """Test that empty payload is rejected"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.patch(
             f"/v2/persons/{person_id}",
@@ -1206,7 +1206,7 @@ class TestPatchPersonV2:
         """Test that explicit null fields are rejected"""
         person_data = {"name": {"en": "Test Person"}, "bdrc": "P123456"}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.patch(
             f"/v2/persons/{person_id}",
@@ -1222,7 +1222,7 @@ class TestPatchPersonV2:
         """Test that unknown fields are rejected"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"unknown_field": "value"}
         response = await client.patch(
@@ -1238,11 +1238,11 @@ class TestPatchPersonV2:
         """Test that duplicate BDRC ID is rejected"""
         person1_data = {"name": {"en": "Person 1"}, "bdrc": "P666666"}
         person1 = PersonInput.model_validate(person1_data)
-        await test_database.person.create(person1)
+        await person_database.create(test_database, person1)
 
         person2_data = {"name": {"en": "Person 2"}, "bdrc": "P777777"}
         person2 = PersonInput.model_validate(person2_data)
-        person2_id = await test_database.person.create(person2)
+        person2_id = await person_database.create(test_database, person2)
 
         patch_data = {"bdrc": "P666666"}
         response = await client.patch(
@@ -1264,11 +1264,11 @@ class TestPatchPersonV2:
         """Test that duplicate Wiki ID is rejected"""
         person1_data = {"name": {"en": "Person 1"}, "wiki": "Q888888"}
         person1 = PersonInput.model_validate(person1_data)
-        await test_database.person.create(person1)
+        await person_database.create(test_database, person1)
 
         person2_data = {"name": {"en": "Person 2"}, "wiki": "Q999999"}
         person2 = PersonInput.model_validate(person2_data)
-        person2_id = await test_database.person.create(person2)
+        person2_id = await person_database.create(test_database, person2)
 
         patch_data = {"wiki": "Q888888"}
         response = await client.patch(
@@ -1290,7 +1290,7 @@ class TestPatchPersonV2:
         """Test that invalid name structure is rejected"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"name": "not a dict"}
         response = await client.patch(
@@ -1311,7 +1311,7 @@ class TestPatchPersonV2:
         """Test that empty name dict is rejected"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"name": {}}
         response = await client.patch(
@@ -1332,7 +1332,7 @@ class TestPatchPersonV2:
         """Test that invalid alt_names structure is rejected"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"alt_names": "not a list"}
         response = await client.patch(
@@ -1358,7 +1358,7 @@ class TestPatchPersonV2:
             "wiki": "Q101010",
         }
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"bdrc": "P202020"}
         response = await client.patch(
@@ -1387,7 +1387,7 @@ class TestPatchPersonV2:
         """Test patching with Tibetan name"""
         person_data = {"name": {"en": "English Name"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"name": {"bo": "བོད་སྐད་མིང་།"}}
         response = await client.patch(
@@ -1408,7 +1408,7 @@ class TestPatchPersonV2:
         """Test patching with BCP47 language tags"""
         person_data = {"name": {"en": "English Name"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"name": {"en-US": "American Name", "bo-Latn": "bod skad"}}
         response = await client.patch(
@@ -1435,7 +1435,7 @@ class TestPatchPersonV2:
             "alt_names": [{"en": "Alt Name 1"}, {"en": "Alt Name 2"}],
         }
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"alt_names": []}
         response = await client.patch(
@@ -1456,7 +1456,7 @@ class TestPatchPersonV2:
         """Test that invalid JSON is rejected"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.patch(
             f"/v2/persons/{person_id}",
@@ -1470,7 +1470,7 @@ class TestPatchPersonV2:
         """Test that missing content type is handled"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         response = await client.patch(f"/v2/persons/{person_id}")
 
@@ -1480,7 +1480,7 @@ class TestPatchPersonV2:
         """Test that alt_name identical to name is deduplicated"""
         person_data = {"name": {"en": "Primary Name"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {
             "name": {"en": "New Primary"},
@@ -1509,7 +1509,7 @@ class TestPatchPersonV2:
         """Test patching with invalid language code returns error"""
         person_data = {"name": {"en": "Test Person"}}
         person = PersonInput.model_validate(person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         patch_data = {"name": {"xx": "Invalid Language"}}
         response = await client.patch(

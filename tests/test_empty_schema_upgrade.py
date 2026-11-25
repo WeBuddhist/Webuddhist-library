@@ -6,8 +6,9 @@ from neo4j.exceptions import ClientError
 
 from database.migrations import migrate
 from database.neo4j_triggers import install_triggers
+from database.schema import schema_statements
 from models.enums import LicenseType
-from tests.conftest import load_constraints_file, NEO4J_TRIGGER_REFRESH_SECONDS
+from tests.conftest import NEO4J_TRIGGER_REFRESH_SECONDS
 from tests.schema_contract import EXPECTED_CONSTRAINTS, EXPECTED_INDEXES, EXPECTED_TRIGGERS
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -59,7 +60,7 @@ async def empty_schema_database(_neo4j_database):
             ).consume()
         async with db.get_session() as session:
             await (await session.run("MATCH (n) DETACH DELETE n")).consume()
-            for statement in load_constraints_file():
+            for statement in schema_statements():
                 await (await session.run(statement)).consume()
         await install_triggers(db._driver, db._database)
         await asyncio.sleep(NEO4J_TRIGGER_REFRESH_SECONDS)
@@ -93,14 +94,20 @@ async def test_migration_bootstraps_empty_database_and_query_language(empty_sche
     assert await schema_inventory(db) == before
 
 
-async def test_partial_legacy_schema_resumes_and_replaces_old_triggers(empty_schema_database, monkeypatch):
+async def test_legacy_upgrade_resumes_and_replaces_constraints_and_triggers(empty_schema_database, monkeypatch):
     import database.migrations as migrations
 
     db = empty_schema_database
     async with db.get_session() as session:
-        await (
-            await session.run("CREATE CONSTRAINT language_code_unique FOR (n:Language) REQUIRE n.code IS UNIQUE")
-        ).consume()
+        for name, label, prop in (
+            ("language_code_unique", "Language", "code"),
+            ("api_key_hash_unique", "ApiKey", "api_key_hash"),
+            ("bibliographic_id_unique", "BibliographicMetadata", "id"),
+            ("toc_id_unique", "TableOfContents", "id"),
+            ("toc_section_id_unique", "TableOfContentsSection", "id"),
+        ):
+            statement = f"CREATE CONSTRAINT {name} FOR (n:{label}) REQUIRE n.{prop} IS UNIQUE"
+            await (await session.run(statement)).consume()
         await (await session.run("CREATE (:Language {code: 'en', name: 'English'})")).consume()
     async with db._driver.session(database="system") as session:
         for name in ("enforce_span_start_lt_end", "enforce_span_start_lte_end"):
@@ -119,7 +126,9 @@ async def test_partial_legacy_schema_resumes_and_replaces_old_triggers(empty_sch
         patch.setattr(migrations, "install_triggers", interrupted)
         with pytest.raises(RuntimeError, match="interrupted installation"):
             await migrate(db._driver, db._database)
-    assert "enforce_span_start_lt_end" in (await schema_inventory(db))[2]
+    constraints, _, triggers = await schema_inventory(db)
+    assert constraints == EXPECTED_CONSTRAINTS
+    assert "enforce_span_start_lt_end" in triggers
     await migrate(db._driver, db._database)
     await assert_installed_schema(db)
     assert (await schema_inventory(db))[2]["enforce_span_start_lte_end"]["query"] != "RETURN null"

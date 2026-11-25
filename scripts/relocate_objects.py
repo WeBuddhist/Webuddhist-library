@@ -13,10 +13,9 @@ from config import settings
 from database import Database
 from database.locking import lock_nodes
 from database.repository import iter_id_batches
-from exceptions import DataConflictError, DataValidationError
+from errors import DataConflictError, DataValidationError
 from models.enums import AudioFormat
-from storage import Storage
-from storage.keys import edition_key, recording_key
+from storage import Storage, edition_key, recording_key
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +109,7 @@ async def relocate_objects(db: Database, storage: RelocationStorage, *, apply: b
                 logger.info("%s %s: %s -> %s", label, node_id, source, destination)
                 if apply:
                     await storage.copy_verified(source, destination)
-                    await db.transactions.execute_write(
-                        _switch_key, label, prop, node_id, source=source, destination=destination
-                    )
+                    await db.write(_switch_key, label, prop, node_id, source=source, destination=destination)
                 count += 1
     async with db.get_session() as session:
         for label, prop, _ in _SOURCES:

@@ -6,7 +6,8 @@ from aiobotocore.response import AioStreamingBody
 from botocore.exceptions import ClientError
 
 from content_service import read_content
-from exceptions import DataConflictError, DataValidationError
+from database import recording as recording_database
+from errors import DataConflictError, DataValidationError
 from scripts.relocate_objects import RelocationStorage, relocate_objects
 from tests.test_content_lifecycle import state
 from tests.test_excerpt_editions import WHOLE, _part
@@ -84,7 +85,7 @@ async def test_preview_collision_retry_and_cleanup(client, test_database):
     with pytest.raises(DataConflictError, match="verification"):
         await relocate_objects(db, storage, apply=True)
     assert s3.objects == {**originals, text_key: originals[old_text]}
-    assert await db.recording.get_storage_location(recording) == old_audio
+    assert await recording_database.get_storage_location(db, recording) == old_audio
     moved = await state(db, edition)
     assert moved.stored_key == text_key and moved.revision == original.revision + 1
 
@@ -96,7 +97,7 @@ async def test_preview_collision_retry_and_cleanup(client, test_database):
         audio_key: originals[old_audio],
         original.stored_key: originals[original.stored_key],
     }
-    assert await db.recording.get_storage_location(recording) == audio_key
+    assert await recording_database.get_storage_location(db, recording) == audio_key
     assert await relocate_objects(db, storage, apply=True) == (0, 0)
     assert await state(db, edition) == moved
 

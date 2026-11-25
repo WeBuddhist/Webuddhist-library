@@ -224,35 +224,27 @@ class TableOfContentsOutput(OpenPechaModel):
     metadata: AnnotationMetadata | None = None
 
 
-class BibliographicMetadataBase(SingleSpanAnnotation):
+class BibliographicMetadataInput(SingleSpanAnnotation):
     type: BibliographyType
 
 
-class BibliographicMetadataInput(BibliographicMetadataBase):
-    pass
-
-
-class BibliographicMetadataOutput(BibliographicMetadataBase):
+class BibliographicMetadataOutput(BibliographicMetadataInput):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
 
 
-class NoteBase(SingleSpanAnnotation):
+class NoteInput(SingleSpanAnnotation):
     text: NonEmptyStr
 
 
-class NoteInput(NoteBase):
-    pass
-
-
-class NoteOutput(NoteBase):
+class NoteOutput(NoteInput):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
 
 
-class FootnoteBase(OpenPechaModel):
+class FootnoteInput(OpenPechaModel):
     """A footnote anchored to a point in the content rather than a range, rendered as a marker.
 
     `position` is a gap index: the marker sits before the character at `position`, so 0 is before the
@@ -264,11 +256,7 @@ class FootnoteBase(OpenPechaModel):
     metadata: AnnotationMetadata | None = None
 
 
-class FootnoteInput(FootnoteBase):
-    pass
-
-
-class FootnoteOutput(FootnoteBase):
+class FootnoteOutput(FootnoteInput):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr

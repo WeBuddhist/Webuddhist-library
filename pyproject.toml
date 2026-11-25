@@ -7,6 +7,12 @@ include = ["."]
 venvPath = "."
 venv = ".venv"
 
+[tool.ty.environment]
+root = ["."]
+
+[tool.ty.src]
+exclude = ["tests/"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -29,11 +35,6 @@ line-length = 120
 exclude = ["tests"]
 target-version = "py314"
 
-[tool.ty.environment]
-root = ["."]
-
-[tool.ty.src]
-exclude = ["tests/"]
 
 [tool.fastapi]
 entrypoint = "main:app"
@@ -54,7 +55,6 @@ ignore = [
     "PLR0913",  # Too many arguments in function definition
     "PLR0915",  # Too many statements
     "CPY001",  # Missing copyright notice
-    "N999",  # Invalid module name (false positive from hyphenated repo name)
 ]
 
 [tool.vulture]
@@ -65,7 +65,6 @@ exclude = [
     "tests",
     "scripts",
     "docs",
-    "storage",
     ".git",
     ".ruff_cache",
     ".pytest_cache",

@@ -2,8 +2,8 @@
 
 from typing import TYPE_CHECKING, LiteralString
 
-from exceptions import DataValidationError
-from storage.keys import edition_key
+from errors import DataValidationError
+from storage import edition_key
 
 from .repository import iter_id_batches
 
@@ -48,10 +48,10 @@ async def migrate_content(db: Database, storage: Storage, *, apply: bool = False
             length = len(await storage.read_text(key))
             if not length or edition["length"] not in (None, length):
                 raise DataValidationError(f"Edition {edition['id']} has empty content or a length mismatch")
-            [invalid] = await db.execute_query(INVALID_SPANS_QUERY, id=edition["id"], length=length)
+            [invalid] = await db.query(INVALID_SPANS_QUERY, id=edition["id"], length=length)
             if invalid["invalid"]:
                 raise DataValidationError(f"Edition {edition['id']} has annotations outside its actual content")
             if apply and any(edition[field] is None for field in ("key", "revision", "length")):
-                await db.execute_query(BACKFILL_QUERY, write=True, id=edition["id"], key=key, length=length)
+                await db.query(BACKFILL_QUERY, write=True, id=edition["id"], key=key, length=length)
             count += 1
     return count

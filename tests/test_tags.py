@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for v2/tags endpoints and tag-related functionality.
 
@@ -13,15 +12,15 @@ Tests endpoints:
 - Inline tagging via POST /v2/texts (create text with tag_ids)
 - Tag filtering via GET /v2/texts?tag_id=...
 """
-
 import logging
 
 import pytest
 from pydantic import ValidationError
 
+from database import tag
+from database import text as text_database
 from identifier import generate_id
 from models.requests import TextFacetFilter
-from models.tag import TagInput
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +372,7 @@ class TestTagSegment:
                 CREATE (seg)-[:SEGMENT_OF]->(sgn)
             """)
 
-        await test_database.tag.tag_segment("test_seg_tag", tag_id)
+        await tag.tag_segment(test_database, "test_seg_tag", tag_id)
 
         async with test_database.get_session() as session:
             cursor = await session.run("""
@@ -395,8 +394,8 @@ class TestTagSegment:
                 CREATE (seg)-[:SEGMENT_OF]->(sgn)
             """)
 
-        await test_database.tag.tag_segment("test_seg_untag", tag_id)
-        await test_database.tag.untag_segment("test_seg_untag", tag_id)
+        await tag.tag_segment(test_database, "test_seg_untag", tag_id)
+        await tag.untag_segment(test_database, "test_seg_untag", tag_id)
 
         async with test_database.get_session() as session:
             cursor = await session.run("""
@@ -703,8 +702,8 @@ class TestTagApplicationIsolation:
 
         text_id = await _create_text(client, tag_ids=[tag_id_a])
 
-        work_id = await test_database.text.get_work_id(text_id)
-        await test_database.tag.tag_work(work_id, tag_id_b)
+        work_id = await text_database.get_work_id(test_database, text_id)
+        await tag.tag_work(test_database, work_id, tag_id_b)
 
         response_a = await client.get(
             f"/v2/texts/{text_id}",

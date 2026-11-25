@@ -23,7 +23,7 @@ class ExcerptSource(OpenPechaModel):
         return self
 
 
-class EditionBase(OpenPechaModel):
+class EditionInput(OpenPechaModel):
     bdrc: NonEmptyStr | None = None
     wiki: NonEmptyStr | None = None
     type: EditionType
@@ -49,11 +49,7 @@ class EditionBase(OpenPechaModel):
         return self
 
 
-class EditionInput(EditionBase):
-    pass
-
-
-class EditionOutput(EditionBase):
+class EditionOutput(EditionInput):
     id: NonEmptyStr
     text_id: NonEmptyStr
     excerpt_of: ExcerptSource | None = None

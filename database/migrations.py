@@ -2,12 +2,12 @@
 
 import logging
 from enum import StrEnum
-from pathlib import Path
 from typing import LiteralString, cast
 
 from neo4j import AsyncDriver, AsyncManagedTransaction, RoutingControl
 
 from database.neo4j_triggers import audit_triggers, install_triggers
+from database.schema import schema_statements
 from identifier import generate_id
 from models.enums import (
     AUDIO_ROLES,
@@ -173,11 +173,9 @@ async def upgrade_recordings(driver: AsyncDriver, database: str) -> int:
 
 
 async def install_constraints(driver: AsyncDriver, database: str) -> None:
-    """Apply the checked-in constraints and indexes in file order."""
-    constraints = Path(__file__).with_name("neo4j_constraints.cypher").read_text()
-    for statement in constraints.split(";"):
-        if statement.strip():
-            await driver.execute_query(cast(LiteralString, statement), database_=database)
+    """Apply unique constraints from neo4j_schema.yaml and the explicit lookup indexes."""
+    for statement in schema_statements():
+        await driver.execute_query(cast(LiteralString, statement), database_=database)
 
 
 async def migrate(driver: AsyncDriver, database: str) -> None:
@@ -191,6 +189,9 @@ async def migrate(driver: AsyncDriver, database: str) -> None:
         for name, ids in violations.items():
             logger.error("%s: %s", name, ids[:20])
         raise RuntimeError("Schema audit failed; repair reported records before applying migrations")
+    # An equivalent constraint under its old name makes CREATE ... IF NOT EXISTS skip the new name.
+    for name in ("api_key_hash_unique", "bibliographic_id_unique", "toc_id_unique", "toc_section_id_unique"):
+        await driver.execute_query("DROP CONSTRAINT $name IF EXISTS", name=name, database_=database)
     await install_constraints(driver, database)
     lookups: dict[LiteralString, type[StrEnum]] = {
         "RoleType": ContributorRole,

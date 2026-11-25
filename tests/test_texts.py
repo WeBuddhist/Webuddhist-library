@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """Integration tests for v2/texts endpoints using real Neo4j test instance.
 
 Tests endpoints:
@@ -12,12 +11,14 @@ Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
 - NEO4J_TEST_PASSWORD: Password for test instance
 """
-
-
 import pytest
+
+from database import category
+from database import person as person_database
+from database import text as text_database
 from models.category import CategoryInput
-from models.text import TextInput
 from models.person import PersonInput
+from models.text import TextInput
 
 
 def _items(data):
@@ -69,7 +70,7 @@ class TestGetAllTextsV2:
         """Test default pagination (limit=20, offset=0)"""
         # Create test person first
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Use pre-created category from conftest
         category_id = 'category'
@@ -87,7 +88,7 @@ class TestGetAllTextsV2:
                 "date": f"2024-01-01{i+1}",
             }
             text = TextInput.model_validate(expr_data)
-            text_id = await test_database.text.create(text)
+            text_id = await text_database.create(test_database, text)
             text_ids.append(text_id)
 
         response = await client.get("/v2/texts/")
@@ -109,7 +110,7 @@ class TestGetAllTextsV2:
 
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
         # Create multiple texts
@@ -122,7 +123,7 @@ class TestGetAllTextsV2:
                 "contributions": [{"type": "person", "id": person_id, "role": "author"}],
             }
             text = TextInput.model_validate(expr_data)
-            expr_id = await test_database.text.create(text)
+            expr_id = await text_database.create(test_database, text)
             text_ids.append(expr_id)
 
         # Test limit=2, offset=1
@@ -144,13 +145,13 @@ class TestGetAllTextsV2:
 
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Use pre-created category from conftest as category 1
         category_id_1 = 'category'
         # Create a second category for testing filter
         category_2 = CategoryInput.model_validate({'title': {'en': 'Category 2', 'bo': 'དེབ་སྤྱི་༢།'}})
-        category_id_2 = await test_database.category.create(category_2, 'test_application')
+        category_id_2 = await category.create(test_database, category_2, 'test_application')
 
         # Create text in category 1
         expr_data_1 = {
@@ -160,7 +161,7 @@ class TestGetAllTextsV2:
             "category_id": category_id_1,
         }
         text_1 = TextInput.model_validate(expr_data_1)
-        expr_id_1 = await test_database.text.create(text_1)
+        expr_id_1 = await text_database.create(test_database, text_1)
 
         # Create text in category 2
         expr_data_2 = {
@@ -170,7 +171,7 @@ class TestGetAllTextsV2:
             "category_id": category_id_2,
         }
         text_2 = TextInput.model_validate(expr_data_2)
-        expr_id_2 = await test_database.text.create(text_2)
+        expr_id_2 = await text_database.create(test_database, text_2)
 
         # Filter by category_id_1
         response = await client.get(f"/v2/texts?category_id={category_id_1}")
@@ -194,7 +195,7 @@ class TestGetAllTextsV2:
 
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
 
         category_id = 'category'  # Use pre-created category from conftest
@@ -206,7 +207,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         en_text = TextInput.model_validate(en_data)
-        en_id = await test_database.text.create(en_text)
+        en_id = await text_database.create(test_database, en_text)
 
         # Create Tibetan text
         bo_data = {
@@ -216,7 +217,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         bo_text = TextInput.model_validate(bo_data)
-        bo_id = await test_database.text.create(bo_text)
+        bo_id = await text_database.create(test_database, bo_text)
 
         # Filter by English
         response = await client.get("/v2/texts?language=en")
@@ -241,8 +242,9 @@ class TestGetAllTextsV2:
     ):
         """Title search is backed by catalog OpenSearch, not Neo4j substring filtering."""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
-        await test_database.text.create(
+        person_id = await person_database.create(test_database, person)
+        await text_database.create(
+            test_database,
             TextInput.model_validate(
                 {
                     "title": {"en": "Buddha dharma"},
@@ -250,7 +252,7 @@ class TestGetAllTextsV2:
                     "category_id": "category",
                     "contributions": [{"type": "person", "id": person_id, "role": "author"}],
                 }
-            )
+            ),
         )
 
         response = await client.get("/v2/texts?title=Buddha")
@@ -268,7 +270,7 @@ class TestGetAllTextsV2:
         """Test filtering by author_id"""
         # Create two test persons
         person1 = PersonInput.model_validate(test_person_data)
-        person1_id = await test_database.person.create(person1)
+        person1_id = await person_database.create(test_database, person1)
 
         person2_data = {
             "name": {"en": "Second Author", "bo": "སློབ་དཔོན་གཉིས་པ།"},
@@ -276,7 +278,7 @@ class TestGetAllTextsV2:
             "wiki": "Q654321",
         }
         person2 = PersonInput.model_validate(person2_data)
-        person2_id = await test_database.person.create(person2)
+        person2_id = await person_database.create(test_database, person2)
 
         category_id = 'category'
 
@@ -288,7 +290,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person1_id, "role": "author"}],
         }
         text1 = TextInput.model_validate(expr1_data)
-        expr1_id = await test_database.text.create(text1)
+        expr1_id = await text_database.create(test_database, text1)
 
         # Create text by person2
         expr2_data = {
@@ -298,7 +300,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person2_id, "role": "author"}],
         }
         text2 = TextInput.model_validate(expr2_data)
-        expr2_id = await test_database.text.create(text2)
+        expr2_id = await text_database.create(test_database, text2)
 
         # Create text by both authors
         expr3_data = {
@@ -311,7 +313,7 @@ class TestGetAllTextsV2:
             ],
         }
         text3 = TextInput.model_validate(expr3_data)
-        expr3_id = await test_database.text.create(text3)
+        expr3_id = await text_database.create(test_database, text3)
 
         # Filter by person1_id
         response = await client.get(f"/v2/texts?author_id={person1_id}")
@@ -341,7 +343,7 @@ class TestGetAllTextsV2:
         """Test combining author_id and language filters"""
         # Create two test persons
         person1 = PersonInput.model_validate(test_person_data)
-        person1_id = await test_database.person.create(person1)
+        person1_id = await person_database.create(test_database, person1)
 
         person2_data = {
             "name": {"en": "Second Author", "bo": "སློབ་དཔོན་གཉིས་པ།"},
@@ -349,7 +351,7 @@ class TestGetAllTextsV2:
             "wiki": "Q654321",
         }
         person2 = PersonInput.model_validate(person2_data)
-        person2_id = await test_database.person.create(person2)
+        person2_id = await person_database.create(test_database, person2)
 
         category_id = 'category'
 
@@ -361,7 +363,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person1_id, "role": "author"}],
         }
         text1 = TextInput.model_validate(expr1_data)
-        expr1_id = await test_database.text.create(text1)
+        expr1_id = await text_database.create(test_database, text1)
 
         # Create Tibetan text by person1
         expr2_data = {
@@ -371,7 +373,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person1_id, "role": "author"}],
         }
         text2 = TextInput.model_validate(expr2_data)
-        expr2_id = await test_database.text.create(text2)
+        expr2_id = await text_database.create(test_database, text2)
 
         # Create English text by person2
         expr3_data = {
@@ -381,7 +383,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person2_id, "role": "author"}],
         }
         text3 = TextInput.model_validate(expr3_data)
-        expr3_id = await test_database.text.create(text3)
+        expr3_id = await text_database.create(test_database, text3)
 
         # Filter by author_id=person1_id AND language=en
         response = await client.get(f"/v2/texts?author_id={person1_id}&language=en")
@@ -412,7 +414,7 @@ class TestGetAllTextsV2:
             text = TextInput.model_validate(
                 {"title": {language: title}, "language": language, "category_id": "category", **fields}
             )
-            return await test_database.text.create(text)
+            return await text_database.create(test_database, text)
 
         public_id = await create("Public text", "en")
         cc0_id = await create("CC0 text", "bo", license="cc0")
@@ -460,7 +462,7 @@ class TestGetAllTextsV2:
 
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -472,7 +474,7 @@ class TestGetAllTextsV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        await test_database.text.create(text)
+        await text_database.create(test_database, text)
 
         # Test limit=1 (minimum)
         response = await client.get("/v2/texts?limit=1")
@@ -500,11 +502,11 @@ class TestGetTextLanguagesV2:
     async def test_counts_languages_within_category(self, client, test_database):
         """Translations share their source's category and count under the base language code"""
         other = CategoryInput.model_validate({"title": {"en": "Other"}})
-        other_id = await test_database.category.create(other, "test_application")
+        other_id = await category.create(test_database, other, "test_application")
 
         async def create(title: str, language: str, **fields) -> str:
             text = TextInput.model_validate({"title": {language.split("-")[0]: title}, "language": language, **fields})
-            return await test_database.text.create(text)
+            return await text_database.create(test_database, text)
 
         root_id = await create("Root", "bo", category_id="category")
         await create("Second", "bo", category_id="category")
@@ -528,7 +530,7 @@ class TestGetTextLanguagesV2:
             text = TextInput.model_validate(
                 {"title": {language: title}, "language": language, "category_id": "category", "license": license}
             )
-            await test_database.text.create(text)
+            await text_database.create(test_database, text)
 
         response = await client.get("/v2/texts/languages?license=public")
 
@@ -556,13 +558,13 @@ class TestGetSingleTextV2:
 
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
         category_id = 'category'  # Use pre-created category from conftest
         # Create test text
         test_text_data["contributions"] = [{"type": "person", "id": person_id, "role": "author"}]
         test_text_data["category_id"] = category_id
         text = TextInput.model_validate(test_text_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.get(f"/v2/texts/{text_id}")
 
@@ -586,13 +588,13 @@ class TestGetSingleTextV2:
 
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
         category_id = 'category'
         # Create test text
         test_text_data["contributions"] = [{"type": "person", "id": person_id, "role": "author"}]
         test_text_data["category_id"] = category_id
         text = TextInput.model_validate(test_text_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.get(f"/v2/texts?bdrc={test_text_data['bdrc']}")
 
@@ -609,7 +611,7 @@ class TestGetSingleTextV2:
 
         # Create test person
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
         category_id = 'category'  # Use pre-created category from conftest
         # Create target ROOT text
         root_data = {
@@ -619,7 +621,7 @@ class TestGetSingleTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         root_text = TextInput.model_validate(root_data)
-        target_id = await test_database.text.create(root_text)
+        target_id = await text_database.create(test_database, root_text)
 
         # Create TRANSLATION text
         translation_data = {
@@ -629,7 +631,7 @@ class TestGetSingleTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "translator"}],
         }
         translation_text = TextInput.model_validate(translation_data)
-        translation_id = await test_database.text.create(translation_text)
+        translation_id = await text_database.create(test_database, translation_text)
 
         response = await client.get(f"/v2/texts/{translation_id}")
 
@@ -658,7 +660,7 @@ class TestPostTextV2:
         """Test successfully creating a ROOT text"""
         # Create test person first
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -706,7 +708,7 @@ class TestPostTextV2:
     async def test_create_text_with_duplicate_title_rejected(self, client, test_database, test_person_data):
         """Test creating a text with a title already used by another text is rejected."""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text_data = {
             "title": {"en-US": "Duplicate BCP47 Title"},
@@ -804,7 +806,7 @@ class TestPostTextV2:
     async def test_create_translation_with_valid_root_target_success(self, client, test_database, test_person_data):
         """Test successfully creating a TRANSLATION with a valid root target"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -816,7 +818,7 @@ class TestPostTextV2:
             "category_id": category_id,
         }
         root_text = TextInput.model_validate(root_data)
-        root_id = await test_database.text.create(root_text)
+        root_id = await text_database.create(test_database, root_text)
 
         # Create TRANSLATION text
         translation_data = {
@@ -841,7 +843,7 @@ class TestPostTextV2:
     async def test_create_commentary_with_valid_root_target_success(self, client, test_database, test_person_data):
         """Test successfully creating a COMMENTARY with a valid root target"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -853,7 +855,7 @@ class TestPostTextV2:
             "category_id": category_id,
         }
         root_text = TextInput.model_validate(root_data)
-        root_id = await test_database.text.create(root_text)
+        root_id = await text_database.create(test_database, root_text)
 
         # Create COMMENTARY text
         commentary_data = {
@@ -879,7 +881,7 @@ class TestPostTextV2:
     async def test_create_translation_with_invalid_root_target(self, client, test_database, test_person_data):
         """Test creating a TRANSLATION with an invalid root target"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -897,7 +899,7 @@ class TestPostTextV2:
     async def test_create_commentary_with_invalid_root_target(self, client, test_database, test_person_data):
         """Test creating a COMMENTARY with an invalid root target"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -912,11 +914,11 @@ class TestPostTextV2:
         response = await client.post("/v2/texts", json=commentary_data)
 
         assert response.status_code == 404
-    
+
     async def test_create_text_without_category_id(self, client, test_database, test_person_data):
         """Test creating a text without a category ID"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         root_data = {
             "title": {"en": "Root text", "bo": "རྩ་བའི་ཚིག་སྒྲུབ་གསར་པ།"},
@@ -931,7 +933,7 @@ class TestPostTextV2:
     async def test_create_text_with_invalid_person_role(self, client, test_database, test_person_data):
         """Test creating a text with an invalid person role"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -945,13 +947,13 @@ class TestPostTextV2:
         response = await client.post("/v2/texts", json=root_data)
 
         assert response.status_code == 422
-    
+
     async def test_create_text_with_person_contribution_both_id_and_bdrc_id(
         self, client, test_database, test_person_data
     ):
         """Test creating a text with a person contribution containing both id and bdrc_id."""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -983,7 +985,7 @@ class TestPostTextV2:
         """Test creating a text with an existing BDRC ID"""
         # Create test person first
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'  # Use pre-created category from conftest
 
@@ -1018,7 +1020,7 @@ class TestPostTextV2:
     async def test_create_text_with_nonexistent_category_id(self, client, test_database, test_person_data):
         """Test creating a text with a non-existent category_id returns an error"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text_data = {
             "title": {"en": "Orphan Text"},
@@ -1041,7 +1043,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_bdrc_only(self, client, test_database, test_person_data):
         """Test updating only the bdrc field"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1052,7 +1054,7 @@ class TestPatchTextV2:
             "bdrc": "W111111",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"bdrc": "W222222"}
         response = await client.patch(
@@ -1077,12 +1079,12 @@ class TestPatchTextV2:
     ):
         """Test attributing a text that was created without contributions"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput.model_validate(
             {"title": {"en": "Unattributed Title"}, "language": "en", "category_id": "category"}
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.patch(
             f"/v2/texts/{text_id}",
@@ -1100,7 +1102,7 @@ class TestPatchTextV2:
     async def test_patch_text_replaces_existing_contributions(self, client, test_database, test_person_data):
         """Test that contributions are replaced as a whole set, not appended to"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput.model_validate(
             {
@@ -1110,7 +1112,7 @@ class TestPatchTextV2:
                 "contributions": [{"type": "person", "id": person_id, "role": "author"}],
             }
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.patch(
             f"/v2/texts/{text_id}",
@@ -1123,7 +1125,7 @@ class TestPatchTextV2:
     async def test_patch_text_clears_contributions(self, client, test_database, test_person_data):
         """Test removing every contribution with an empty list"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput.model_validate(
             {
@@ -1133,7 +1135,7 @@ class TestPatchTextV2:
                 "contributions": [{"type": "person", "id": person_id, "role": "author"}],
             }
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.patch(f"/v2/texts/{text_id}", json={"contributions": []})
 
@@ -1145,7 +1147,7 @@ class TestPatchTextV2:
     ):
         """Test that a rejected contribution patch leaves the existing contributions in place"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput.model_validate(
             {
@@ -1155,7 +1157,7 @@ class TestPatchTextV2:
                 "contributions": [{"type": "person", "id": person_id, "role": "author"}],
             }
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.patch(
             f"/v2/texts/{text_id}",
@@ -1171,7 +1173,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_wiki_only(self, client, test_database, test_person_data):
         """Test updating only the wiki field"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1182,7 +1184,7 @@ class TestPatchTextV2:
             "wiki": "Q111111",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"wiki": "Q222222"}
         response = await client.patch(
@@ -1202,7 +1204,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_date_only(self, client, test_database, test_person_data):
         """Test updating only the date field"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1213,7 +1215,7 @@ class TestPatchTextV2:
             "date": "2024-01-01",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"date": "2025-06-15"}
         response = await client.patch(
@@ -1233,7 +1235,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_title_only(self, client, test_database, test_person_data):
         """Test updating only the title field"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1243,7 +1245,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"title": {"en": "Updated Title", "bo": "གསར་བསྒྱུར་མཚན་བྱང་།"}}
         response = await client.patch(
@@ -1265,7 +1267,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_alt_titles_only(self, client, test_database, test_person_data):
         """Test updating only the alt_titles field"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1276,7 +1278,7 @@ class TestPatchTextV2:
             "alt_titles": [{"en": "Old Alt Title"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"alt_titles": [{"en": "New Alt Title 1"}, {"en": "New Alt Title 2"}]}
         response = await client.patch(
@@ -1300,7 +1302,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_license_only(self, client, test_database, test_person_data):
         """Test updating only the license field"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1311,7 +1313,7 @@ class TestPatchTextV2:
             "license": "public",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"license": "cc0"}
         response = await client.patch(
@@ -1331,7 +1333,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_multiple_fields(self, client, test_database, test_person_data):
         """Test updating multiple fields at once"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1344,7 +1346,7 @@ class TestPatchTextV2:
             "license": "public",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {
             "title": {"en": "Updated"},
@@ -1388,7 +1390,7 @@ class TestPatchTextV2:
     async def test_patch_text_empty_payload_rejected(self, client, test_database, test_person_data):
         """Test that empty payload is rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1398,7 +1400,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {}
         response = await client.patch(
@@ -1413,7 +1415,7 @@ class TestPatchTextV2:
     async def test_patch_text_null_field_rejected(self, client, test_database, test_person_data):
         """Test that explicit null fields are rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1424,7 +1426,7 @@ class TestPatchTextV2:
             "bdrc": "W_NULL_PATCH",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.patch(
             f"/v2/texts/{text_id}",
@@ -1439,7 +1441,7 @@ class TestPatchTextV2:
     async def test_patch_text_unknown_field_rejected(self, client, test_database, test_person_data):
         """Test that unknown fields are rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1449,7 +1451,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"unknown_field": "value"}
         response = await client.patch(
@@ -1464,7 +1466,7 @@ class TestPatchTextV2:
     async def test_patch_text_preserves_unpatched_fields(self, client, test_database, test_person_data):
         """Test that fields not in patch are preserved"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1479,7 +1481,7 @@ class TestPatchTextV2:
             "license": "public",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"bdrc": "W202020"}
         response = await client.patch(
@@ -1509,7 +1511,7 @@ class TestPatchTextV2:
     async def test_patch_text_with_tibetan_title(self, client, test_database, test_person_data):
         """Test patching with Tibetan title (must include text's language)"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1519,7 +1521,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"title": {"en": "Updated English", "bo": "བོད་སྐད་མཚན་བྱང་།"}}
         response = await client.patch(
@@ -1541,7 +1543,7 @@ class TestPatchTextV2:
     async def test_patch_text_title_missing_text_language_rejected(self, client, test_database, test_person_data):
         """Test that patching title without text's language is rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1551,7 +1553,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"title": {"bo": "བོད་སྐད་མཚན་བྱང་།"}}
         response = await client.patch(
@@ -1571,7 +1573,7 @@ class TestPatchTextV2:
     async def test_patch_text_clear_alt_titles(self, client, test_database, test_person_data):
         """Test clearing alt_titles by providing empty list"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1582,7 +1584,7 @@ class TestPatchTextV2:
             "alt_titles": [{"en": "Alt Title 1"}, {"en": "Alt Title 2"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"alt_titles": []}
         response = await client.patch(
@@ -1602,7 +1604,7 @@ class TestPatchTextV2:
     async def test_patch_text_update_language_with_bcp47(self, client, test_database, test_person_data):
         """Test updating language with BCP47 code"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1612,7 +1614,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"language": "bo-Latn"}
         response = await client.patch(
@@ -1632,7 +1634,7 @@ class TestPatchTextV2:
     async def test_patch_text_invalid_json(self, client, test_database, test_person_data):
         """Test that invalid JSON is rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1642,7 +1644,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.patch(
             f"/v2/texts/{text_id}",
@@ -1657,7 +1659,7 @@ class TestPatchTextV2:
     async def test_patch_text_invalid_title_structure(self, client, test_database, test_person_data):
         """Test that invalid title structure is rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1667,7 +1669,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"title": "not a dict"}
         response = await client.patch(
@@ -1687,7 +1689,7 @@ class TestPatchTextV2:
     async def test_patch_text_empty_title_rejected(self, client, test_database, test_person_data):
         """Test that empty title dict is rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1697,7 +1699,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"title": {}}
         response = await client.patch(
@@ -1717,7 +1719,7 @@ class TestPatchTextV2:
     async def test_patch_text_invalid_license_rejected(self, client, test_database, test_person_data):
         """Test that invalid license value is rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1727,7 +1729,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"license": "invalid_license"}
         response = await client.patch(
@@ -1747,7 +1749,7 @@ class TestPatchTextV2:
     async def test_patch_text_alt_title_same_as_primary_deduped(self, client, test_database, test_person_data):
         """Test that alt_title identical to title is deduplicated"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1757,7 +1759,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {
             "title": {"en": "New Primary"},
@@ -1785,7 +1787,7 @@ class TestPatchTextV2:
     async def test_patch_text_with_invalid_language_code(self, client, test_database, test_person_data):
         """Test patching with invalid language code returns error"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1795,7 +1797,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"title": {"xx": "Invalid Language"}}
         response = await client.patch(
@@ -1815,7 +1817,7 @@ class TestPatchTextV2:
     async def test_patch_text_title_preserves_other_languages(self, client, test_database, test_person_data):
         """Test that updating a title in one language preserves other language versions"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1825,7 +1827,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         verify_response = await client.get(f"/v2/texts/{text_id}")
         assert verify_response.status_code == 200
@@ -1853,7 +1855,7 @@ class TestPatchTextV2:
     async def test_patch_text_title_adds_new_language(self, client, test_database, test_person_data):
         """Test that patching title with a new language adds it"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1863,7 +1865,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         patch_data = {"title": {"en": "English Title", "bo": "བོད་ཡིག་མཚན་བྱང་།"}}
         response = await client.patch(
@@ -1885,7 +1887,7 @@ class TestPatchTextV2:
     async def test_patch_text_license_all_valid_values(self, client, test_database, test_person_data):
         """Test that all valid license values work"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1896,7 +1898,7 @@ class TestPatchTextV2:
             "license": "public",
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         valid_licenses = ["cc0", "cc-by", "cc-by-sa", "copyrighted", "unknown"]
         for license_value in valid_licenses:
@@ -1918,7 +1920,7 @@ class TestPatchTextV2:
     async def test_patch_text_missing_body_returns_422(self, client, test_database, test_person_data):
         """Test that a missing request body returns 422."""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = 'category'
         expr_data = {
@@ -1928,7 +1930,7 @@ class TestPatchTextV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         response = await client.patch(
             f"/v2/texts/{text_id}",
@@ -1942,7 +1944,7 @@ class TestPatchTextV2:
     async def test_patch_text_duplicate_bdrc_rejected(self, client, test_database, test_person_data):
         """Test that patching a text with a BDRC ID already used by another text is rejected"""
         person = PersonInput.model_validate(test_person_data)
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         category_id = "category"
         text1_data = {
@@ -1953,7 +1955,7 @@ class TestPatchTextV2:
             "bdrc": "W_DUP_PATCH_1",
         }
         text1 = TextInput.model_validate(text1_data)
-        await test_database.text.create(text1)
+        await text_database.create(test_database, text1)
 
         text2_data = {
             "title": {"en": "Second BDRC Text"},
@@ -1963,7 +1965,7 @@ class TestPatchTextV2:
             "bdrc": "W_DUP_PATCH_2",
         }
         text2 = TextInput.model_validate(text2_data)
-        text2_id = await test_database.text.create(text2)
+        text2_id = await text_database.create(test_database, text2)
 
         response = await client.patch(
             f"/v2/texts/{text2_id}",
@@ -1983,7 +1985,7 @@ class TestGetEditionsV2:
     async def _create_test_person(self, db, test_person_data):
         """Helper to create a test person"""
         person = PersonInput.model_validate(test_person_data)
-        return await db.person.create(person)
+        return await person_database.create(db, person)
 
     async def _create_test_text(self, db, person_id, title=None):
         """Helper to create a test text"""
@@ -1996,7 +1998,7 @@ class TestGetEditionsV2:
             "contributions": [{"type": "person", "id": person_id, "role": "author"}],
         }
         text = TextInput.model_validate(expr_data)
-        return await db.text.create(text)
+        return await text_database.create(db, text)
 
     async def test_get_editions_empty_list(self, client, test_database, test_person_data):
         """Test getting editions for an text with no editions"""

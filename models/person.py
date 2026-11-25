@@ -5,7 +5,7 @@ from pydantic import MISSING, model_validator
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel, _dedupe
 
 
-class PersonBase(OpenPechaModel):
+class PersonInput(OpenPechaModel):
     bdrc: NonEmptyStr | None = None
     wiki: NonEmptyStr | None = None
     name: LocalizedString
@@ -16,10 +16,6 @@ class PersonBase(OpenPechaModel):
         if self.alt_names is not None:
             self.alt_names = _dedupe(list(self.alt_names), self.name) or None
         return self
-
-
-class PersonInput(PersonBase):
-    pass
 
 
 class PersonPatch(PatchModel):
@@ -35,5 +31,5 @@ class PersonPatch(PatchModel):
         return self
 
 
-class PersonOutput(PersonBase):
+class PersonOutput(PersonInput):
     id: NonEmptyStr

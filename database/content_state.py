@@ -7,8 +7,8 @@ from typing import LiteralString
 from neo4j import AsyncManagedTransaction
 
 from database.locking import lock_nodes
-from database.repository import fetch_record
-from exceptions import DataConflictError, DataValidationError
+from database.repository import fetch_record, require_node
+from errors import DataConflictError, DataNotFoundError, DataValidationError
 
 
 @dataclass(frozen=True)
@@ -131,3 +131,7 @@ async def read_value[T](
     tx: AsyncManagedTransaction, edition_id: str, read: Callable[[AsyncManagedTransaction], Awaitable[T]]
 ) -> T:
     return (await read_at_revision(tx, edition_id, read))[1]
+
+
+async def validate_edition_exists(tx: AsyncManagedTransaction, edition_id: str) -> None:
+    await require_node(tx, "Edition", edition_id, DataNotFoundError(f"Edition with ID '{edition_id}' not found"))

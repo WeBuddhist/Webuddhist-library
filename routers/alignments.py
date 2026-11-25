@@ -3,13 +3,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, status
 
+from database import alignment
 from dependencies import DatabaseDep, OptionalAppHeader
 from models.alignment import EditionAlignmentInput, EditionAlignmentPairOutput
 from models.requests import AnnotationSegmentsPaginationParams
 from models.responses import PaginatedResponse
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/v2/editions", tags=["Alignments"])
 
 
@@ -25,7 +25,7 @@ async def replace_edition_pair_alignments(
     data: EditionAlignmentInput,
     db: DatabaseDep,
 ) -> None:
-    await db.alignment.replace(source_edition_id, target_edition_id, data)
+    await alignment.replace(db, source_edition_id, target_edition_id, data)
 
 
 @router.get(
@@ -41,7 +41,8 @@ async def get_edition_pair_alignments(
     db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> PaginatedResponse[EditionAlignmentPairOutput]:
-    alignments = await db.alignment.get(
+    alignments = await alignment.get(
+        db,
         source_edition_id,
         target_edition_id,
         offset=params.offset,
@@ -62,4 +63,4 @@ async def delete_edition_pair_alignments(
     target_edition_id: Annotated[str, Path(description="The target edition ID")],
     db: DatabaseDep,
 ) -> None:
-    await db.alignment.delete(source_edition_id, target_edition_id)
+    await alignment.delete(db, source_edition_id, target_edition_id)

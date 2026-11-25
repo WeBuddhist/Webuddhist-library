@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from typing import Literal
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Literal, LiteralString, cast
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
@@ -11,19 +13,49 @@ logger = logging.getLogger(__name__)
 DATABASE_NAME = "neo4j"
 SYSTEM_DATABASE_NAME = "system"
 
-# Each trigger is a dict with:
-#   name: unique trigger name
-#   query: Cypher to execute on each transaction; it reads changedNodes and changedRelationships (see _CHANGED_NODES)
-#   phase: "before" or "after" commit
-#   audit: standalone Cypher that checks the same invariant against ALL existing data
-#
-# Naming convention: enforce_{source_label}_{relationship}
-# These cover every "required: true" relationship in neo4j_schema.yaml,
-# plus target-type enforcement for optional typed relationships.
+# APOC supplies changed properties and labels separately from created elements. Bind the surviving
+# created or changed elements once per statement, so updates use the same rules as creation.
+# Hash-set subtraction also dedupes; `IN` filters are quadratic on large changes.
+_CHANGED_RELATIONSHIPS = """
+WITH apoc.coll.subtract($createdRelationships
+    + coll.flatten([key IN keys($assignedRelationshipProperties) |
+        [entry IN $assignedRelationshipProperties[key] | entry.relationship]])
+    + coll.flatten([key IN keys($removedRelationshipProperties) |
+        [entry IN $removedRelationshipProperties[key] | entry.relationship]]),
+    $deletedRelationships) AS changedRelationships
+"""
+_CHANGED_NODES = """
+WITH changedRelationships, apoc.coll.subtract($createdNodes
+    + coll.flatten([key IN keys($assignedNodeProperties) | [entry IN $assignedNodeProperties[key] | entry.node]])
+    + coll.flatten([key IN keys($removedNodeProperties) | [entry IN $removedNodeProperties[key] | entry.node]])
+    + coll.flatten([label IN keys($assignedLabels) | $assignedLabels[label]])
+    + coll.flatten([label IN keys($removedLabels) | $removedLabels[label]
+        + coll.flatten([node IN $removedLabels[label] WHERE NOT node IN $deletedNodes |
+            [(node)--(neighbor) | neighbor]])])
+    + [rel IN changedRelationships + $deletedRelationships | startNode(rel)]
+    + [rel IN changedRelationships + $deletedRelationships | endNode(rel)],
+    $deletedNodes) AS changedNodes
+"""
 
 
-def _trigger(name: str, description: str, query: str, audit: str) -> dict:
-    return {"name": name, "description": description, "phase": "before", "query": query, "audit": audit}
+def bind_changes(query: str) -> str:
+    """Prefix a trigger query with the changedRelationships and changedNodes it reads."""
+    changed_nodes = _CHANGED_NODES if "changedNodes" in query else ""
+    return _CHANGED_RELATIONSHIPS + changed_nodes + query
+
+
+@dataclass(frozen=True)
+class Trigger:
+    """A before-commit APOC trigger, and an audit that checks the same invariant against all existing data."""
+
+    name: str
+    description: str
+    query: str
+    audit: str
+
+
+def _trigger(name: str, description: str, query: str, audit: str) -> Trigger:
+    return Trigger(name, description, bind_changes(query), audit)
 
 
 def _reject(name: str, message: str, node: str = "node", value: str | None = None) -> str:
@@ -67,20 +99,11 @@ def _multiple_outgoing(node: str, rel_type: str, target_label: str | None = None
         WHERE cnt > 1"""
 
 
-def _required_rel_trigger(
-    name: str,
-    description: str,
-    source_label: str,
-    rel_type: str,
-    target_label: str,
-    *,
-    cardinality: str = "one",
-) -> list[dict]:
-    """Require a matching target and, for cardinality 'one', reject a second match."""
+def _required_rel_trigger(name: str, source_label: str, rel_type: str, target_label: str) -> Trigger:
     missing = f"NOT (node)-[:{rel_type}]->(:{target_label})"
-    existence = _trigger(
+    return _trigger(
         name,
-        description,
+        f"{source_label} requires {rel_type}->{target_label}",
         f"""
         {_affected_sources(source_label, rel_type, "$deletedRelationships")}
         WHERE NOT (node IN $deletedNodes)
@@ -89,12 +112,9 @@ def _required_rel_trigger(
         """,
         f"MATCH (node:{source_label}) WHERE {missing} {_audit('node')}",
     )
-    if cardinality == "one":
-        return [existence, _max_one_trigger(f"{name}_max_one", source_label, rel_type, target_label)]
-    return [existence]
 
 
-def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: str | None = None) -> dict:
+def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: str | None = None) -> Trigger:
     """Limit a relationship to at most one target, of the given label when there is one."""
     target = f"->{target_label}" if target_label else ""
     return _trigger(
@@ -109,7 +129,7 @@ def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: 
     )
 
 
-def _rel_rule(name: str, description: str, rel_type: str, message: str, invalid: str) -> dict:
+def _rel_rule(name: str, description: str, rel_type: str, message: str, invalid: str) -> Trigger:
     """Reject relationships of the type whose `source` and `target` make `invalid` true."""
     return _trigger(
         name,
@@ -125,13 +145,13 @@ def _rel_rule(name: str, description: str, rel_type: str, message: str, invalid:
     )
 
 
-def _rel_target_type_trigger(name: str, description: str, rel_type: str, target_label: str) -> dict:
+def _rel_target_type_trigger(name: str, description: str, rel_type: str, target_label: str) -> Trigger:
     return _rel_rule(
         name, description, rel_type, f"{rel_type} must point to {target_label}", f"NOT target:{target_label}"
     )
 
 
-def _no_self_ref_trigger(rel_type: str, description: str | None = None) -> dict:
+def _no_self_ref_trigger(rel_type: str, description: str | None = None) -> Trigger:
     return _rel_rule(
         f"enforce_no_self_{rel_type.lower()}",
         description or f"{rel_type} must not point to self",
@@ -141,7 +161,66 @@ def _no_self_ref_trigger(rel_type: str, description: str | None = None) -> dict:
     )
 
 
-def _node_rule(name: str, description: str, label: str, message: str, invalid: str) -> dict:
+# Required / at-most-one relationship rules. Kept here (not in neo4j_schema.yaml) so the YAML
+# describes the graph shape without owning APOC enforcement.
+_REQUIRED_RELATIONSHIPS: list[tuple[str, str, str, str, bool]] = [
+    # name, source, rel_type, target, max_one
+    ("enforce_work_has_category", "Work", "HAS_CATEGORY", "Category", True),
+    ("enforce_tag_belongs_to", "Tag", "BELONGS_TO", "Application", True),
+    ("enforce_tag_has_title", "Tag", "HAS_TITLE", "Nomen", True),
+    ("enforce_category_belongs_to", "Category", "BELONGS_TO", "Application", True),
+    ("enforce_category_has_title", "Category", "HAS_TITLE", "Nomen", True),
+    ("enforce_text_has_text_of", "Text", "TEXT_OF", "Work", True),
+    ("enforce_text_has_language", "Text", "HAS_LANGUAGE", "Language", True),
+    ("enforce_text_has_title", "Text", "HAS_TITLE", "Nomen", True),
+    ("enforce_text_has_license", "Text", "HAS_LICENSE", "LicenseType", True),
+    ("enforce_edition_has_type", "Edition", "HAS_TYPE", "EditionType", True),
+    ("enforce_edition_edition_of", "Edition", "EDITION_OF", "Text", True),
+    ("enforce_audio_audio_of", "Audio", "AUDIO_OF", "Work", True),
+    ("enforce_audio_recitation_of", "Audio", "RECITATION_OF", "Text", True),
+    ("enforce_audio_has_language", "Audio", "HAS_LANGUAGE", "Language", True),
+    ("enforce_audio_has_license", "Audio", "HAS_LICENSE", "LicenseType", True),
+    ("enforce_audio_has_contribution", "Audio", "HAS_CONTRIBUTION", "Contribution", False),
+    ("enforce_recording_rendition_of", "Recording", "RENDITION_OF", "Audio", True),
+    ("enforce_cue_cue_of", "Cue", "CUE_OF", "Recording", True),
+    ("enforce_segment_segment_of", "Segment", "SEGMENT_OF", "Segmentation", True),
+    (
+        "enforce_span_span_of",
+        "Span",
+        "SPAN_OF",
+        "Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition",
+        True,
+    ),
+    ("enforce_bibmeta_bibliography_of", "BibliographicMetadata", "BIBLIOGRAPHY_OF", "Edition", True),
+    ("enforce_bibmeta_has_type", "BibliographicMetadata", "HAS_TYPE", "BibliographyType", True),
+    ("enforce_note_note_of", "Note", "NOTE_OF", "Edition", True),
+    ("enforce_note_has_type", "Note", "HAS_TYPE", "NoteType", True),
+    ("enforce_mark_mark_of", "Mark", "MARK_OF", "Edition", True),
+    ("enforce_mark_has_type", "Mark", "HAS_TYPE", "MarkType", True),
+    ("enforce_attribute_attribute_of", "Attribute", "ATTRIBUTE_OF", "Edition", True),
+    ("enforce_attribute_has_type", "Attribute", "HAS_TYPE", "AttributeType", True),
+    ("enforce_pagination_pagination_of", "Pagination", "PAGINATION_OF", "Edition", True),
+    ("enforce_toc_edition", "TableOfContents", "TOC_OF", "Edition", True),
+    ("enforce_toc_section", "TableOfContentsSection", "SECTION_OF", "TableOfContents", True),
+    ("enforce_toc_section_title", "TableOfContentsSection", "HAS_TITLE", "Nomen", True),
+    ("enforce_volume_volume_of", "Volume", "VOLUME_OF", "Pagination", True),
+    ("enforce_page_page_of", "Page", "PAGE_OF", "Volume", True),
+    ("enforce_contribution_by", "Contribution", "BY", "Person|AI", True),
+    ("enforce_contribution_with_role", "Contribution", "WITH_ROLE", "RoleType", True),
+    ("enforce_person_has_name", "Person", "HAS_NAME", "Nomen", True),
+    ("enforce_nomen_has_localization", "Nomen", "HAS_LOCALIZATION", "LocalizedText", False),
+    ("enforce_localizedtext_has_language", "LocalizedText", "HAS_LANGUAGE", "Language", True),
+]
+
+
+def _required_relationship_triggers() -> Iterator[Trigger]:
+    for name, source, rel_type, target, max_one in _REQUIRED_RELATIONSHIPS:
+        yield _required_rel_trigger(name, source, rel_type, target)
+        if max_one:
+            yield _max_one_trigger(f"{name}_max_one", source, rel_type, None if "|" in target else target)
+
+
+def _node_rule(name: str, description: str, label: str, message: str, invalid: str) -> Trigger:
     """Reject nodes of the label for which `invalid`, written over `node`, is true."""
     return _trigger(
         name,
@@ -155,50 +234,7 @@ def _node_rule(name: str, description: str, label: str, message: str, invalid: s
     )
 
 
-TRIGGERS: list[dict] = []
-
-# Required outgoing relationships; the last field controls maximum cardinality.
-for name, source, relationship, target, cardinality in [
-    ("enforce_work_has_category", "Work", "HAS_CATEGORY", "Category", "one"),
-    ("enforce_tag_belongs_to", "Tag", "BELONGS_TO", "Application", "one"),
-    ("enforce_tag_has_title", "Tag", "HAS_TITLE", "Nomen", "one"),
-    ("enforce_category_belongs_to", "Category", "BELONGS_TO", "Application", "one"),
-    ("enforce_category_has_title", "Category", "HAS_TITLE", "Nomen", "one"),
-    ("enforce_text_has_text_of", "Text", "TEXT_OF", "Work", "one"),
-    ("enforce_text_has_language", "Text", "HAS_LANGUAGE", "Language", "one"),
-    ("enforce_text_has_title", "Text", "HAS_TITLE", "Nomen", "one"),
-    ("enforce_text_has_license", "Text", "HAS_LICENSE", "LicenseType", "one"),
-    ("enforce_edition_has_type", "Edition", "HAS_TYPE", "EditionType", "one"),
-    ("enforce_edition_edition_of", "Edition", "EDITION_OF", "Text", "one"),
-    ("enforce_segment_segment_of", "Segment", "SEGMENT_OF", "Segmentation", "one"),
-    ("enforce_bibmeta_bibliography_of", "BibliographicMetadata", "BIBLIOGRAPHY_OF", "Edition", "one"),
-    ("enforce_bibmeta_has_type", "BibliographicMetadata", "HAS_TYPE", "BibliographyType", "one"),
-    ("enforce_note_note_of", "Note", "NOTE_OF", "Edition", "one"),
-    ("enforce_note_has_type", "Note", "HAS_TYPE", "NoteType", "one"),
-    ("enforce_mark_mark_of", "Mark", "MARK_OF", "Edition", "one"),
-    ("enforce_mark_has_type", "Mark", "HAS_TYPE", "MarkType", "one"),
-    ("enforce_attribute_attribute_of", "Attribute", "ATTRIBUTE_OF", "Edition", "one"),
-    ("enforce_attribute_has_type", "Attribute", "HAS_TYPE", "AttributeType", "one"),
-    ("enforce_pagination_pagination_of", "Pagination", "PAGINATION_OF", "Edition", "one"),
-    ("enforce_volume_volume_of", "Volume", "VOLUME_OF", "Pagination", "one"),
-    ("enforce_page_page_of", "Page", "PAGE_OF", "Volume", "one"),
-    ("enforce_audio_audio_of", "Audio", "AUDIO_OF", "Work", "one"),
-    ("enforce_audio_recitation_of", "Audio", "RECITATION_OF", "Text", "one"),
-    ("enforce_audio_has_language", "Audio", "HAS_LANGUAGE", "Language", "one"),
-    ("enforce_audio_has_license", "Audio", "HAS_LICENSE", "LicenseType", "one"),
-    ("enforce_audio_has_contribution", "Audio", "HAS_CONTRIBUTION", "Contribution", "many"),
-    ("enforce_recording_rendition_of", "Recording", "RENDITION_OF", "Audio", "one"),
-    ("enforce_contribution_with_role", "Contribution", "WITH_ROLE", "RoleType", "one"),
-    ("enforce_person_has_name", "Person", "HAS_NAME", "Nomen", "one"),
-    ("enforce_nomen_has_localization", "Nomen", "HAS_LOCALIZATION", "LocalizedText", "many"),
-    ("enforce_localizedtext_has_language", "LocalizedText", "HAS_LANGUAGE", "Language", "one"),
-]:
-    TRIGGERS.extend(
-        _required_rel_trigger(
-            name, f"{source} requires {relationship}->{target}", source, relationship, target, cardinality=cardinality
-        )
-    )
-
+TRIGGERS: list[Trigger] = list(_required_relationship_triggers())
 
 # Text — target type enforcement for optional typed rels
 TRIGGERS.extend(
@@ -294,19 +330,6 @@ TRIGGERS.append(
         """,
     )
 )
-
-TRIGGERS.extend(
-    _required_rel_trigger(
-        "enforce_span_span_of",
-        "Every Span must have SPAN_OF to one of: Segment, BibliographicMetadata, Note, Mark, Attribute, Page, "
-        "TableOfContentsSection, Cue, Edition",
-        "Span",
-        "SPAN_OF",
-        "Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition",
-        cardinality="many",
-    )
-)
-TRIGGERS.append(_max_one_trigger("enforce_span_span_of_max_one", "Span", "SPAN_OF"))
 
 
 _AUDIO_ROLE_LIST = "[" + ", ".join(f"'{role}'" for role in AUDIO_ROLES) + "]"
@@ -453,9 +476,6 @@ TRIGGERS.append(
     )
 )
 
-TRIGGERS.extend(
-    _required_rel_trigger("enforce_cue_cue_of", "Every Cue must have CUE_OF->Recording", "Cue", "CUE_OF", "Recording")
-)
 TRIGGERS.append(
     _node_rule(
         "enforce_cue_start_ms_lt_end_ms",
@@ -466,17 +486,6 @@ TRIGGERS.append(
     )
 )
 
-TRIGGERS.extend(
-    _required_rel_trigger(
-        "enforce_contribution_by",
-        "Every Contribution must have BY->Person or BY->AI",
-        "Contribution",
-        "BY",
-        "Person|AI",
-        cardinality="many",
-    )
-)
-TRIGGERS.append(_max_one_trigger("enforce_contribution_by_max_one", "Contribution", "BY"))
 
 TRIGGERS.append(
     _node_rule(
@@ -566,13 +575,6 @@ TRIGGERS.append(
 )
 
 
-for name, source, relationship, target in [
-    ("enforce_toc_edition", "TableOfContents", "TOC_OF", "Edition"),
-    ("enforce_toc_section", "TableOfContentsSection", "SECTION_OF", "TableOfContents"),
-    ("enforce_toc_section_title", "TableOfContentsSection", "HAS_TITLE", "Nomen"),
-]:
-    TRIGGERS.extend(_required_rel_trigger(name, f"{source} requires {relationship}", source, relationship, target))
-
 TRIGGERS.append(_no_self_ref_trigger("SUBSECTION_OF", "Sections cannot parent themselves"))
 TRIGGERS.append(
     _rel_target_type_trigger("enforce_has_parent_target", "HAS_PARENT targets Category", "HAS_PARENT", "Category")
@@ -614,40 +616,6 @@ TRIGGERS.append(
     )
 )
 
-# APOC supplies changed properties and labels separately from created elements. Bind the surviving
-# created or changed elements once per statement, so updates use the same rules as creation.
-# Hash-set subtraction also dedupes; `IN` filters are quadratic on large changes.
-_CHANGED_RELATIONSHIPS = """
-WITH apoc.coll.subtract($createdRelationships
-    + coll.flatten([key IN keys($assignedRelationshipProperties) |
-        [entry IN $assignedRelationshipProperties[key] | entry.relationship]])
-    + coll.flatten([key IN keys($removedRelationshipProperties) |
-        [entry IN $removedRelationshipProperties[key] | entry.relationship]]),
-    $deletedRelationships) AS changedRelationships
-"""
-_CHANGED_NODES = """
-WITH changedRelationships, apoc.coll.subtract($createdNodes
-    + coll.flatten([key IN keys($assignedNodeProperties) | [entry IN $assignedNodeProperties[key] | entry.node]])
-    + coll.flatten([key IN keys($removedNodeProperties) | [entry IN $removedNodeProperties[key] | entry.node]])
-    + coll.flatten([label IN keys($assignedLabels) | $assignedLabels[label]])
-    + coll.flatten([label IN keys($removedLabels) | $removedLabels[label]
-        + coll.flatten([node IN $removedLabels[label] WHERE NOT node IN $deletedNodes |
-            [(node)--(neighbor) | neighbor]])])
-    + [rel IN changedRelationships + $deletedRelationships | startNode(rel)]
-    + [rel IN changedRelationships + $deletedRelationships | endNode(rel)],
-    $deletedNodes) AS changedNodes
-"""
-
-
-def bind_changes(query: str) -> str:
-    """Prefix a trigger query with the changedRelationships and changedNodes it reads."""
-    changed_nodes = _CHANGED_NODES if "changedNodes" in query else ""
-    return _CHANGED_RELATIONSHIPS + changed_nodes + query
-
-
-for trigger in TRIGGERS:
-    trigger["query"] = bind_changes(trigger["query"])
-
 
 async def install_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -> None:
     """Upsert TRIGGERS by name, then drop stale ones (APOC commits each call separately, so never drop all first)."""
@@ -655,16 +623,15 @@ async def install_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -
     async def write(tx: AsyncManagedTransaction) -> None:
         for trigger in TRIGGERS:
             await tx.run(
-                "CALL apoc.trigger.install($database, $name, $statement, {phase: $phase})",
+                "CALL apoc.trigger.install($database, $name, $statement, {phase: 'before'})",
                 database=database,
-                name=trigger["name"],
-                statement=f"CYPHER 25 {trigger['query']}",
-                phase=trigger["phase"],
+                name=trigger.name,
+                statement=f"CYPHER 25 {trigger.query}",
             )
-            logger.info("Installed trigger: %s — %s", trigger["name"], trigger["description"])
+            logger.info("Installed trigger: %s — %s", trigger.name, trigger.description)
 
         installed = await tx.run("CALL apoc.trigger.show($database) YIELD name", database=database)
-        for name in {record["name"] async for record in installed} - {trigger["name"] for trigger in TRIGGERS}:
+        for name in {record["name"] async for record in installed} - {trigger.name for trigger in TRIGGERS}:
             await tx.run("CALL apoc.trigger.drop($database, $name)", database=database, name=name)
 
     async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
@@ -683,7 +650,7 @@ async def wait_for_triggers(
     Live triggers must match the installed ones by name and statement, so a trigger whose statement changed
     under the same name also counts as pending.
     """
-    names = {trigger["name"] for trigger in TRIGGERS}
+    names = {trigger.name for trigger in TRIGGERS}
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_seconds
     while True:
@@ -714,19 +681,16 @@ async def audit_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -> 
     async def read(tx: AsyncManagedTransaction) -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
         for trigger in TRIGGERS:
-            if "audit" not in trigger:
-                continue
-
-            result = await tx.run(trigger["audit"])
+            result = await tx.run(cast(LiteralString, trigger.audit))
             records = await result.data()
             violating_ids = [str(r["violating_id"]) for r in records]
             if violating_ids:
-                found[trigger["name"]] = violating_ids
+                found[trigger.name] = violating_ids
                 preview = ", ".join(violating_ids[:5])
                 suffix = "…" if len(violating_ids) > 5 else ""
                 logger.warning(
                     "Audit violation [%s]: %d nodes — %s%s",
-                    trigger["name"],
+                    trigger.name,
                     len(violating_ids),
                     preview,
                     suffix,

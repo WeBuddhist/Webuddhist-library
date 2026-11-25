@@ -13,7 +13,7 @@ openpecha-backend/
 ├── tests/                  # Test suite
 ├── requirements.txt        # Production dependencies
 ├── requirements_dev.txt    # Development dependencies
-└── gunicorn.conf.py        # Production server config
+└── openpecha-api.service   # systemd unit (uvicorn --workers)
 ```
 
 ## Setup
@@ -75,7 +75,7 @@ export NEO4J_URI=""
 ### Production
 
 ```bash
-gunicorn main:app -c gunicorn.conf.py
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
 ## Running Tests
@@ -137,6 +137,10 @@ previous tag. `/__/health` and Swagger show the deployed version (`APP_VERSION`)
 Deploy checks out the release and installs its Python dependencies. It installs Neo4j constraints
 and indexes followed by triggers, restarts the API, and checks `/__/health`. For releases that
 need a data migration or search rebuild, follow the [maintenance runbook](docs/design/cutover.md).
+
+On hosts still using Gunicorn, update the installed unit's `ExecStart` to the Uvicorn command
+in [openpecha-api.service](openpecha-api.service), using that environment's virtualenv path.
+Run `sudo systemctl daemon-reload` before deploying the revision that removes `gunicorn.conf.py`.
 
 Each GitHub environment sets `EC2_INSTANCE_ID`, `APP_DIR`, `SERVICE_NAME`, the Neo4j, S3 and
 OpenSearch values, `ENVIRONMENT`, and optionally `ROOT_PATH` (for example `/api`, once nginx

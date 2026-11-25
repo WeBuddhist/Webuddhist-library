@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Path, status
 
+from database.annotation import bibliographic, mark, note, pagination, table_of_contents
 from dependencies import DatabaseDep
 from models.annotation import (
     BibliographicMetadataOutput,
@@ -14,7 +15,6 @@ from models.annotation import (
 from models.enums import NoteType
 
 router = APIRouter(prefix="/v2", tags=["Annotations"])
-
 PaginationId = Annotated[str, Path(description="The ID of the pagination")]
 TableOfContentsId = Annotated[str, Path(description="The ID of the table of contents")]
 BibliographicId = Annotated[str, Path(description="The ID of the bibliographic annotation")]
@@ -27,7 +27,7 @@ YigchungId = Annotated[str, Path(description="The ID of the yigchung annotation"
     "/paginations/{pagination_id}", summary="Get pagination", description="Retrieve a pagination annotation by ID."
 )
 async def get_pagination(pagination_id: PaginationId, db: DatabaseDep) -> PaginationOutput:
-    return await db.annotation.pagination.get(pagination_id)
+    return await pagination.get(db, pagination_id)
 
 
 @router.delete(
@@ -37,7 +37,7 @@ async def get_pagination(pagination_id: PaginationId, db: DatabaseDep) -> Pagina
     description="Delete a pagination annotation.",
 )
 async def delete_pagination(pagination_id: PaginationId, db: DatabaseDep) -> None:
-    await db.annotation.pagination.delete(pagination_id)
+    await pagination.delete(db, pagination_id)
 
 
 @router.get(
@@ -47,7 +47,7 @@ async def delete_pagination(pagination_id: PaginationId, db: DatabaseDep) -> Non
     response_model_exclude_none=True,
 )
 async def get_table_of_contents(toc_id: TableOfContentsId, db: DatabaseDep) -> TableOfContentsOutput:
-    return await db.annotation.table_of_contents.get(toc_id)
+    return await table_of_contents.get(db, toc_id)
 
 
 @router.delete(
@@ -57,7 +57,7 @@ async def get_table_of_contents(toc_id: TableOfContentsId, db: DatabaseDep) -> T
     description="Delete a table of contents annotation.",
 )
 async def delete_table_of_contents(toc_id: TableOfContentsId, db: DatabaseDep) -> None:
-    await db.annotation.table_of_contents.delete(toc_id)
+    await table_of_contents.delete(db, toc_id)
 
 
 @router.get(
@@ -66,7 +66,7 @@ async def delete_table_of_contents(toc_id: TableOfContentsId, db: DatabaseDep) -
     description="Retrieve a bibliographic metadata annotation by ID.",
 )
 async def get_bibliographic(bibliographic_id: BibliographicId, db: DatabaseDep) -> BibliographicMetadataOutput:
-    return await db.annotation.bibliographic.get(bibliographic_id)
+    return await bibliographic.get(db, bibliographic_id)
 
 
 @router.delete(
@@ -76,14 +76,14 @@ async def get_bibliographic(bibliographic_id: BibliographicId, db: DatabaseDep) 
     description="Delete a bibliographic metadata annotation.",
 )
 async def delete_bibliographic(bibliographic_id: BibliographicId, db: DatabaseDep) -> None:
-    await db.annotation.bibliographic.delete(bibliographic_id)
+    await bibliographic.delete(db, bibliographic_id)
 
 
 @router.get(
     "/durchens/{durchen_id}", summary="Get durchen annotation", description="Retrieve a durchen annotation by ID."
 )
 async def get_durchen(durchen_id: DurchenId, db: DatabaseDep) -> NoteOutput:
-    return await db.annotation.note.get(durchen_id, NoteType.DURCHEN)
+    return await note.get(db, durchen_id, NoteType.DURCHEN)
 
 
 @router.delete(
@@ -93,14 +93,14 @@ async def get_durchen(durchen_id: DurchenId, db: DatabaseDep) -> NoteOutput:
     description="Delete a durchen note annotation.",
 )
 async def delete_durchen(durchen_id: DurchenId, db: DatabaseDep) -> None:
-    await db.annotation.note.delete(durchen_id, NoteType.DURCHEN)
+    await note.delete(db, durchen_id, NoteType.DURCHEN)
 
 
 @router.get(
     "/footnotes/{footnote_id}", summary="Get footnote annotation", description="Retrieve a footnote annotation by ID."
 )
 async def get_footnote(footnote_id: FootnoteId, db: DatabaseDep) -> FootnoteOutput:
-    return FootnoteOutput.from_note(await db.annotation.note.get(footnote_id, NoteType.FOOTNOTE))
+    return FootnoteOutput.from_note(await note.get(db, footnote_id, NoteType.FOOTNOTE))
 
 
 @router.delete(
@@ -110,7 +110,7 @@ async def get_footnote(footnote_id: FootnoteId, db: DatabaseDep) -> FootnoteOutp
     description="Delete a footnote annotation.",
 )
 async def delete_footnote(footnote_id: FootnoteId, db: DatabaseDep) -> None:
-    await db.annotation.note.delete(footnote_id, NoteType.FOOTNOTE)
+    await note.delete(db, footnote_id, NoteType.FOOTNOTE)
 
 
 @router.get(
@@ -119,7 +119,7 @@ async def delete_footnote(footnote_id: FootnoteId, db: DatabaseDep) -> None:
     description="Retrieve a yigchung mark annotation by ID.",
 )
 async def get_yigchung(yigchung_id: YigchungId, db: DatabaseDep) -> MarkOutput:
-    return await db.annotation.mark.get(yigchung_id)
+    return await mark.get(db, yigchung_id)
 
 
 @router.delete(
@@ -129,4 +129,4 @@ async def get_yigchung(yigchung_id: YigchungId, db: DatabaseDep) -> MarkOutput:
     description="Delete a yigchung mark annotation.",
 )
 async def delete_yigchung(yigchung_id: YigchungId, db: DatabaseDep) -> None:
-    await db.annotation.mark.delete(yigchung_id)
+    await mark.delete(db, yigchung_id)

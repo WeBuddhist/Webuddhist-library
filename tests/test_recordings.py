@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for recording endpoints using a real Neo4j test instance.
 
@@ -14,14 +13,18 @@ Tests endpoints:
 - DELETE /v2/recordings/{recording_id}/edition
 - GET/PUT/DELETE /v2/recordings/{recording_id}/cues
 """
-
 import asyncio
 import json
 import logging
 
 import pytest
+from neo4j.exceptions import ClientError
+
+from database import audio as audio_database
+from database import edition, person, text
+from database import recording as recording_database
 from database.content_state import read_state
-from exceptions import DataConflictError, DataNotFoundError, DataValidationError
+from errors import DataConflictError, DataNotFoundError, DataValidationError
 from identifier import generate_id
 from models.base import LocalizedString
 from models.contribution import PersonContributionInput
@@ -30,7 +33,6 @@ from models.enums import AudioFormat, ContributorRole
 from models.person import PersonInput
 from models.recording import RecordingCue, RecordingInput
 from models.text import TextInput
-from neo4j.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
@@ -45,21 +47,25 @@ class RecordingHelpers:
     """Setup helpers shared by the recording test classes."""
 
     async def _create_person(self, db, name: str = "Test Singer") -> str:
-        return await db.person.create(
+        return await person.create(
+            db,
             PersonInput(
                 name=LocalizedString({"en": name, "bo": "གསུང་མཁན།"}),
                 bdrc=f"P{generate_id()[:8]}",
-            )
+            ),
         )
 
     async def _create_text(self, db, person_id: str) -> str:
-        return await db.text.create(
+        return await text.create(
+            db,
             TextInput(
                 category_id="category",
-                title=LocalizedString({"en": f"Recording host text {generate_id()[:6]}", "bo": f"བརྟག་དཔྱད། {generate_id()[:6]}"}),
+                title=LocalizedString(
+                    {"en": f"Recording host text {generate_id()[:6]}", "bo": f"བརྟག་དཔྱད། {generate_id()[:6]}"}
+                ),
                 language="bo",
                 contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
-            )
+            ),
         )
 
     async def _create_edition(self, client, text_id: str, content: str = "Sample text content") -> str:
@@ -144,7 +150,7 @@ class TestRecordingsEndpoints(RecordingHelpers):
             "size_bytes": len(AUDIO_BYTES),
         }
         key = f"recordings/{recording_id}.mp3"
-        assert await test_database.recording.get_storage_location(recording_id) == key
+        assert await recording_database.get_storage_location(test_database, recording_id) == key
         assert mock_storage._storage[key] == AUDIO_BYTES
 
     async def test_create_recording_without_an_edition(self, client, test_database):
@@ -573,8 +579,7 @@ class TestRecordingConsistency(RecordingHelpers):
     CONTENT = "0123456789"
 
     async def _revision(self, test_database, edition_id: str) -> int:
-        async with test_database.get_session() as session:
-            return (await session.execute_read(read_state, edition_id)).revision
+        return (await test_database.read(read_state, edition_id)).revision
 
     async def test_deleting_recording_advances_the_followed_edition(self, client, test_database):
         edition_id, audio_id = await self._setup_audio(client, test_database, self.CONTENT)
@@ -609,19 +614,19 @@ class TestRecordingConsistency(RecordingHelpers):
         cue = RecordingCue.model_validate(_cue(0, 4, 0, 1200))
 
         cues, deleted = await asyncio.gather(
-            test_database.recording.replace_cues(recording_id, [cue]),
-            test_database.edition.delete(edition_id),
+            recording_database.replace_cues(test_database, recording_id, [cue]),
+            edition.delete(test_database, edition_id),
             return_exceptions=True,
         )
 
         # Either the cues land first and protect the edition, or the edition goes first and cues are refused.
         if cues is None:
             assert isinstance(deleted, DataConflictError), deleted
-            assert await test_database.recording.get_cues(recording_id) == [cue]
+            assert await recording_database.get_cues(test_database, recording_id) == [cue]
         else:
             assert isinstance(cues, DataValidationError), cues
             assert deleted is None
-            assert (await test_database.recording.get(recording_id)).edition_id is None
+            assert (await recording_database.get(test_database, recording_id)).edition_id is None
 
     @pytest.mark.parametrize("round_", range(3))
     async def test_recording_upload_and_audio_delete_serialize(self, client, test_database, round_):
@@ -629,7 +634,8 @@ class TestRecordingConsistency(RecordingHelpers):
         recording_id = generate_id()
 
         added, deleted = await asyncio.gather(
-            test_database.recording.add(
+            recording_database.add(
+                test_database,
                 audio_id,
                 RecordingInput(),
                 recording_id,
@@ -637,7 +643,7 @@ class TestRecordingConsistency(RecordingHelpers):
                 audio_format=AudioFormat.MP3,
                 size_bytes=5,
             ),
-            test_database.audio.delete(audio_id),
+            audio_database.delete(test_database, audio_id),
             return_exceptions=True,
         )
 

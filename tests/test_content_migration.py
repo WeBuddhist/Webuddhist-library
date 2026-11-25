@@ -1,9 +1,11 @@
 import pytest
 
+from database import edition as edition_database
+from database import text as text_database
 from database.content_migration import migrate_content
 from database.content_state import read_state
 from database.repository import iter_id_batches
-from exceptions import DataNotFoundError, DataValidationError
+from errors import DataNotFoundError, DataValidationError
 from identifier import generate_id
 from models.edition import EditionInput
 from models.text import TextInput
@@ -19,9 +21,9 @@ async def test_maintenance_batches_visit_every_id_once(test_database):
 
 
 async def legacy(db, storage, content="legacy བོད་"):
-    text = await db.text.create(TextInput(title={"en": "Migration"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "Migration"}, language="en", category_id="category"))
     edition = generate_id()
-    await db.edition.create(EditionInput(type="critical"), edition, text, len(content))
+    await edition_database.create(db, EditionInput(type="critical"), edition, text, len(content))
     await storage.store_base_text(text, edition, content)
     async with db.get_session() as session:
         await (await session.run("MATCH (e:Edition {id: $id}) REMOVE e.content_key, e.revision, e.content_length", id=edition)).consume()
@@ -32,13 +34,11 @@ async def test_content_migration_audits_then_resumes_without_changing_ids(test_d
     db, storage = test_database, mock_storage
     edition = await legacy(db, storage)
     assert await migrate_content(db, storage) == 1
-    async with db.get_session() as session:
-        with pytest.raises(DataValidationError, match="migration"):
-            await session.execute_read(read_state, edition)
+    with pytest.raises(DataValidationError, match="migration"):
+        await db.read(read_state, edition)
     assert await migrate_content(db, storage, apply=True) == 1
     assert await migrate_content(db, storage, apply=True) == 1
-    async with db.get_session() as session:
-        state = await session.execute_read(read_state, edition)
+    state = await db.read(read_state, edition)
     assert state.object_key.startswith("base_texts/")
     assert len(storage._storage) == 1  # Migration reuses the existing object.
     assert state.length == len("legacy བོད་") and state.revision == 0
@@ -77,5 +77,4 @@ async def test_content_migration_completes_partial_legacy_state(test_database, m
             SET e.content_key = 'base_texts/' + t.id + '/' + e.id + '.txt', e.revision = 0
         """, id=edition)).consume()
     assert await migrate_content(db, storage, apply=True) == 1
-    async with db.get_session() as session:
-        assert (await session.execute_read(read_state, edition)).length == len("legacy བོད་")
+    assert (await db.read(read_state, edition)).length == len("legacy བོད་")

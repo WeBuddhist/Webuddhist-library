@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for segment-related endpoints.
 
@@ -9,11 +8,13 @@ Tests endpoints:
 
 Requires Docker for Neo4j testcontainer.
 """
-
 import logging
 
 import pytest
 from neo4j.exceptions import ClientError
+
+from database import person, text
+from database import segment as segment_database
 from identifier import generate_id
 from models.base import LocalizedString
 from models.contribution import PersonContributionInput
@@ -21,6 +22,7 @@ from models.edition import EditionType
 from models.enums import ContributorRole
 from models.person import PersonInput
 from models.text import TextInput
+from tests.helpers import find_by_span
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +33,12 @@ class SegmentTestBase:
     """Shared helpers for segment integration tests."""
 
     async def _create_person(self, db) -> str:
-        return await db.person.create(
+        return await person.create(
+            db,
             PersonInput(
                 name=LocalizedString({"en": "Test Author", "bo": "སློབ་དཔོན།"}),
                 bdrc="P" + generate_id()[:8],
-            )
+            ),
         )
 
     async def _create_text(self, db, person_id, title=None, language="bo", **kwargs) -> str:
@@ -48,7 +51,7 @@ class SegmentTestBase:
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
             **kwargs,
         )
-        return await db.text.create(text_data)
+        return await text.create(db, text_data)
 
     async def _create_edition(self, client, text_id, content="Sample text content", edition_type=EditionType.DIPLOMATIC):
         edition_data = {
@@ -917,24 +920,24 @@ class TestSegmentsRelatedEdgeCases(SegmentTestBase):
         seg_ids = await self._get_segment_ids_from_segmentation(client, edition_id)
         assert len(seg_ids) == 4
 
-        found = await test_database.segment.find_by_span(edition_id, start=2, end=6)
+        found = await find_by_span(test_database, edition_id, start=2, end=6)
         assert len(found) == 2, "Span [2,6) should overlap segments [0,4) and [4,8)"
         assert seg_ids[0] in found
         assert seg_ids[1] in found
 
-        found2 = await test_database.segment.find_by_span(edition_id, start=4, end=8)
+        found2 = await find_by_span(test_database, edition_id, start=4, end=8)
         assert len(found2) == 1, "Span [4,8) should only overlap segment [4,8)"
         assert seg_ids[1] in found2
 
-        found3 = await test_database.segment.find_by_span(edition_id, start=0, end=16)
+        found3 = await find_by_span(test_database, edition_id, start=0, end=16)
         assert len(found3) == 4, "Span [0,16) should overlap all segments"
 
-        found4 = await test_database.segment.find_by_span(edition_id, start=16, end=20)
+        found4 = await find_by_span(test_database, edition_id, start=16, end=20)
         assert len(found4) == 0, "Span [16,20) should overlap no segments"
 
     async def test_segment_get_with_broken_graph(self, client, test_database):
         """Segment node exists but missing path to Edition/Text -> DataNotFoundError."""
-        from exceptions import DataNotFoundError
+        from errors import DataNotFoundError
 
         async with test_database.get_session() as session:
             await session.run("""
@@ -944,7 +947,7 @@ class TestSegmentsRelatedEdgeCases(SegmentTestBase):
             """)
 
         with pytest.raises(DataNotFoundError):
-            await test_database.segment.get("orphan_segment")
+            await segment_database.get(test_database, "orphan_segment")
 
     async def test_segment_get_with_inverted_spans_excluded(self, client, test_database):
         """Inverted spans are rejected by installed Neo4j triggers."""
@@ -984,7 +987,7 @@ class TestFindBySpanBoundaries(SegmentTestBase):
         edition_id, seg_ids = await self._setup_edition_with_segments(
             client, test_database, [(0, 10), (10, 20)]
         )
-        found = await test_database.segment.find_by_span(edition_id, 0, 10)
+        found = await find_by_span(test_database, edition_id, 0, 10)
         assert found == [seg_ids[0]]
 
     async def test_span_inside_segment(self, client, test_database):
@@ -992,7 +995,7 @@ class TestFindBySpanBoundaries(SegmentTestBase):
         edition_id, seg_ids = await self._setup_edition_with_segments(
             client, test_database, [(0, 20)]
         )
-        found = await test_database.segment.find_by_span(edition_id, 5, 15)
+        found = await find_by_span(test_database, edition_id, 5, 15)
         assert found == [seg_ids[0]]
 
     async def test_span_covers_multiple_segments(self, client, test_database):
@@ -1000,7 +1003,7 @@ class TestFindBySpanBoundaries(SegmentTestBase):
         edition_id, seg_ids = await self._setup_edition_with_segments(
             client, test_database, [(0, 5), (5, 10), (10, 15)]
         )
-        found = await test_database.segment.find_by_span(edition_id, 0, 15)
+        found = await find_by_span(test_database, edition_id, 0, 15)
         assert set(found) == set(seg_ids)
 
     async def test_span_overlaps_only_by_one_char(self, client, test_database):
@@ -1008,7 +1011,7 @@ class TestFindBySpanBoundaries(SegmentTestBase):
         edition_id, seg_ids = await self._setup_edition_with_segments(
             client, test_database, [(0, 10), (10, 20)]
         )
-        found = await test_database.segment.find_by_span(edition_id, 9, 11)
+        found = await find_by_span(test_database, edition_id, 9, 11)
         assert set(found) == {seg_ids[0], seg_ids[1]}
 
     async def test_span_before_all_segments(self, client, test_database):
@@ -1016,7 +1019,7 @@ class TestFindBySpanBoundaries(SegmentTestBase):
         edition_id, seg_ids = await self._setup_edition_with_segments(
             client, test_database, [(5, 10), (10, 15)]
         )
-        found = await test_database.segment.find_by_span(edition_id, 0, 5)
+        found = await find_by_span(test_database, edition_id, 0, 5)
         assert found == []
 
     async def test_span_after_all_segments(self, client, test_database):
@@ -1024,7 +1027,7 @@ class TestFindBySpanBoundaries(SegmentTestBase):
         edition_id, seg_ids = await self._setup_edition_with_segments(
             client, test_database, [(0, 5), (5, 10)]
         )
-        found = await test_database.segment.find_by_span(edition_id, 10, 20)
+        found = await find_by_span(test_database, edition_id, 10, 20)
         assert found == []
 
     async def test_wrong_edition_returns_empty(self, client, test_database):
@@ -1032,5 +1035,5 @@ class TestFindBySpanBoundaries(SegmentTestBase):
         person_id = await self._create_person(test_database)
         text_id = await self._create_text(test_database, person_id)
         edition_id = await self._create_edition(client, text_id, "Hello")
-        found = await test_database.segment.find_by_span(edition_id, 0, 5)
+        found = await find_by_span(test_database, edition_id, 0, 5)
         assert found == []

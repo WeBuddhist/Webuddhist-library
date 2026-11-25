@@ -4,25 +4,22 @@ from typing import Annotated
 from fastapi import Depends, Header, Request, Security
 from fastapi.security import APIKeyHeader
 
-from catalog_search import CatalogSearchService
-from content_search import ContentSearchService
-from database import Database
-from exceptions import DataNotFoundError, ForbiddenError, ServiceUnavailableError, UnauthorizedError
+from database import Database, application
+from database import api_key as api_key_database
+from errors import DataNotFoundError, ForbiddenError, ServiceUnavailableError, UnauthorizedError
+from search.catalog import CatalogSearchService
+from search.content import ContentSearchService
 from storage import Storage
 
 logger = logging.getLogger(__name__)
-
 API_KEY_HEADER = "X-API-Key"
 APPLICATION_HEADER = "X-Application"
-
 api_key_header = APIKeyHeader(name=API_KEY_HEADER, auto_error=False)
-
 RequiredAppHeader = Annotated[str, Header(alias="X-Application")]
 
 
 def get_optional_application(
-    request: Request,
-    x_application: Annotated[str | None, Header(alias="X-Application")] = None,
+    request: Request, x_application: Annotated[str | None, Header(alias="X-Application")] = None
 ) -> str | None:
     """The X-Application header, or a bound key's own application when the header is left out.
 
@@ -53,7 +50,7 @@ StorageDep = Annotated[Storage, Depends(get_storage)]
 
 async def get_application(db: DatabaseDep, x_application: RequiredAppHeader) -> str:
     """The X-Application header, once the application it names is known to exist."""
-    if not await db.application.exists(x_application):
+    if not await application.exists(db, x_application):
         raise DataNotFoundError(f"Application '{x_application}' not found")
     return x_application
 
@@ -77,46 +74,29 @@ def get_catalog_search(request: Request) -> CatalogSearchService | None:
 CatalogSearchDep = Annotated[CatalogSearchService | None, Depends(get_catalog_search)]
 
 
-async def get_api_key(
-    request: Request,
-    x_api_key: str | None = Security(api_key_header),
-) -> str:
+async def get_api_key(request: Request, x_api_key: str | None = Security(api_key_header)) -> str:
     """
     Validate the API key from the request header.
     Returns the validated API key.
     Raises UnauthorizedError if the key is missing or invalid.
-
-    Every environment checks the key, dev included: they are all public. Only the test suite's
-    app (create_app(testing=True)) skips the check.
     """
-    if request.app.state.testing:
-        return "test-api-key"
-
     if not x_api_key:
         logger.warning("API request without API key from %s", request.client.host if request.client else "unknown")
         raise UnauthorizedError(f"Missing required header: {API_KEY_HEADER}")
-
     db = request.app.state.db
-    result = await db.api_key.validate_key(x_api_key)
+    result = await api_key_database.validate_key(db, x_api_key)
     if result is None:
         logger.warning("Invalid API key attempt from %s", request.client.host if request.client else "unknown")
         raise UnauthorizedError("Invalid API key")
-
     request.state.api_key_info = result
-
-    # A bound key already names its application, so a missing X-Application is accepted
-    # (get_optional_application then scopes the request to it); a different one is rejected.
     bound_application_id = result.get("bound_application_id")
     if bound_application_id is not None:
         x_application = request.headers.get(APPLICATION_HEADER)
         if x_application is not None and x_application != bound_application_id:
             logger.warning(
-                "API key application mismatch: key bound to %s, request for %s",
-                bound_application_id,
-                x_application,
+                "API key application mismatch: key bound to %s, request for %s", bound_application_id, x_application
             )
             raise UnauthorizedError("API key not authorized for this application")
-
     return x_api_key
 
 

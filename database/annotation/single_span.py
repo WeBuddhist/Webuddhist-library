@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import touch_edition
+from database.repository import create_id
 from identifier import generate_id
 
 if TYPE_CHECKING:
@@ -46,17 +47,15 @@ async def create_single_span_annotation(
 ) -> str:
     state = await touch_edition(tx, edition_id)
     state.validate_span(annotation.max_end)
-    result = await tx.run(
+    return await create_id(
+        tx,
         query,
-        parameters={
-            "edition_id": edition_id,
-            "annotation_id": generate_id(),
-            "span_start": annotation.span.start,
-            "span_end": annotation.span.end,
-            "metadata_id": generate_id() if annotation.metadata is not None else None,
-            "metadata_name": annotation.metadata.name if annotation.metadata is not None else None,
-            **properties,
-        },
+        "id",
+        edition_id=edition_id,
+        annotation_id=generate_id(),
+        span_start=annotation.span.start,
+        span_end=annotation.span.end,
+        metadata_id=generate_id() if annotation.metadata is not None else None,
+        metadata_name=annotation.metadata.name if annotation.metadata is not None else None,
+        **properties,
     )
-    record = await result.single(strict=True)
-    return str(record["id"])

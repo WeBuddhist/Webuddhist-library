@@ -1,6 +1,6 @@
-# pylint: disable=redefined-outer-name
 import pytest
 
+from database import edition, person, text
 from identifier import generate_id
 from models.annotation import Page, PaginationInput, Span, Volume
 from models.base import LocalizedString
@@ -17,7 +17,7 @@ def test_person_data() -> PersonInput:
 
 
 async def _create_test_person(db, person_data: PersonInput) -> str:
-    return await db.person.create(person_data)
+    return await person.create(db, person_data)
 
 
 async def _create_test_text(db, person_id: str) -> str:
@@ -27,7 +27,7 @@ async def _create_test_text(db, person_id: str) -> str:
         language="bo",
         contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
     )
-    return await db.text.create(text_data)
+    return await text.create(db, text_data)
 
 
 async def _create_test_edition(db, text_id: str) -> str:
@@ -39,7 +39,7 @@ async def _create_test_edition(db, text_id: str) -> str:
         volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=1)])])]
     )
     # Large enough for the section spans used across these tests; no base text is stored.
-    await db.edition.create(edition_data, edition_id, text_id, content_length=1000, pagination=pagination)
+    await edition.create(db, edition_data, edition_id, text_id, content_length=1000, pagination=pagination)
     return edition_id
 
 
@@ -335,7 +335,7 @@ class TestTableOfContents:
         assert post_response.status_code == 201, post_response.json()
         toc_id = post_response.json()["id"]
 
-        await test_database.edition.delete(edition_id)
+        await edition.delete(test_database, edition_id)
 
         assert (await client.get(f"/v2/table-of-contents/{toc_id}")).status_code == 404
         assert (

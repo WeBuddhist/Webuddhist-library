@@ -18,7 +18,7 @@ Local FastAPI app: http://127.0.0.1:8000
 
 ## Authentication
 
-Most routes require `X-API-Key`, in every environment (dev, testing and production). Ask for a key for the environment you use. A local run checks keys too; create one in your local database with `python scripts/api_key.py create --name "Local" --email "you@example.com"`.
+Most routes require `X-API-Key`, in every environment (dev, testing and production). Ask for a key for the environment you use. A local run checks keys too; create one in your local database with `python -m scripts.api_key create --name "Local" --email "you@example.com"`.
 
 Application-scoped routes also require or accept `X-Application`:
 

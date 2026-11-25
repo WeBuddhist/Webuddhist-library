@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for audio endpoints using a real Neo4j test instance.
 
@@ -7,15 +6,16 @@ Tests endpoints:
 - GET/PATCH/DELETE /v2/audios/{audio_id}
 - DELETE /v2/texts/{text_id} while an audio recites it
 """
-
 import asyncio
 
 import pytest
-from exceptions import DataConflictError, DataNotFoundError
+
+from database import audio as audio_database
+from database import text
+from errors import DataConflictError, DataNotFoundError
 from identifier import generate_id
 from models.audio import AudioInput
 from models.text import TextInput
-
 from tests.test_recordings import RecordingHelpers
 
 
@@ -24,7 +24,7 @@ class TestAudiosEndpoints(RecordingHelpers):
     async def _text(self, db, title: str = "Heart Sutra", language: str = "bo", **links) -> str:
         if "translation_of" not in links:
             links["category_id"] = "category"  # Translations inherit their category.
-        return await db.text.create(TextInput(title={language: f"{title} {generate_id()[:6]}"}, language=language, **links))
+        return await text.create(db, TextInput(title={language: f"{title} {generate_id()[:6]}"}, language=language, **links))
 
     async def _work(self, db, node_id: str, relationship: str) -> str:
         async with db.get_session() as session:
@@ -275,13 +275,13 @@ class TestAudiosEndpoints(RecordingHelpers):
         audio = AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}])
 
         created, deleted = await asyncio.gather(
-            test_database.audio.create(text_id, audio), test_database.text.delete(text_id), return_exceptions=True
+            audio_database.create(test_database, text_id, audio), text.delete(test_database, text_id), return_exceptions=True
         )
 
         # Either the audio exists and protects its text, or the text is gone and the audio was refused.
         if isinstance(created, str):
             assert isinstance(deleted, DataConflictError), deleted
-            assert (await test_database.audio.get(created)).text_id == text_id
+            assert (await audio_database.get(test_database, created)).text_id == text_id
         else:
             assert isinstance(created, DataNotFoundError), created
             assert deleted is None

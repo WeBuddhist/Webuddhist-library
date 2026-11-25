@@ -4,10 +4,9 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-import content_search.service as service_module
-from content_search import ContentSearchService
-from content_search.service import _candidates
-from main import create_app
+import search.content as service_module
+from search.content import ContentSearchService, _candidates
+from tests.helpers import create_unauthenticated_app
 
 
 def hit(text, index=0):
@@ -89,7 +88,7 @@ def test_literal_offsets_count_codepoints_without_normalizing_text():
     ],
 )
 async def test_content_search_rejects_invalid_requests_before_querying(params):
-    app = create_app(testing=True)
+    app = create_unauthenticated_app()
     app.state.db = None
     app.state.content_search = SimpleNamespace(search=AsyncMock(return_value=[]))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -100,7 +99,7 @@ async def test_content_search_rejects_invalid_requests_before_querying(params):
 
 @pytest.mark.parametrize("length,limit", [(1, 1), (10000, 100)])
 async def test_content_search_accepts_boundary_values(length, limit):
-    app = create_app(testing=True)
+    app = create_unauthenticated_app()
     app.state.db = object()
     app.state.content_search = SimpleNamespace(search=AsyncMock(return_value=[]))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -113,7 +112,7 @@ async def test_content_search_accepts_boundary_values(length, limit):
 
 @pytest.mark.parametrize("query", ["", "x" * 10001])
 async def test_service_rejects_query_outside_limits_before_search(query):
-    from exceptions import DataValidationError
+    from errors import DataValidationError
 
     search = ContentSearchService(client=SimpleNamespace(), index_name="test")
     with pytest.raises(DataValidationError, match="Search query must contain 1-10000"):

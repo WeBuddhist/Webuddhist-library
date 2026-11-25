@@ -3,9 +3,9 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 
-from content_search.service import MAX_QUERY_CHARS, ContentSearchService
 from dependencies import DatabaseDep, get_content_search
 from models.content_search import ContentSearchResult
+from search.content import MAX_QUERY_CHARS, ContentSearchService
 
 logger = logging.getLogger(__name__)
 

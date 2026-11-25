@@ -1,9 +1,12 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Path, Query, status
+from fastapi import APIRouter, Body, Query, status
 
 from content_service import edit_content, read_content, sign_edition_content_url
+from database import alignment, edition, recording
+from database.annotation import bibliographic, mark, pagination, segmentation, table_of_contents
+from database.annotation import note as note_database
 from dependencies import DatabaseDep, StorageDep
 from models.alignment import EditionAlignmentOutput
 from models.annotation import (
@@ -29,30 +32,21 @@ from models.enums import NoteType
 from models.recording import RecordingOutput
 from models.requests import AnnotationSegmentsPaginationParams
 from models.responses import IdResponse, PaginatedResponse, PresignedUrlResponse
-from search_updates import SearchUpdatesDep
+from routers.params import EditionId
+from search.updates import SearchUpdatesDep
 
 logger = logging.getLogger(__name__)
-
-EditionId = Annotated[str, Path(description="The ID of the edition")]
-
 router = APIRouter(prefix="/v2/editions", tags=["Editions"])
 
 
-@router.get(
-    "/{edition_id}",
-    summary="Get edition metadata",
-    description="Retrieve metadata for a specific edition.",
-)
+@router.get("/{edition_id}", summary="Get edition metadata", description="Retrieve metadata for a specific edition.")
 async def get_metadata(edition_id: EditionId, db: DatabaseDep) -> EditionOutput:
-    """Fetch metadata for an edition."""
     logger.info("Fetching metadata for edition %s", edition_id)
-    return await db.edition.get(edition_id=edition_id)
+    return await edition.get(db, edition_id=edition_id)
 
 
 @router.get(
-    "/{edition_id}/content",
-    summary="Get edition content",
-    description="Retrieve the base text content of an edition.",
+    "/{edition_id}/content", summary="Get edition content", description="Retrieve the base text content of an edition."
 )
 async def get_content(
     edition_id: EditionId,
@@ -61,7 +55,6 @@ async def get_content(
     span_start: Annotated[int | None, Query(description="Start position for text slice")] = None,
     span_end: Annotated[int | None, Query(description="End position for text slice")] = None,
 ) -> str:
-    """Fetch base text content for an edition."""
     return await read_content(db, storage, edition_id, span_start=span_start, span_end=span_end)
 
 
@@ -70,12 +63,7 @@ async def get_content(
     summary="Get edition content URL",
     description="Generate a short-lived presigned URL for downloading the full base text directly from storage.",
 )
-async def get_content_url(
-    edition_id: EditionId,
-    db: DatabaseDep,
-    storage: StorageDep,
-) -> PresignedUrlResponse:
-    """Generate a direct download URL for an edition's full base text."""
+async def get_content_url(edition_id: EditionId, db: DatabaseDep, storage: StorageDep) -> PresignedUrlResponse:
     url, expires_at = await sign_edition_content_url(db, storage, edition_id)
     return PresignedUrlResponse(url=url, expires_at=expires_at)
 
@@ -87,7 +75,7 @@ async def get_content_url(
     response_model_exclude_none=True,
 )
 async def get_segmentation_annotation(edition_id: EditionId, db: DatabaseDep) -> SegmentationOutput:
-    return await db.annotation.segmentation.get_by_edition(edition_id)
+    return await segmentation.get_by_edition(db, edition_id)
 
 
 @router.post(
@@ -97,13 +85,9 @@ async def get_segmentation_annotation(edition_id: EditionId, db: DatabaseDep) ->
     description="Add the edition's segmentation.",
 )
 async def post_segmentation_annotation(
-    search: SearchUpdatesDep,
-    edition_id: EditionId,
-    data: SegmentationInput,
-    db: DatabaseDep,
+    search: SearchUpdatesDep, edition_id: EditionId, data: SegmentationInput, db: DatabaseDep
 ) -> IdResponse:
-    """Add a segmentation annotation to an edition."""
-    annotation_id = await db.annotation.segmentation.add(edition_id, data)
+    annotation_id = await segmentation.add(db, edition_id, data)
     search.schedule("edition", edition_id)
     return IdResponse(id=annotation_id)
 
@@ -115,15 +99,9 @@ async def post_segmentation_annotation(
     response_model_exclude_none=True,
 )
 async def get_segmentation_segments(
-    edition_id: EditionId,
-    params: Annotated[AnnotationSegmentsPaginationParams, Query()],
-    db: DatabaseDep,
+    edition_id: EditionId, params: Annotated[AnnotationSegmentsPaginationParams, Query()], db: DatabaseDep
 ) -> PaginatedResponse[SegmentOutput]:
-    segments = await db.annotation.segmentation.get_segments_by_edition(
-        edition_id,
-        offset=params.offset,
-        limit=params.limit + 1,
-    )
+    segments = await segmentation.get_segments_by_edition(db, edition_id, offset=params.offset, limit=params.limit + 1)
     return PaginatedResponse.from_items(segments, offset=params.offset, limit=params.limit)
 
 
@@ -133,12 +111,8 @@ async def get_segmentation_segments(
     summary="Delete edition segmentation",
     description="Delete the edition's segmentation.",
 )
-async def delete_segmentation_annotation(
-    search: SearchUpdatesDep,
-    edition_id: EditionId,
-    db: DatabaseDep,
-) -> None:
-    await db.annotation.segmentation.delete_by_edition(edition_id)
+async def delete_segmentation_annotation(search: SearchUpdatesDep, edition_id: EditionId, db: DatabaseDep) -> None:
+    await segmentation.delete_by_edition(db, edition_id)
     search.schedule("edition", edition_id)
 
 
@@ -147,11 +121,8 @@ async def delete_segmentation_annotation(
     summary="Get edition alignments",
     description="Retrieve directional alignment contexts that include this edition.",
 )
-async def get_alignment_annotations(
-    edition_id: EditionId,
-    db: DatabaseDep,
-) -> list[EditionAlignmentOutput]:
-    return await db.alignment.get_all_for_edition(edition_id)
+async def get_alignment_annotations(edition_id: EditionId, db: DatabaseDep) -> list[EditionAlignmentOutput]:
+    return await alignment.get_all_for_edition(db, edition_id)
 
 
 @router.get(
@@ -159,11 +130,8 @@ async def get_alignment_annotations(
     summary="Get pagination annotations",
     description="Retrieve pagination annotation for an edition.",
 )
-async def get_pagination_annotation(
-    edition_id: EditionId,
-    db: DatabaseDep,
-) -> PaginationOutput | None:
-    return await db.annotation.pagination.get_all(edition_id)
+async def get_pagination_annotation(edition_id: EditionId, db: DatabaseDep) -> PaginationOutput | None:
+    return await pagination.get_all(db, edition_id)
 
 
 @router.post(
@@ -172,13 +140,8 @@ async def get_pagination_annotation(
     summary="Add pagination annotation",
     description="Add a pagination annotation to an edition.",
 )
-async def post_pagination_annotation(
-    edition_id: EditionId,
-    data: PaginationInput,
-    db: DatabaseDep,
-) -> IdResponse:
-    """Add a pagination annotation to an edition."""
-    return IdResponse(id=await db.annotation.pagination.add(edition_id, data))
+async def post_pagination_annotation(edition_id: EditionId, data: PaginationInput, db: DatabaseDep) -> IdResponse:
+    return IdResponse(id=await pagination.add(db, edition_id, data))
 
 
 @router.get(
@@ -187,11 +150,8 @@ async def post_pagination_annotation(
     description="Retrieve all table of contents annotations for an edition.",
     response_model_exclude_none=True,
 )
-async def get_table_of_contents_annotations(
-    edition_id: EditionId,
-    db: DatabaseDep,
-) -> list[TableOfContentsOutput]:
-    return await db.annotation.table_of_contents.get_all(edition_id)
+async def get_table_of_contents_annotations(edition_id: EditionId, db: DatabaseDep) -> list[TableOfContentsOutput]:
+    return await table_of_contents.get_all(db, edition_id)
 
 
 @router.post(
@@ -201,11 +161,9 @@ async def get_table_of_contents_annotations(
     description="Add a table of contents annotation to an edition.",
 )
 async def post_table_of_contents_annotation(
-    edition_id: EditionId,
-    data: TableOfContentsInput,
-    db: DatabaseDep,
+    edition_id: EditionId, data: TableOfContentsInput, db: DatabaseDep
 ) -> IdResponse:
-    return IdResponse(id=await db.annotation.table_of_contents.add(edition_id, data))
+    return IdResponse(id=await table_of_contents.add(db, edition_id, data))
 
 
 @router.get(
@@ -213,11 +171,8 @@ async def post_table_of_contents_annotation(
     summary="Get bibliographic metadata annotations",
     description="Retrieve all bibliographic metadata annotations for an edition.",
 )
-async def get_bibliographic_annotations(
-    edition_id: EditionId,
-    db: DatabaseDep,
-) -> list[BibliographicMetadataOutput]:
-    return await db.annotation.bibliographic.get_all(edition_id)
+async def get_bibliographic_annotations(edition_id: EditionId, db: DatabaseDep) -> list[BibliographicMetadataOutput]:
+    return await bibliographic.get_all(db, edition_id)
 
 
 @router.post(
@@ -227,11 +182,9 @@ async def get_bibliographic_annotations(
     description="Add bibliographic metadata annotation to an edition.",
 )
 async def post_bibliographic_annotation(
-    edition_id: EditionId,
-    data: BibliographicMetadataInput,
-    db: DatabaseDep,
+    edition_id: EditionId, data: BibliographicMetadataInput, db: DatabaseDep
 ) -> IdResponse:
-    return IdResponse(id=await db.annotation.bibliographic.add(edition_id, data))
+    return IdResponse(id=await bibliographic.add(db, edition_id, data))
 
 
 @router.get(
@@ -240,7 +193,7 @@ async def post_bibliographic_annotation(
     description="Retrieve all durchen annotations for an edition.",
 )
 async def get_durchen_annotations(edition_id: EditionId, db: DatabaseDep) -> list[NoteOutput]:
-    return await db.annotation.note.get_all(edition_id, NoteType.DURCHEN)
+    return await note_database.get_all(db, edition_id, NoteType.DURCHEN)
 
 
 @router.post(
@@ -250,11 +203,9 @@ async def get_durchen_annotations(edition_id: EditionId, db: DatabaseDep) -> lis
     description="Atomically add one or more durchen annotations to an edition.",
 )
 async def post_durchen_annotations(
-    edition_id: EditionId,
-    data: Annotated[list[NoteInput], Body(min_length=1)],
-    db: DatabaseDep,
+    edition_id: EditionId, data: Annotated[list[NoteInput], Body(min_length=1)], db: DatabaseDep
 ) -> list[IdResponse]:
-    annotation_ids = await db.annotation.note.add_durchens(edition_id, data)
+    annotation_ids = await note_database.add_durchens(db, edition_id, data)
     return [IdResponse(id=annotation_id) for annotation_id in annotation_ids]
 
 
@@ -264,7 +215,7 @@ async def post_durchen_annotations(
     description="Retrieve all footnotes (citations, author's notes, etc.) for an edition, ordered by position.",
 )
 async def get_footnote_annotations(edition_id: EditionId, db: DatabaseDep) -> list[FootnoteOutput]:
-    notes = await db.annotation.note.get_all(edition_id, NoteType.FOOTNOTE)
+    notes = await note_database.get_all(db, edition_id, NoteType.FOOTNOTE)
     return [FootnoteOutput.from_note(note) for note in notes]
 
 
@@ -279,11 +230,9 @@ async def get_footnote_annotations(edition_id: EditionId, db: DatabaseDep) -> li
     ),
 )
 async def post_footnote_annotations(
-    edition_id: EditionId,
-    data: Annotated[list[FootnoteInput], Body(min_length=1)],
-    db: DatabaseDep,
+    edition_id: EditionId, data: Annotated[list[FootnoteInput], Body(min_length=1)], db: DatabaseDep
 ) -> list[IdResponse]:
-    annotation_ids = await db.annotation.note.add_footnotes(edition_id, data)
+    annotation_ids = await note_database.add_footnotes(db, edition_id, data)
     return [IdResponse(id=annotation_id) for annotation_id in annotation_ids]
 
 
@@ -294,7 +243,7 @@ async def post_footnote_annotations(
     description="Delete every footnote on an edition in one transaction. Durchen notes are not affected.",
 )
 async def delete_footnote_annotations(edition_id: EditionId, db: DatabaseDep) -> None:
-    await db.annotation.note.delete_all_footnotes(edition_id)
+    await note_database.delete_all_footnotes(db, edition_id)
 
 
 @router.get(
@@ -303,7 +252,7 @@ async def delete_footnote_annotations(edition_id: EditionId, db: DatabaseDep) ->
     description="Retrieve all yigchung mark annotations for an edition.",
 )
 async def get_yigchung_annotations(edition_id: EditionId, db: DatabaseDep) -> list[MarkOutput]:
-    return await db.annotation.mark.get_all(edition_id)
+    return await mark.get_all(db, edition_id)
 
 
 @router.post(
@@ -313,11 +262,9 @@ async def get_yigchung_annotations(edition_id: EditionId, db: DatabaseDep) -> li
     description="Atomically add one or more span-only yigchung mark annotations to an edition.",
 )
 async def post_yigchung_annotations(
-    edition_id: EditionId,
-    data: Annotated[list[MarkInput], Body(min_length=1)],
-    db: DatabaseDep,
+    edition_id: EditionId, data: Annotated[list[MarkInput], Body(min_length=1)], db: DatabaseDep
 ) -> list[IdResponse]:
-    annotation_ids = await db.annotation.mark.add_yigchungs(edition_id, data)
+    annotation_ids = await mark.add_yigchungs(db, edition_id, data)
     return [IdResponse(id=annotation_id) for annotation_id in annotation_ids]
 
 
@@ -328,17 +275,15 @@ async def post_yigchung_annotations(
     response_model_exclude_none=True,
 )
 async def get_recordings(edition_id: EditionId, db: DatabaseDep) -> list[RecordingOutput]:
-    return await db.recording.get_all_by_edition(edition_id)
+    return await recording.get_all_by_edition(db, edition_id)
 
 
 @router.get(
-    "/{edition_id}/related",
-    summary="Get related editions",
-    description="Find editions related to a given edition.",
+    "/{edition_id}/related", summary="Get related editions", description="Find editions related to a given edition."
 )
 async def get_related_editions(edition_id: EditionId, db: DatabaseDep) -> list[EditionOutput]:
     logger.info("Finding related editions for edition ID: %s", edition_id)
-    return await db.edition.get_related(edition_id)
+    return await edition.get_related(db, edition_id)
 
 
 @router.delete(
@@ -346,13 +291,13 @@ async def get_related_editions(edition_id: EditionId, db: DatabaseDep) -> list[E
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete edition",
     description=(
-        "Delete edition metadata and associated database annotations. Recordings that follow the edition stay; "
-        "the request is rejected while any of them has cues."
+        "Delete edition metadata and associated database annotations. Recordings that follow the edition "
+        "stay; the request is rejected while any of them has cues."
     ),
 )
 async def delete_edition(search: SearchUpdatesDep, edition_id: EditionId, db: DatabaseDep) -> None:
     logger.info("Deleting edition with edition ID: %s", edition_id)
-    await db.edition.delete(edition_id)
+    await edition.delete(db, edition_id)
     search.schedule("edition", edition_id)
 
 
@@ -363,11 +308,7 @@ async def delete_edition(search: SearchUpdatesDep, edition_id: EditionId, db: Da
     description="Apply a text operation (INSERT, DELETE, or REPLACE) to the edition's content.",
 )
 async def patch_content(
-    search: SearchUpdatesDep,
-    edition_id: EditionId,
-    data: ContentOperation,
-    db: DatabaseDep,
-    storage: StorageDep,
+    search: SearchUpdatesDep, edition_id: EditionId, data: ContentOperation, db: DatabaseDep, storage: StorageDep
 ) -> None:
     await edit_content(db, storage, edition_id, data)
     search.schedule("edition", edition_id)

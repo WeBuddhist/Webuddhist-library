@@ -83,8 +83,8 @@ OPENSEARCH_BDRC_PLUGIN_ZIP=/absolute/path/to/analysis-bdrc.zip
 Relevant code:
 
 - `routers/persons.py`, `routers/texts.py`
-- `catalog_search/service.py`
-- `search_client.py`
+- `search/catalog.py`
+- `search/client.py`
 - `models/requests.py`
 - `scripts/reindex.py`
 - `tests/test_catalog_search.py`

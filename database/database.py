@@ -2,66 +2,26 @@ from logging import getLogger
 from typing import TYPE_CHECKING, Any, LiteralString, Self
 
 from neo4j import AsyncGraphDatabase, AsyncSession, Record, RoutingControl
+from opentelemetry import trace
+from opentelemetry.trace import Span, SpanKind
 
-from .alignment_database import AlignmentDatabase
-from .annotation.bibliographic_database import BibliographicDatabase
-from .annotation.mark_database import MarkDatabase
-from .annotation.note_database import NoteDatabase
-from .annotation.pagination_database import PaginationDatabase
-from .annotation.segmentation_database import SegmentationDatabase
-from .annotation.table_of_contents_database import TableOfContentsDatabase
-from .api_key_database import ApiKeyDatabase
-from .application_database import ApplicationDatabase
-from .audio_database import AudioDatabase
-from .category_database import CategoryDatabase
-from .edition_database import EditionDatabase
-from .language_database import LanguageDatabase
-from .person_database import PersonDatabase
-from .recording_database import RecordingDatabase
-from .repository import SessionRepository, SessionSource
-from .segment_database import SegmentDatabase
-from .span_database import SpanDatabase
-from .tag_database import TagDatabase
-from .text_database import TextDatabase
+from .repository import TransactionWork
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
     from config import Settings
 
 logger = getLogger(__name__)
-
-
-class AnnotationDatabase:
-    def __init__(self, db: SessionSource) -> None:
-        self.segmentation = SegmentationDatabase(db)
-        self.pagination = PaginationDatabase(db)
-        self.table_of_contents = TableOfContentsDatabase(db)
-        self.note = NoteDatabase(db)
-        self.bibliographic = BibliographicDatabase(db)
-        self.mark = MarkDatabase(db)
+tracer = trace.get_tracer("openpecha-api")
 
 
 class Database:
-    """Async database class for Neo4j operations."""
+    """Async Neo4j connection: managed read/write transactions and one-shot queries."""
 
     def __init__(self, neo4j_uri: str, neo4j_auth: tuple[str, str], neo4j_database: str = "neo4j") -> None:
         self._driver = AsyncGraphDatabase.driver(neo4j_uri, auth=neo4j_auth)
         self._database = neo4j_database
-
-        self.transactions = SessionRepository(self)
-        self.api_key = ApiKeyDatabase(self)
-        self.application = ApplicationDatabase(self)
-        self.text = TextDatabase(self)
-        self.edition = EditionDatabase(self)
-        self.annotation = AnnotationDatabase(self)
-        self.alignment = AlignmentDatabase(self)
-        self.segment = SegmentDatabase(self)
-        self.audio = AudioDatabase(self)
-        self.recording = RecordingDatabase(self)
-        self.person = PersonDatabase(self)
-        self.language = LanguageDatabase(self)
-        self.category = CategoryDatabase(self)
-        self.tag = TagDatabase(self)
-        self.span = SpanDatabase()
 
     @classmethod
     def from_settings(cls, config: Settings) -> Self:
@@ -74,9 +34,30 @@ class Database:
     def get_session(self) -> AsyncSession:
         return self._driver.session(database=self._database)
 
-    async def execute_query(self, query: LiteralString, /, *, write: bool = False, **params: Any) -> list[Record]:  # noqa: ANN401
+    def _span(self, operation: str, name: str, **attributes: str) -> AbstractContextManager[Span]:
+        return tracer.start_as_current_span(
+            f"neo4j {operation} {name}",
+            kind=SpanKind.CLIENT,
+            attributes={"db.system": "neo4j", "db.name": self._database, "db.operation.name": operation} | attributes,
+        )
+
+    async def read[R, **P](self, work: TransactionWork[R, P], /, *args: P.args, **kwargs: P.kwargs) -> R:
+        """Run `work` in a managed read transaction, retried on transient errors."""
+        with self._span("read", getattr(work, "__qualname__", type(work).__name__)):
+            async with self.get_session() as session:
+                return await session.execute_read(work, *args, **kwargs)
+
+    async def write[R, **P](self, work: TransactionWork[R, P], /, *args: P.args, **kwargs: P.kwargs) -> R:
+        """Run `work` in a managed write transaction, retried on transient errors."""
+        with self._span("write", getattr(work, "__qualname__", type(work).__name__)):
+            async with self.get_session() as session:
+                return await session.execute_write(work, *args, **kwargs)
+
+    async def query(self, query: LiteralString, /, *, write: bool = False, **params: Any) -> list[Record]:  # noqa: ANN401
+        """Run one statement in its own managed transaction."""
         routing = RoutingControl.WRITE if write else RoutingControl.READ
-        result = await self._driver.execute_query(query, params, routing_=routing, database_=self._database)
+        with self._span("query", "write" if write else "read", **{"db.query.text": query[:500]}):
+            result = await self._driver.execute_query(query, params, routing_=routing, database_=self._database)
         return result.records
 
     async def close(self) -> None:

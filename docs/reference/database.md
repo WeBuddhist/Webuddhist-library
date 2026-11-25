@@ -8,7 +8,7 @@ This document provides an overview of the Neo4j-backed data access layer in [dat
 
 1. [Overview](#overview)
 2. [Connection](#connection)
-3. [Database facade](#database-facade)
+3. [Domain modules](#domain-modules)
 4. [Annotation subpackage](#annotation-subpackage)
 5. [Supporting modules](#supporting-modules)
 
@@ -16,7 +16,7 @@ This document provides an overview of the Neo4j-backed data access layer in [dat
 
 ## Overview
 
-The **Database** class in [database/database.py](../../database/database.py) holds an async Neo4j driver and exposes domain accessors such as `db.person`, `db.text`, and `db.edition`. Their async methods perform Cypher queries and return Pydantic models, dictionaries, or IDs. Graph labels and relationships are documented in [neo4j_schema.yaml](../../database/neo4j_schema.yaml).
+The **Database** class in [database/database.py](../../database/database.py) holds an async Neo4j driver. Domain operations live in modules such as `text` and `person`. Graph labels and relationships are declared in [neo4j_schema.yaml](../../database/neo4j_schema.yaml), which is also the source of the unique constraints. Lookup indexes are listed in [schema.py](../../database/schema.py); APOC triggers (including required-relationship rules) live in [neo4j_triggers.py](../../database/neo4j_triggers.py).
 
 ---
 
@@ -30,60 +30,61 @@ The caller supplies connection settings. Construction creates the driver; connec
 
 - `await verify_connectivity()` – Checks the connection.
 - `get_session() -> AsyncSession` – Returns a session for the configured database; use it with `async with`.
+- `await read(fn, *args)` / `await write(fn, *args)` – Runs `fn(tx, *args)` in a managed read or write transaction, retried on transient errors, in one trace span.
+- `await query(cypher, *, write=False, **params)` – Runs one statement in its own managed transaction and returns its records.
 - `await close()` – Closes the driver.
 - `async with Database(uri, (username, password)) as db` – Checks connectivity on entry and closes the driver on exit.
 
 ---
 
-## Database facade
+## Domain modules
 
-Each attribute below provides operations for its domain.
+Import a module and alias it when the short name would shadow a local (e.g. `from database import text as text_database`). Functions accept either `Database` or an open transaction via `@reading` / `@writing` where dual-mode is needed.
 
-| Attribute | Module | Responsibility |
-|-----------|--------|-----------------|
-| **db.api_key** | [api_key_database.py](../../database/api_key_database.py) | API key creation, validation, and optional binding to an application. |
-| **db.application** | [application_database.py](../../database/application_database.py) | Applications that own categories and tags; texts and editions are shared. |
-| **db.text** | [text_database.py](../../database/text_database.py) | Text/work CRUD, contributions, commentary/translation relationships, and filtered listing. |
-| **db.edition** | [edition_database.py](../../database/edition_database.py) | Edition CRUD, content, related editions, and text relationships. |
-| **db.annotation** | [database.py](../../database/database.py) (AnnotationDatabase) | Access to the annotation modules listed below. |
-| **db.alignment** | [alignment_database.py](../../database/alignment_database.py) | Direct edition-pair segment alignment relationships. |
-| **db.segment** | [segment_database.py](../../database/segment_database.py) | Segment retrieval, related segments, tag context, and span lookup; segments are created through segmentation. |
-| **db.audio** | [audio_database.py](../../database/audio_database.py) | Audio (one performance of a text): recited text, Work, title, language, license and performers. |
-| **db.recording** | [recording_database.py](../../database/recording_database.py) | Recording files of an audio, the edition each follows, and their cues. |
-| **db.person** | [person_database.py](../../database/person_database.py) | Person CRUD and listing with BDRC/wiki filters; name search uses the catalog search service. |
-| **db.language** | [language_database.py](../../database/language_database.py) | Language code creation, deletion, and listing. |
-| **db.category** | [category_database.py](../../database/category_database.py) | Application-owned categories and parent/child hierarchy. |
-| **db.tag** | [tag_database.py](../../database/tag_database.py) | Application-owned tags and their attachment to texts and segments. |
-| **db.span** | [span_database.py](../../database/span_database.py) | Span adjustments within the content service's validated edit transaction. |
+| Module | Responsibility |
+|--------|-----------------|
+| [api_key.py](../../database/api_key.py) | API key creation, validation, and optional binding to an application. |
+| [application.py](../../database/application.py) | Applications that own categories and tags; texts and editions are shared. |
+| [text.py](../../database/text.py) | Text/work CRUD, contributions, commentary/translation relationships, and filtered listing. |
+| [edition.py](../../database/edition.py) | Edition CRUD, content, related editions, and text relationships. |
+| [alignment.py](../../database/alignment.py) | Direct edition-pair segment alignment relationships. |
+| [segment.py](../../database/segment.py) | Segment retrieval, related segments, tag context, and span lookup; segments are created through segmentation. |
+| [audio.py](../../database/audio.py) | Audio (one performance of a text): recited text, Work, title, language, license and performers. |
+| [recording.py](../../database/recording.py) | Recording files of an audio, the edition each follows, and their cues. |
+| [person.py](../../database/person.py) | Person CRUD and listing with BDRC/wiki filters; name search uses the catalog search service. |
+| [language.py](../../database/language.py) | Language code creation, deletion, and listing. |
+| [category.py](../../database/category.py) | Application-owned categories and parent/child hierarchy. |
+| [tag.py](../../database/tag.py) | Application-owned tags and their attachment to texts and segments. |
 
 ---
 
 ## Annotation subpackage
 
-[database/annotation/](../../database/annotation/) contains the modules attached under **db.annotation**:
+[database/annotation/](../../database/annotation/) — import as `from database.annotation import note as note_database`, etc.
 
-| Attribute | File | Responsibility |
-|-----------|------|-----------------|
-| **db.annotation.segmentation** | [segmentation_database.py](../../database/annotation/segmentation_database.py) | Segmentation annotations and their segments. |
-| **db.annotation.pagination** | [pagination_database.py](../../database/annotation/pagination_database.py) | Pagination (volume/page) annotations. |
-| **db.annotation.table_of_contents** | [table_of_contents_database.py](../../database/annotation/table_of_contents_database.py) | Table of contents annotations with localized section titles, summaries, spans, and recursive subsection hierarchy. |
-| **db.annotation.note** | [note_database.py](../../database/annotation/note_database.py) | Note annotations: durchen (span) and footnote (point, stored as an empty span). |
-| **db.annotation.mark** | [mark_database.py](../../database/annotation/mark_database.py) | Span-only mark annotations (currently yigchung). |
-| **db.annotation.bibliographic** | [bibliographic_database.py](../../database/annotation/bibliographic_database.py) | Bibliographic metadata annotations. |
+| Module | Responsibility |
+|--------|-----------------|
+| [segmentation.py](../../database/annotation/segmentation.py) | Segmentation annotations and their segments. |
+| [pagination.py](../../database/annotation/pagination.py) | Pagination (volume/page) annotations. |
+| [table_of_contents.py](../../database/annotation/table_of_contents.py) | Table of contents annotations with localized section titles, summaries, spans, and recursive subsection hierarchy. |
+| [note.py](../../database/annotation/note.py) | Note annotations: durchen (span) and footnote (point, stored as an empty span). |
+| [mark.py](../../database/annotation/mark.py) | Span-only mark annotations (currently yigchung). |
+| [bibliographic.py](../../database/annotation/bibliographic.py) | Bibliographic metadata annotations. |
 
 ---
 
 ## Supporting modules
 
-These modules are not exposed as `db.<name>` but are used internally by the facade modules.
-
 | Module | Responsibility |
 |--------|----------------|
-| [database_validator.py](../../database/database_validator.py) | Transaction-level validation of text creation, referenced entities, languages, tags, and edition spans. |
-| [nomen_database.py](../../database/nomen_database.py) | Localized names/titles and alternative-name links. |
-| [contribution_database.py](../../database/contribution_database.py) | Shared contribution creation and updates. |
+| [nomen.py](../../database/nomen.py) | Localized names/titles and alternative-name links. |
+| [contribution.py](../../database/contribution.py) | Shared contribution creation and updates. |
 | [content_state.py](../../database/content_state.py) | Internal edition revision guards and validated reads. |
+| [span.py](../../database/span.py) | Span adjustments within the content service's validated edit transaction. |
+| [schema.py](../../database/schema.py) | Loads neo4j_schema.yaml for unique constraints; holds the explicit lookup indexes. |
+| [neo4j_triggers.py](../../database/neo4j_triggers.py) | APOC triggers: required/at-most-one relationships and the custom rules. |
 | [annotation/single_span.py](../../database/annotation/single_span.py) | Shared persistence for bibliographic metadata, notes, and marks. |
+| [repository.py](../../database/repository.py) | `SessionSource`, `@reading`/`@writing`, fetch helpers, constraint wrapping. |
 
 For method-level detail and Cypher usage, see the linked source files.
 
@@ -97,9 +98,9 @@ Apply never guesses repairs for malformed
 annotations or duplicate titles: resolve audit failures first, from source data
 where necessary.
 
-The command rejects empty pagination structures, installs retained-entity
-constraints and lookup indexes, and updates APOC
-triggers. Existing metadata discarded by old writers cannot be recovered by
+The command rejects empty pagination structures, installs constraints and lookup
+indexes, and updates APOC triggers.
+Existing metadata discarded by old writers cannot be recovered by
 this migration. Allow the configured APOC trigger refresh interval to elapse
 and verify the audit before resuming writes.
 

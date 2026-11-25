@@ -278,11 +278,11 @@ Cue spans follow `PATCH /v2/editions/{edition_id}/content` on the followed editi
 
 - Routers: `routers/recordings.py`; the audio-scoped list and create routes live in `routers/audios.py`, and the edition-scoped list in `routers/editions.py`.
 - Models: `models/recording.py`.
-- Database: `database/recording_database.py`.
+- Database: `database/recording.py`.
 - The recording stores its S3 key in `audio_key`, so changing the edition it follows leaves the audio file in place. Older recordings can still use `recordings/{edition_id}/{recording_id}.{format}`.
 - Graph: `(:Recording)-[:RENDITION_OF]->(:Audio)`, with an optional `(:Recording)-[:FOLLOWS]->(:Edition)`. Triggers require the followed edition to be an edition of the text the audio recites, and allow cues only while `FOLLOWS` exists.
 - Cues are stored as `(:Span)-[:SPAN_OF]->(:Cue {start_ms, end_ms})-[:CUE_OF]->(:Recording)`. `Cue` has no `id`, because cues are only written and read in bulk.
-- `database/span_database.py` adjusts cue spans with the annotation rules, and deletes a `Cue` once its span is deleted.
+- `database/span.py` adjusts cue spans with the annotation rules, and deletes a `Cue` once its span is deleted.
 
 ## Upload lifecycle
 

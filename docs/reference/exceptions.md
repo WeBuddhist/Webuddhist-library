@@ -1,6 +1,6 @@
 # Exceptions reference
 
-This document describes the API error types in [exceptions.py](../../exceptions.py) and the error responses built from them in [main.py](../../main.py).
+This document describes the API error types and the error responses built from them, both in [errors.py](../../errors.py).
 
 ---
 
@@ -72,4 +72,4 @@ All API errors raised by the OpenPecha backend inherit from `OpenPechaError`, wh
 
 ## Usage
 
-Raise the appropriate subclass where the failure occurs, e.g. `raise DataNotFoundError("Text with ID 'abc' not found")`. The handler in [main.py](../../main.py) turns it into a problem details response with the class's status and the message as `detail`.
+Raise the appropriate subclass where the failure occurs, e.g. `raise DataNotFoundError("Text with ID 'abc' not found")`. The handler in [errors.py](../../errors.py) turns it into a problem details response with the class's status and the message as `detail`.

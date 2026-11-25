@@ -1,10 +1,8 @@
-# pylint: disable=redefined-outer-name
 """Integration tests for DELETE endpoints and graph cleanup behavior."""
-
 import pytest
 
+from database import api_key, text
 from identifier import generate_id
-
 
 APPLICATION_HEADER = {"X-Application": "test_application"}
 
@@ -178,7 +176,7 @@ class TestReferenceDeletes:
 
         key_app = f"app{generate_id()[:6].lower()}"
         assert (await client.post("/v2/applications", json={"name": key_app})).status_code == 201
-        await test_database.api_key.create(generate_id(), "Delete endpoint test key", "delete-test@example.com", key_app)
+        await api_key.create(test_database, generate_id(), "Delete endpoint test key", "delete-test@example.com", key_app)
 
         response = await client.delete(f"/v2/applications/{key_app}")
 
@@ -244,7 +242,7 @@ class TestPersonAndCategoryDeletes:
         assert grandchild_response.status_code == 201
         grandchild_id = grandchild_response.json()["id"]
         text_id = await _create_text(client, person_id, category_id=grandchild_id)
-        work_id = await test_database.text.get_work_id(text_id)
+        work_id = await text.get_work_id(test_database, text_id)
 
         response = await client.delete(f"/v2/categories/{parent_id}", headers=APPLICATION_HEADER)
 
@@ -285,7 +283,7 @@ class TestTextDeletes:
     async def test_delete_text_removes_owned_work(self, client, test_database):
         person_id = await _create_person(client)
         text_id = await _create_text(client, person_id)
-        work_id = await test_database.text.get_work_id(text_id)
+        work_id = await text.get_work_id(test_database, text_id)
 
         response = await client.delete(f"/v2/texts/{text_id}")
 
@@ -346,7 +344,7 @@ class TestTextDeletes:
         tag_id = tag_response.json()["id"]
         root_id = await _create_text(client, person_id, language="bo", title=_unique("Root"), tag_ids=[tag_id])
         translation_id = await _create_text(client, person_id, title=_unique("Translation"), translation_of=root_id)
-        work_id = await test_database.text.get_work_id(root_id)
+        work_id = await text.get_work_id(test_database, root_id)
 
         response = await client.delete(f"/v2/texts/{translation_id}")
 

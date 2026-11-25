@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Tests for API key authentication.
 
@@ -15,9 +14,11 @@ Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
 - NEO4J_TEST_PASSWORD: Password for test instance
 """
-
-
 import pytest
+
+from database import api_key
+from database import application as application_database
+from errors import DataNotFoundError
 from identifier import generate_id
 
 
@@ -31,7 +32,7 @@ class TestApiKeyDatabase:
         name = "Test Master Key"
         email = "test@example.com"
 
-        created_id, raw_key = await test_database.api_key.create(key_id, name, email)
+        created_id, raw_key = await api_key.create(test_database, key_id, name, email)
 
         assert created_id == key_id
         assert raw_key is not None
@@ -44,7 +45,7 @@ class TestApiKeyDatabase:
         email = "app@example.com"
         application_id = "test_application"
 
-        created_id, raw_key = await test_database.api_key.create(key_id, name, email, application_id)
+        created_id, raw_key = await api_key.create(test_database, key_id, name, email, application_id)
 
         assert created_id == key_id
         assert raw_key is not None
@@ -54,18 +55,18 @@ class TestApiKeyDatabase:
         key_id = generate_id()
         name = "Test Key"
         email = "test@example.com"
-
-        with pytest.raises(ValueError, match="not found"):
-            await test_database.api_key.create(key_id, name, email, "nonexistent_app")
+        with pytest.raises(DataNotFoundError, match="not found"):
+            await api_key.create(test_database, key_id, name, email, "nonexistent_app")
+        assert await api_key.list_all(test_database) == []
 
     async def test_validate_master_key(self, test_database):
         """Test validating a master key returns id and no bound application."""
         key_id = generate_id()
         name = "Test Master Key"
         email = "test@example.com"
-        created_id, raw_key = await test_database.api_key.create(key_id, name, email)
+        created_id, raw_key = await api_key.create(test_database, key_id, name, email)
 
-        result = await test_database.api_key.validate_key(raw_key)
+        result = await api_key.validate_key(test_database, raw_key)
 
         assert result is not None
         assert result["id"] == created_id
@@ -77,9 +78,9 @@ class TestApiKeyDatabase:
         name = "Test App Key"
         email = "app@example.com"
         application_id = "test_application"
-        created_id, raw_key = await test_database.api_key.create(key_id, name, email, application_id)
+        created_id, raw_key = await api_key.create(test_database, key_id, name, email, application_id)
 
-        result = await test_database.api_key.validate_key(raw_key)
+        result = await api_key.validate_key(test_database, raw_key)
 
         assert result is not None
         assert result["id"] == created_id
@@ -87,7 +88,7 @@ class TestApiKeyDatabase:
 
     async def test_validate_invalid_key(self, test_database):
         """Test validating an invalid key returns None."""
-        result = await test_database.api_key.validate_key("invalid_key_12345")
+        result = await api_key.validate_key(test_database, "invalid_key_12345")
 
         assert result is None
 
@@ -96,18 +97,18 @@ class TestApiKeyDatabase:
         key_id = generate_id()
         name = "Test Key"
         email = "test@example.com"
-        created_id, raw_key = await test_database.api_key.create(key_id, name, email)
+        created_id, raw_key = await api_key.create(test_database, key_id, name, email)
 
-        assert await test_database.api_key.validate_key(raw_key) is not None
+        assert await api_key.validate_key(test_database, raw_key) is not None
 
-        success = await test_database.api_key.revoke(created_id)
+        success = await api_key.revoke(test_database, created_id)
         assert success is True
 
-        assert await test_database.api_key.validate_key(raw_key) is None
+        assert await api_key.validate_key(test_database, raw_key) is None
 
     async def test_revoke_nonexistent_key(self, test_database):
         """Test revoking a nonexistent key returns False."""
-        success = await test_database.api_key.revoke("nonexistent_key_id")
+        success = await api_key.revoke(test_database, "nonexistent_key_id")
         assert success is False
 
     async def test_rotate_key(self, test_database):
@@ -115,28 +116,28 @@ class TestApiKeyDatabase:
         key_id = generate_id()
         name = "Test Key"
         email = "test@example.com"
-        created_id, old_key = await test_database.api_key.create(key_id, name, email)
+        created_id, old_key = await api_key.create(test_database, key_id, name, email)
 
-        new_key = await test_database.api_key.rotate_key(created_id)
+        new_key = await api_key.rotate_key(test_database, created_id)
 
         assert new_key is not None
         assert new_key != old_key
-        assert await test_database.api_key.validate_key(old_key) is None
-        assert await test_database.api_key.validate_key(new_key) is not None
+        assert await api_key.validate_key(test_database, old_key) is None
+        assert await api_key.validate_key(test_database, new_key) is not None
 
     async def test_rotate_nonexistent_key(self, test_database):
         """Test rotating a nonexistent key returns None."""
-        result = await test_database.api_key.rotate_key("nonexistent_key_id")
+        result = await api_key.rotate_key(test_database, "nonexistent_key_id")
         assert result is None
 
     async def test_list_all_keys(self, test_database):
         """Test listing all keys."""
         key_id1 = generate_id()
         key_id2 = generate_id()
-        await test_database.api_key.create(key_id1, "Key 1", "key1@example.com")
-        await test_database.api_key.create(key_id2, "Key 2", "key2@example.com", "test_application")
+        await api_key.create(test_database, key_id1, "Key 1", "key1@example.com")
+        await api_key.create(test_database, key_id2, "Key 2", "key2@example.com", "test_application")
 
-        keys = await test_database.api_key.list_all()
+        keys = await api_key.list_all(test_database)
 
         assert len(keys) >= 2
         key_ids = [k["id"] for k in keys]
@@ -150,9 +151,9 @@ class TestApiKeyDatabase:
 @pytest.mark.asyncio(loop_scope="session")
 class TestApiKeyAuthMiddleware:
     """Tests for API key authentication middleware (integration tests).
-    
-    Note: These tests use auth_client fixture which has testing=False,
-    so real API key validation is enforced.
+
+    Note: These tests use the auth_client fixture, which does not override
+    get_api_key, so real API key validation is enforced.
     """
 
     async def test_missing_api_key_returns_401(self, auth_client, test_database):
@@ -185,9 +186,9 @@ class TestApiKeyAuthMiddlewareWithKeys:
     async def test_master_key_accepts_any_application(self, auth_client, test_database):
         """Test master key works with any X-Application header."""
         key_id = generate_id()
-        _, raw_key = await test_database.api_key.create(key_id, "Master Key", "master@example.com")
+        _, raw_key = await api_key.create(test_database, key_id, "Master Key", "master@example.com")
 
-        await test_database.application.create("another_application", "Another application")
+        await application_database.create(test_database, "another_application", "Another application")
         for application in ("test_application", "another_application"):
             response = await auth_client.get(
                 "/v2/categories/",
@@ -198,7 +199,7 @@ class TestApiKeyAuthMiddlewareWithKeys:
     async def test_app_bound_key_accepts_matching_application(self, auth_client, test_database):
         """Test app-bound key works when X-Application matches."""
         key_id = generate_id()
-        _, raw_key = await test_database.api_key.create(key_id, "App Key", "app@example.com", "test_application")
+        _, raw_key = await api_key.create(test_database, key_id, "App Key", "app@example.com", "test_application")
 
         response = await auth_client.get(
             "/v2/categories/",
@@ -213,7 +214,7 @@ class TestApiKeyAuthMiddlewareWithKeys:
     async def test_app_bound_key_rejects_mismatched_application(self, auth_client, test_database):
         """Test app-bound key rejects requests with mismatched X-Application header."""
         key_id = generate_id()
-        _, raw_key = await test_database.api_key.create(key_id, "App Key", "app@example.com", "test_application")
+        _, raw_key = await api_key.create(test_database, key_id, "App Key", "app@example.com", "test_application")
 
         response = await auth_client.get(
             "/v2/categories/",
@@ -229,7 +230,7 @@ class TestApiKeyAuthMiddlewareWithKeys:
     async def test_app_bound_key_accepts_missing_application(self, auth_client, test_database):
         """Test app-bound key works on routes where X-Application is optional and not sent."""
         key_id = generate_id()
-        _, raw_key = await test_database.api_key.create(key_id, "App Key", "app@example.com", "test_application")
+        _, raw_key = await api_key.create(test_database, key_id, "App Key", "app@example.com", "test_application")
 
         response = await auth_client.get("/v2/languages", headers={"X-API-Key": raw_key})
 
@@ -238,7 +239,7 @@ class TestApiKeyAuthMiddlewareWithKeys:
 
 @pytest.mark.asyncio(loop_scope='session')
 async def test_bound_key_without_application_header_uses_its_application(auth_client, test_database):
-    _, key = await test_database.api_key.create(generate_id(), 'Bound', 'bound@example.com', 'test_application')
+    _, key = await api_key.create(test_database, generate_id(), 'Bound', 'bound@example.com', 'test_application')
     response = await auth_client.get('/v2/texts', headers={'X-API-Key': key})
     assert response.status_code == 200, response.text
 
@@ -260,12 +261,12 @@ def test_optional_application_defaults_to_bound_application():
 
 @pytest.mark.asyncio(loop_scope='session')
 async def test_unbound_key_can_administer_applications(auth_client, test_database):
-    _, key = await test_database.api_key.create(generate_id(), 'Admin', 'admin@example.com')
+    _, key = await api_key.create(test_database, generate_id(), 'Admin', 'admin@example.com')
     headers = {'X-API-Key': key}
     created = await auth_client.post('/v2/applications', headers=headers, json={'name': '  New App  '})
     assert created.status_code == 201, created.text
     assert created.json() == {'id': 'new app', 'name': 'new app'}
-    assert await test_database.application.exists('new app')
+    assert await application_database.exists(test_database, 'new app')
     deleted = await auth_client.delete('/v2/applications/new%20app', headers=headers)
     assert deleted.status_code == 204, deleted.text
-    assert not await test_database.application.exists('new app')
+    assert not await application_database.exists(test_database, 'new app')

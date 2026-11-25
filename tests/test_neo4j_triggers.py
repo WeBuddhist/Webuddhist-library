@@ -4,9 +4,9 @@ import re
 from dataclasses import dataclass
 
 import pytest
+from neo4j.exceptions import ClientError
 
 from database.neo4j_triggers import SYSTEM_DATABASE_NAME, TRIGGERS, install_triggers
-from neo4j.exceptions import ClientError
 from tests.conftest import NEO4J_TRIGGER_REFRESH_SECONDS
 from tests.schema_contract import EXPECTED_TRIGGERS
 
@@ -266,8 +266,8 @@ def _build_trigger_cases() -> list[TriggerCase]:
     cases: list[TriggerCase] = []
 
     for trigger in TRIGGERS:
-        name = trigger["name"]
-        query = trigger["query"]
+        name = trigger.name
+        query = trigger.query
 
         if name in custom:
             cases.append(TriggerCase(name=name, setup_query=custom[name]))
@@ -309,7 +309,7 @@ def _build_trigger_cases() -> list[TriggerCase]:
 
 
 TRIGGER_CASES = _build_trigger_cases()
-TRIGGER_QUERY_BY_NAME = {trigger["name"]: trigger["query"] for trigger in TRIGGERS}
+TRIGGER_QUERY_BY_NAME = {trigger.name: trigger.query for trigger in TRIGGERS}
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -349,6 +349,6 @@ async def test_install_triggers_replaces_stale_triggers(test_database) -> None:
         result = await session.run("CALL apoc.trigger.show($database) YIELD name, query", database=database)
         stored = {record["name"]: record["query"] async for record in result}
 
-    assert set(stored) == {trigger["name"] for trigger in TRIGGERS}
+    assert set(stored) == {trigger.name for trigger in TRIGGERS}
     assert all(query.startswith("CYPHER 25 ") for query in stored.values())
 

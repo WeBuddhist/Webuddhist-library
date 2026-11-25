@@ -1,5 +1,4 @@
 """A sync from prod keeps the target environment's own API keys and drops prod's (scripts/env_sync/api_keys.py)."""
-
 import importlib.util
 import json
 from pathlib import Path
@@ -7,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from config import settings
+from database import api_key as keys
+from database import application as application_database
 
 _PATH = Path(__file__).parent.parent / "scripts" / "env_sync" / "api_keys.py"
 _spec = importlib.util.spec_from_file_location("env_sync_api_keys", _PATH)
@@ -35,7 +36,7 @@ def test_refuses_outside_testing_and_dev(monkeypatch, environment):
         api_keys.main()
 
 
-@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.asyncio(loop_scope='session')
 async def test_sync_keeps_own_keys_and_drops_prod_keys(test_database, _neo4j_container, monkeypatch, tmp_path):
     monkeypatch.setattr(
         api_keys,
@@ -50,30 +51,26 @@ async def test_sync_keeps_own_keys_and_drops_prod_keys(test_database, _neo4j_con
             }
         ),
     )
-    keys = test_database.api_key
-    await test_database.application.create("gone", "gone")
-    # Before the sync: the target's own keys, plus a copy of a prod key left by an earlier sync.
-    _, own_bound = await keys.create("own-bound", "Own", "own@example.com", "test_application")
-    _, own_master = await keys.create("own-master", "Own master", "own@example.com")
-    await keys.create("orphan", "Orphan", "own@example.com", "gone")
-    await keys.create("prod-copy", "Prod", "prod@example.com", "test_application")
-
-    saved = tmp_path / "api-keys.json"
+    await application_database.create(test_database, "gone", "gone")
+    _, own_bound = await keys.create(test_database, "own-bound", "Own", "own@example.com", "test_application")
+    _, own_master = await keys.create(test_database, "own-master", "Own master", "own@example.com")
+    await keys.create(test_database, "orphan", "Orphan", "own@example.com", "gone")
+    await keys.create(test_database, "prod-copy", "Prod", "prod@example.com", "test_application")
+    saved = tmp_path / 'api-keys.json'
     api_keys.save(str(saved))
-    assert saved.stat().st_mode & 0o777 == 0o600
-    assert "own-bound" in saved.read_text() and "api_key_hash" in json.loads(saved.read_text())[0]
-
-    # The sync loads prod: prod's keys replace the target's, and prod has no "gone" application.
+    assert saved.stat().st_mode & 511 == 384
+    assert 'own-bound' in saved.read_text() and 'api_key_hash' in json.loads(saved.read_text())[0]
     async with test_database.get_session() as session:
-        await session.run("MATCH (k:ApiKey) DETACH DELETE k")
+        await session.run('MATCH (k:ApiKey) DETACH DELETE k')
         await session.run("MATCH (a:Application {id: 'gone'}) DETACH DELETE a")
-    _, prod_copy = await keys.create("prod-copy", "Prod", "prod@example.com", "test_application")
-    _, prod_new = await keys.create("prod-new", "Prod new", "prod@example.com")
-
+    _, prod_copy = await keys.create(test_database, "prod-copy", "Prod", "prod@example.com", "test_application")
+    _, prod_new = await keys.create(test_database, 'prod-new', 'Prod new', 'prod@example.com')
     api_keys.restore(str(saved))
-
-    assert await keys.validate_key(own_bound) == {"id": "own-bound", "bound_application_id": "test_application"}
-    assert await keys.validate_key(own_master) == {"id": "own-master", "bound_application_id": None}
-    assert await keys.validate_key(prod_copy) is None
-    assert await keys.validate_key(prod_new) is None
-    assert sorted(k["id"] for k in await keys.list_all()) == ["own-bound", "own-master"]
+    assert await keys.validate_key(test_database, own_bound) == {
+        "id": "own-bound",
+        "bound_application_id": "test_application",
+    }
+    assert await keys.validate_key(test_database, own_master) == {"id": "own-master", "bound_application_id": None}
+    assert await keys.validate_key(test_database, prod_copy) is None
+    assert await keys.validate_key(test_database, prod_new) is None
+    assert sorted((k['id'] for k in await keys.list_all(test_database))) == ['own-bound', 'own-master']

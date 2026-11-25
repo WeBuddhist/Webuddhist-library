@@ -46,7 +46,7 @@ async def test_lifespan_refuses_testing_with_prod_indexes(monkeypatch):
         "settings",
         settings.model_copy(update={"environment": "testing", "neo4j_uri": "bolt://unused"}),
     )
-    app = main.create_app(testing=False)
+    app = main.create_app()
     with pytest.raises(RuntimeError, match="testing-"):
         async with main.lifespan(app):
             pass
@@ -54,7 +54,7 @@ async def test_lifespan_refuses_testing_with_prod_indexes(monkeypatch):
 
 async def test_health_and_swagger_show_release_version(monkeypatch):
     monkeypatch.setattr(main, "settings", settings.model_copy(update={"app_version": "2.16.0"}))
-    app = main.create_app(testing=True)
+    app = main.create_app()
     async with _client(app) as client:
         assert (await client.get("/__/health")).json() == {"status": "healthy", "version": "2.16.0"}
         assert (await client.get("/openapi.json")).json()["info"]["version"] == "2.16.0"
@@ -62,14 +62,14 @@ async def test_health_and_swagger_show_release_version(monkeypatch):
 
 async def test_version_falls_back_to_api_contract_version(monkeypatch):
     monkeypatch.setattr(main, "settings", settings.model_copy(update={"app_version": ""}))
-    app = main.create_app(testing=True)
+    app = main.create_app()
     async with _client(app) as client:
         assert (await client.get("/__/health")).json()["version"] == main.API_VERSION
 
 
 async def test_api_prefix_and_old_root_paths_both_work(monkeypatch):
     monkeypatch.setattr(main, "settings", settings.model_copy(update={"root_path": "/api"}))
-    app = main.create_app(testing=True)
+    app = main.create_app()
     async with _client(app) as client:
         # nginx forwards /api/... unchanged; old callers still use the bare paths.
         for path in ("/api/__/health", "/__/health"):

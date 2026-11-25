@@ -5,8 +5,14 @@ import pytest
 
 import content_service
 from content_service import create_edition, edit_content
+from database import alignment, person, recording, segment, span
+from database import audio as audio_database
+from database import edition as edition_database
+from database import text as text_database
+from database.annotation import note as note_database
+from database.annotation import pagination as pagination_database
 from database.content_state import read_state
-from exceptions import DataConflictError, DataValidationError
+from errors import DataConflictError, DataValidationError
 from identifier import generate_id
 from models.annotation import NoteInput, PaginationInput
 from models.audio import AudioInput, AudioOutput, AudioPatch
@@ -17,6 +23,7 @@ from models.recording import RecordingInput, RecordingOutput, RecordingPatch
 from models.requests import EditionRequestModel
 from models.text import TextInput, TextOutput, TextPatch
 from tests.graph_assertions import snapshot_graph
+from tests.helpers import get_all_segments_by_edition
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -38,15 +45,14 @@ class Objects:
 
 async def fixture(db):
     storage = Objects()
-    text = await db.text.create(TextInput(title={"en": "Lifecycle"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "Lifecycle"}, language="en", category_id="category"))
     data = EditionRequestModel(metadata={"type": "critical"}, content="abcdef", segmentation={"segments": [{"lines": [{"start": 0, "end": 6}]}]})
     edition = await create_edition(db, storage, text, data)
     return storage, text, data, edition
 
 
 async def state(db, edition):
-    async with db.get_session() as session:
-        return await session.execute_read(read_state, edition)
+    return await db.read(read_state, edition)
 
 
 def insert(text="XYZ"):
@@ -69,7 +75,7 @@ async def test_each_edit_uses_fresh_storage_and_preserves_the_previous_content(t
     assert await storage.read_text(original.object_key) == "abcdef"
     assert await storage.read_text(first.object_key) == "abcXYZdef"
     assert await storage.read_text(current.object_key) == "abcXYZXYZdef"
-    lines = (await db.annotation.segmentation.get_all_segments_by_edition(edition))[0].lines
+    lines = (await get_all_segments_by_edition(db, edition))[0].lines
     assert [(line.start, line.end) for line in lines] == [(0, 12)]
 
 
@@ -80,10 +86,10 @@ async def test_identical_replacement_preserves_segments_notes_and_alignment(test
     edition, segments = await graph_edition(db, "source", [(0, 4), (4, 8), (8, 10)])
     target, _ = await graph_edition(db, "target")
     await align(db, edition, target, source_ref="1")
-    links = await db.alignment.get(edition, target, offset=0, limit=20)
+    links = await alignment.get(db, edition, target, offset=0, limit=20)
     assert len(links) == 1
-    note_id = await db.annotation.note.add_durchen(edition, NoteInput(span={"start": 2, "end": 4}, text="note"))
-    note = await db.annotation.note.get(note_id)
+    note_id = await note_database.add_durchen(db, edition, NoteInput(span={"start": 2, "end": 4}, text="note"))
+    note = await note_database.get(db, note_id)
     original = await state(db, edition)
     content = "ab😀defghij"
     await mock_storage.put_immutable(original.stored_key, content.encode(), "text/plain")
@@ -91,9 +97,9 @@ async def test_identical_replacement_preserves_segments_notes_and_alignment(test
     edit = ContentOperation.model_validate({"type": "replace", "start": 0, "end": 8, "text": content[:8]})
     await edit_content(db, mock_storage, edition, edit)
 
-    assert await db.annotation.segmentation.get_all_segments_by_edition(edition) == segments
-    assert await db.annotation.note.get(note_id) == note
-    assert await db.alignment.get(edition, target, offset=0, limit=20) == links
+    assert await get_all_segments_by_edition(db, edition) == segments
+    assert await note_database.get(db, note_id) == note
+    assert await alignment.get(db, edition, target, offset=0, limit=20) == links
     current = await state(db, edition)
     assert current.revision == original.revision + 1
     assert current.stored_key != original.stored_key
@@ -104,19 +110,19 @@ async def test_failed_graph_commit_leaves_old_object_and_spans_unchanged(test_da
     db = test_database
     storage, _, _, edition = await fixture(db)
     original = await state(db, edition)
-    real_adjust = db.span.adjust_with_transaction
+    real_adjust = span.adjust_spans
 
     async def fail_after_adjust(*args):
         await real_adjust(*args)
         raise RuntimeError("after spans")
 
-    monkeypatch.setattr(db.span, "adjust_with_transaction", fail_after_adjust)
+    monkeypatch.setattr(span, 'adjust_spans', fail_after_adjust)
     with pytest.raises(RuntimeError, match="after spans"):
         await edit_content(db, storage, edition, insert())
     assert await state(db, edition) == original
     assert len(storage.objects) == 2  # The failed upload is intentionally left in storage.
-    assert (await db.annotation.segmentation.get_all_segments_by_edition(edition))[0].lines[0].end == 6
-    monkeypatch.setattr(db.span, "adjust_with_transaction", real_adjust)
+    assert (await get_all_segments_by_edition(db, edition))[0].lines[0].end == 6
+    monkeypatch.setattr(span, 'adjust_spans', real_adjust)
     await edit_content(db, storage, edition, insert())
     assert await storage.read_text((await state(db, edition)).object_key) == "abcXYZdef"
 
@@ -127,15 +133,15 @@ async def test_failure_after_pointer_update_rolls_back_both_aligned_editions(tes
 
     db = test_database
     storage, _, data, edition = await fixture(db)
-    text = await db.text.create(TextInput(title={"en": "Neighbor"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "Neighbor"}, language="en", category_id="category"))
     neighbor = await create_edition(db, storage, text, data)
     async with db.get_session() as session:
         await (await session.run("MATCH (s:Segment) SET s.reference = '1'")).consume()
-    await db.alignment.replace(edition, neighbor, EditionAlignmentInput(alignments=[{
+    await alignment.replace(db, edition, neighbor, EditionAlignmentInput(alignments=[{
         "source_segment_reference": "1", "target_segment_reference": "1"
     }]))
     original = [await state(db, item) for item in (edition, neighbor)]
-    segments = await db.annotation.segmentation.get_all_segments_by_edition(edition)
+    segments = await get_all_segments_by_edition(db, edition)
     advance_revision = content_service.advance_revision
 
     async def fail_after_neighbor_revision(tx, edition_id):
@@ -146,28 +152,28 @@ async def test_failure_after_pointer_update_rolls_back_both_aligned_editions(tes
     with pytest.raises(failure, match="after pointer and revisions"):
         await edit_content(db, storage, edition, insert())
     assert [await state(db, item) for item in (edition, neighbor)] == original
-    assert await db.annotation.segmentation.get_all_segments_by_edition(edition) == segments
+    assert await get_all_segments_by_edition(db, edition) == segments
     assert await storage.read_text(original[0].object_key) == "abcdef"
 
 
 async def test_failed_edition_creation_rolls_back_edition_and_segmentation(test_database, monkeypatch):
-    from database.annotation.segmentation_database import SegmentationDatabase
+    from database.annotation import segmentation as segmentation_database
 
     db = test_database
     storage, _, data, _ = await fixture(db)
-    text = await db.text.create(TextInput(title={"en": "New edition"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "New edition"}, language="en", category_id="category"))
     before = await snapshot_graph(db)
-    add = SegmentationDatabase.add_with_transaction
+    add = segmentation_database.add
 
     async def fail_after_segmentation(*args):
         await add(*args)
         raise RuntimeError("after segmentation")
 
-    monkeypatch.setattr(SegmentationDatabase, "add_with_transaction", fail_after_segmentation)
+    monkeypatch.setattr(segmentation_database, 'add', fail_after_segmentation)
     with pytest.raises(RuntimeError, match="after segmentation"):
         await create_edition(db, storage, text, data)
     assert await snapshot_graph(db) == before
-    assert await db.edition.get_all(text) == []
+    assert await edition_database.get_all(db, text) == []
     async with db.get_session() as session:
         result = await session.run("MATCH (s:Segmentation) RETURN count(s) AS count")
         assert (await result.single())["count"] == 1
@@ -175,49 +181,56 @@ async def test_failed_edition_creation_rolls_back_edition_and_segmentation(test_
 
 
 async def test_failed_edition_deletion_restores_annotations(test_database, monkeypatch):
-    from database.edition_database import EditionDatabase
     from neo4j import AsyncManagedTransaction
+
+    from database import edition as edition_database
 
     db = test_database
     _, _, _, edition = await fixture(db)
-    await db.annotation.note.add_durchen(edition, NoteInput(span={"start": 1, "end": 3}, text="note"))
+    await note_database.add_durchen(db, edition, NoteInput(span={"start": 1, "end": 3}, text="note"))
     original = await state(db, edition)
-    segments = await db.annotation.segmentation.get_all_segments_by_edition(edition)
-    notes = await db.annotation.note.get_all(edition)
+    segments = await get_all_segments_by_edition(db, edition)
+    notes = await note_database.get_all(db, edition)
     run = AsyncManagedTransaction.run
 
     async def fail_after_deletion(tx, query, *args, **kwargs):
         result = await run(tx, query, *args, **kwargs)
-        if query == EditionDatabase.DELETE_QUERY:
+        if query == edition_database.DELETE_QUERY:
             await result.consume()
             raise RuntimeError("after deletion")
         return result
 
     monkeypatch.setattr(AsyncManagedTransaction, "run", fail_after_deletion)
     with pytest.raises(RuntimeError, match="after deletion"):
-        await db.edition.delete(edition)
+        await edition_database.delete(db, edition)
     assert await state(db, edition) == original
-    assert await db.annotation.segmentation.get_all_segments_by_edition(edition) == segments
-    assert await db.annotation.note.get_all(edition) == notes
+    assert await get_all_segments_by_edition(db, edition) == segments
+    assert await note_database.get_all(db, edition) == notes
 
 
-@pytest.mark.parametrize("kind,output,patch", [
-    ("person", PersonOutput, PersonPatch(name={"en": "Changed"}, wiki="Q-changed")),
-    ("text", TextOutput, TextPatch(title={"en": "Changed"}, wiki="Q-changed")),
-    ("audio", AudioOutput, AudioPatch(title={"en": "Changed"}, date="2026")),
-    ("recording", RecordingOutput, RecordingPatch(title={"en": "Changed"}, duration_ms=7)),
-])
-async def test_failed_update_response_rolls_back_metadata(test_database, monkeypatch, kind, output, patch):
+@pytest.mark.parametrize(
+    "repository,output,patch",
+    [
+        (person, PersonOutput, PersonPatch(name={"en": "Changed"}, wiki="Q-changed")),
+        (text_database, TextOutput, TextPatch(title={"en": "Changed"}, wiki="Q-changed")),
+        (audio_database, AudioOutput, AudioPatch(title={"en": "Changed"}, date="2026")),
+        (recording, RecordingOutput, RecordingPatch(title={"en": "Changed"}, duration_ms=7)),
+    ],
+)
+async def test_failed_update_response_rolls_back_metadata(test_database, monkeypatch, repository, output, patch):
     db = test_database
     _, entity_id, _, edition = await fixture(db)
-    if kind == "person":
-        entity_id = await db.person.create(PersonInput(name={"en": "Original"}))
-    elif kind == "audio":
-        entity_id = await db.audio.create(entity_id, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
-    elif kind == "recording":
-        audio_id = await db.audio.create(entity_id, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
+    if repository is person:
+        entity_id = await person.create(db, PersonInput(name={"en": "Original"}))
+    elif repository is audio_database:
+        entity_id = await audio_database.create(
+            db, entity_id, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}])
+        )
+    elif repository is recording:
+        audio_id = await audio_database.create(db, entity_id, AudioInput(contributions=[{'type': 'ai', 'id': 'tts', 'role': 'narrator'}]))
         recording_id = generate_id()
-        entity_id = await db.recording.add(
+        entity_id = await recording.add(
+            db,
             audio_id,
             RecordingInput(),
             recording_id,
@@ -225,13 +238,12 @@ async def test_failed_update_response_rolls_back_metadata(test_database, monkeyp
             audio_format=AudioFormat.MP3,
             size_bytes=5,
         )
-    repository = getattr(db, kind)
-    original = await repository.get(entity_id)
+    original = await repository.get(db, entity_id)
     with monkeypatch.context() as patcher:
         patcher.setattr(output, "model_validate", Mock(side_effect=RuntimeError("invalid response")))
         with pytest.raises(RuntimeError, match="invalid response"):
-            await repository.update(entity_id, patch)
-    assert await repository.get(entity_id) == original
+            await repository.update(db, entity_id, patch)
+    assert await repository.get(db, entity_id) == original
 
 
 async def test_concurrent_edits_never_overwrite_each_others_state(test_database):
@@ -258,13 +270,13 @@ async def test_annotation_change_invalidates_an_edit_prepared_before_it(test_dat
     storage, _, _, edition = await fixture(db)
 
     async def annotate():
-        await db.annotation.note.add_durchen(edition, NoteInput(span={"start": 1, "end": 3}, text="note"))
+        await note_database.add_durchen(db, edition, NoteInput(span={"start": 1, "end": 3}, text="note"))
 
     storage.before_put = annotate
     with pytest.raises(DataConflictError, match="changed"):
         await edit_content(db, storage, edition, operation)
     assert await storage.read_text((await state(db, edition)).object_key) == "abcdef"
-    notes = await db.annotation.note.get_all(edition)
+    notes = await note_database.get_all(db, edition)
     assert len(notes) == 1 and notes[0].span.end == 3
 
 
@@ -273,11 +285,11 @@ async def test_concurrent_annotations_preserve_both_revision_increments(test_dat
     _, _, _, edition = await fixture(db)
     original = await state(db, edition)
     await asyncio.gather(*(
-        db.annotation.note.add_durchen(edition, NoteInput(span={"start": 1, "end": 3}, text=text))
+        note_database.add_durchen(db, edition, NoteInput(span={"start": 1, "end": 3}, text=text))
         for text in ("first", "second")
     ))
     assert (await state(db, edition)).revision == original.revision + 2
-    assert {note.text for note in await db.annotation.note.get_all(edition)} == {"first", "second"}
+    assert {note.text for note in await note_database.get_all(db, edition)} == {"first", "second"}
 
 
 async def test_invalid_annotation_rolls_back_its_revision_increment(test_database):
@@ -285,9 +297,9 @@ async def test_invalid_annotation_rolls_back_its_revision_increment(test_databas
     _, _, _, edition = await fixture(db)
     original = await state(db, edition)
     with pytest.raises(DataValidationError):
-        await db.annotation.note.add_durchen(edition, NoteInput(span={"start": 1, "end": 7}, text="invalid"))
+        await note_database.add_durchen(db, edition, NoteInput(span={"start": 1, "end": 7}, text="invalid"))
     assert await state(db, edition) == original
-    assert await db.annotation.note.get_all(edition) == []
+    assert await note_database.get_all(db, edition) == []
 
 
 async def test_cancelled_upload_never_changes_graph(test_database):
@@ -317,19 +329,19 @@ async def test_empty_edit_is_rejected_before_upload(test_database):
 async def test_edit_emptying_a_page_leaves_content_and_annotations_unchanged(test_database, operation):
     db = test_database
     storage, _, _, edition = await fixture(db)
-    pagination_id = await db.annotation.pagination.add(edition, PaginationInput(volumes=[{"pages": [
+    pagination_id = await pagination_database.add(db, edition, PaginationInput(volumes=[{"pages": [
         {"reference": "1", "lines": [{"start": 0, "end": 3}]},
         {"reference": "2", "lines": [{"start": 3, "end": 6}]},
     ]}]))
     original = await state(db, edition)
-    pagination = await db.annotation.pagination.get(pagination_id)
-    segments = await db.annotation.segmentation.get_all_segments_by_edition(edition)
+    pagination = await pagination_database.get(db, pagination_id)
+    segments = await get_all_segments_by_edition(db, edition)
     with pytest.raises(DataValidationError, match="every page"):
         await edit_content(db, storage, edition, ContentOperation.model_validate(operation))
     assert await state(db, edition) == original
     assert await storage.read_text(original.object_key) == "abcdef"
-    assert await db.annotation.pagination.get(pagination_id) == pagination
-    assert await db.annotation.segmentation.get_all_segments_by_edition(edition) == segments
+    assert await pagination_database.get(db, pagination_id) == pagination
+    assert await get_all_segments_by_edition(db, edition) == segments
 
 
 async def test_aligned_edition_edit_invalidates_pending_edit(test_database):
@@ -337,12 +349,12 @@ async def test_aligned_edition_edit_invalidates_pending_edit(test_database):
 
     db = test_database
     storage, _, data, first = await fixture(db)
-    text = await db.text.create(TextInput(title={"en": "Aligned edition"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "Aligned edition"}, language="en", category_id="category"))
     second = await create_edition(db, storage, text, data)
     # Stable references are resolved by the public alignment writer.
     async with db.get_session() as session:
         await (await session.run("MATCH (s:Segment) SET s.reference = '1'")).consume()
-    await db.alignment.replace(first, second, EditionAlignmentInput(alignments=[{
+    await alignment.replace(db, first, second, EditionAlignmentInput(alignments=[{
         "source_segment_reference": "1", "target_segment_reference": "1"
     }]))
     original = await state(db, second)
@@ -362,18 +374,19 @@ async def test_aligned_edition_edit_invalidates_pending_edit(test_database):
 
 async def test_recording_upload_failure_and_empty_audio_never_publish_metadata(test_database):
     from io import BytesIO
+
     from fastapi import UploadFile
     from starlette.datastructures import Headers
 
     db = test_database
     storage, text, _, edition = await fixture(db)
-    audio_id = await db.audio.create(text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
+    audio_id = await audio_database.create(db, text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
     metadata = RecordingInput(edition_id=edition)
     audio = UploadFile(BytesIO(b"audio"), size=5, headers=Headers({"content-type": "audio/mpeg"}))
     storage.before_put = AsyncMock(side_effect=OSError("upload interrupted"))
     with pytest.raises(OSError, match="interrupted"):
         await content_service.create_recording(db, storage, audio_id, metadata, audio)
-    assert await db.recording.get_all_by_audio(audio_id) == []
+    assert await recording.get_all_by_audio(db, audio_id) == []
     audio = UploadFile(BytesIO(), size=0, headers=Headers({"content-type": "audio/mpeg"}))
     with pytest.raises(DataValidationError, match="empty"):
         await content_service.create_recording(db, storage, audio_id, metadata, audio)
@@ -382,14 +395,18 @@ async def test_recording_upload_failure_and_empty_audio_never_publish_metadata(t
 
 async def test_recording_database_failure_rolls_back_metadata_after_upload(test_database, monkeypatch):
     from io import BytesIO
+
     from fastapi import UploadFile
     from starlette.datastructures import Headers
-    from database.recording_database import RecordingDatabase
+
+    from database import recording
 
     db = test_database
     storage, text, _, edition = await fixture(db)
-    audio_id = await db.audio.create(text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
-    original = RecordingDatabase.CREATE_QUERY
+    audio_id = await audio_database.create(
+        db, text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}])
+    )
+    original = recording.CREATE_QUERY
     before = await snapshot_graph(db)
 
     async def fail_after_create(tx, query, **params):
@@ -408,7 +425,7 @@ async def test_recording_database_failure_rolls_back_metadata_after_upload(test_
     with pytest.raises(RuntimeError, match="after recording"):
         await content_service.create_recording(db, storage, audio_id, metadata, audio)
     assert await snapshot_graph(db) == before
-    assert await db.recording.get_all_by_audio(audio_id) == []
+    assert await recording.get_all_by_audio(db, audio_id) == []
     async with db.get_session() as session:
         result = await session.run("MATCH (n) WHERE n:Recording OR (n:Nomen AND NOT (n)<--()) RETURN count(n) AS count")
         assert (await result.single())["count"] == 0
@@ -420,24 +437,24 @@ async def test_related_read_validates_remote_coordinates(test_database, monkeypa
 
     db = test_database
     storage, _, data, first = await fixture(db)
-    text = await db.text.create(TextInput(title={"en": "Read neighbor"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "Read neighbor"}, language="en", category_id="category"))
     second = await create_edition(db, storage, text, data)
     async with db.get_session() as session:
         await (await session.run("MATCH (s:Segment) SET s.reference = '1'")).consume()
-    await db.alignment.replace(first, second, EditionAlignmentInput(alignments=[{
+    await alignment.replace(db, first, second, EditionAlignmentInput(alignments=[{
         "source_segment_reference": "1", "target_segment_reference": "1"
     }]))
-    origin = (await db.annotation.segmentation.get_all_segments_by_edition(first))[0]
+    origin = (await get_all_segments_by_edition(db, first))[0]
     # The route resolves the starting segment inside the validated read, not from
     # coordinates captured before entering it.
-    assert await db.segment.get_related(first, [(100, 200)], starting_segment_id=origin.id)
-    resolve = db.segment._resolve_segment_page
+    assert await segment.get_related(db, origin.id)
+    resolve = segment._resolve_segment_page
 
     async def interrupted_read(*args, **kwargs):
         result = await resolve(*args, **kwargs)
         await edit_content(db, storage, second, insert())
         return result
 
-    monkeypatch.setattr(db.segment, "_resolve_segment_page", interrupted_read)
+    monkeypatch.setattr(segment, "_resolve_segment_page", interrupted_read)
     with pytest.raises(DataConflictError, match="changed"):
-        await db.segment.get_related(first, [], starting_segment_id=origin.id)
+        await segment.get_related(db, origin.id)

@@ -1,4 +1,3 @@
-# pylint: disable=redefined-outer-name
 """
 Integration tests for v2/categories endpoints using real Neo4j test instance.
 
@@ -12,10 +11,11 @@ Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
 - NEO4J_TEST_PASSWORD: Password for test instance
 """
-
 import logging
 
 import pytest
+
+from database import category as category_database
 from models.category import CategoryInput
 from tests.graph_assertions import snapshot_graph
 
@@ -87,11 +87,11 @@ class TestGetAllCategoriesV2:
         """Test filtering categories by parent_id"""
         parent_data = {"title": {"en": "Parent Category"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child_data = {"title": {"en": "Child Category"}, "parent_id": parent_id}
         child = CategoryInput.model_validate(child_data)
-        child_id = await test_database.category.create(child, application="test_application")
+        child_id = await category_database.create(test_database, child, application="test_application")
 
         response = await client.get(f"/v2/categories/?parent_id={parent_id}", headers=APPLICATION_HEADER)
 
@@ -105,11 +105,11 @@ class TestGetAllCategoriesV2:
         """Test getting only root categories (no parent_id filter returns roots)"""
         parent_data = {"title": {"en": "Root Category For Test"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child_data = {"title": {"en": "Child Of Root"}, "parent_id": parent_id}
         child = CategoryInput.model_validate(child_data)
-        await test_database.category.create(child, application="test_application")
+        await category_database.create(test_database, child, application="test_application")
 
         response = await client.get("/v2/categories/", headers=APPLICATION_HEADER)
 
@@ -122,15 +122,15 @@ class TestGetAllCategoriesV2:
         """Test that categories include children field with child IDs"""
         parent_data = {"title": {"en": "Parent With Children"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child1_data = {"title": {"en": "First Child"}, "parent_id": parent_id}
         child1 = CategoryInput.model_validate(child1_data)
-        child1_id = await test_database.category.create(child1, application="test_application")
+        child1_id = await category_database.create(test_database, child1, application="test_application")
 
         child2_data = {"title": {"en": "Second Child"}, "parent_id": parent_id}
         child2 = CategoryInput.model_validate(child2_data)
-        child2_id = await test_database.category.create(child2, application="test_application")
+        child2_id = await category_database.create(test_database, child2, application="test_application")
 
         response = await client.get("/v2/categories/", headers=APPLICATION_HEADER)
 
@@ -148,7 +148,7 @@ class TestGetAllCategoriesV2:
         """Test that categories without children have empty children list"""
         leaf_data = {"title": {"en": "Leaf Category"}}
         leaf = CategoryInput.model_validate(leaf_data)
-        leaf_id = await test_database.category.create(leaf, application="test_application")
+        leaf_id = await category_database.create(test_database, leaf, application="test_application")
 
         response = await client.get("/v2/categories/", headers=APPLICATION_HEADER)
 
@@ -242,11 +242,11 @@ class TestGetCategoryByIdV2:
         """Test that retrieved category includes children IDs"""
         parent_data = {"title": {"en": "Parent For GetById"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child_data = {"title": {"en": "Child For GetById"}, "parent_id": parent_id}
         child = CategoryInput.model_validate(child_data)
-        child_id = await test_database.category.create(child, application="test_application")
+        child_id = await category_database.create(test_database, child, application="test_application")
 
         response = await client.get(f"/v2/categories/{parent_id}", headers=APPLICATION_HEADER)
 
@@ -259,11 +259,11 @@ class TestGetCategoryByIdV2:
         """Test that a child category includes parent_id"""
         parent_data = {"title": {"en": "Parent For Child GetById"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child_data = {"title": {"en": "Child With Parent GetById"}, "parent_id": parent_id}
         child = CategoryInput.model_validate(child_data)
-        child_id = await test_database.category.create(child, application="test_application")
+        child_id = await category_database.create(test_database, child, application="test_application")
 
         response = await client.get(f"/v2/categories/{child_id}", headers=APPLICATION_HEADER)
 
@@ -320,7 +320,7 @@ class TestCreateCategoryV2:
         """Test creating a child category with parent_id"""
         parent_data = {"title": {"en": "Parent For Create Test"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child_data = {"title": {"en": "Child Category"}, "parent_id": parent_id}
 
@@ -404,7 +404,7 @@ class TestCreateCategoryV2:
         """Test child categories cannot cross application boundaries."""
         await _seed_app_b(test_database)
         parent = CategoryInput.model_validate({"title": {"en": "Cross App Parent"}})
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         response = await client.post(
             "/v2/categories/",
@@ -445,7 +445,7 @@ class TestUpdateCategoryV2:
     async def test_patch_category_adds_title_language(self, client, test_database):
         """Test adding a title language keeps the existing languages"""
         category = CategoryInput.model_validate({"title": {"en": "Patch Add Title", "bo": "ཁ་སྣོན་མཚན་བྱང་།"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -465,7 +465,7 @@ class TestUpdateCategoryV2:
     async def test_patch_category_overwrites_title_language(self, client, test_database):
         """Test overwriting a title language keeps the other languages"""
         category = CategoryInput.model_validate({"title": {"en": "Patch Old Title", "bo": "མཚན་བྱང་རྙིང་པ།"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -479,7 +479,7 @@ class TestUpdateCategoryV2:
     async def test_patch_category_adds_and_overwrites_in_one_request(self, client, test_database):
         """Test adding and overwriting languages in the same request"""
         category = CategoryInput.model_validate({"title": {"en": "Patch Mixed Title", "bo": "མཚན་བྱང་།"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -493,7 +493,7 @@ class TestUpdateCategoryV2:
     async def test_patch_category_title_language_matched_case_insensitively(self, client, test_database):
         """Test a differently-cased language code replaces the existing title instead of adding a second one"""
         category = CategoryInput.model_validate({"title": {"en-US": "Patch Case Old", "bo": "ཡིག་འབྲུ།"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -512,7 +512,7 @@ class TestUpdateCategoryV2:
         category = CategoryInput.model_validate(
             {"title": {"en": "Patch Case Description"}, "description": {"EN": "Old description", "bo": "རྙིང་པ།"}}
         )
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -526,7 +526,7 @@ class TestUpdateCategoryV2:
     async def test_patch_category_adds_description_when_missing(self, client, test_database):
         """Test adding a description to a category that has none"""
         category = CategoryInput.model_validate({"title": {"en": "Patch No Description"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -547,7 +547,7 @@ class TestUpdateCategoryV2:
                 "description": {"en": "Old description", "bo": "འགྲེལ་བཤད་རྙིང་པ།"},
             }
         )
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -567,7 +567,7 @@ class TestUpdateCategoryV2:
         category = CategoryInput.model_validate(
             {"title": {"en": "Patch Title Only"}, "description": {"en": "Untouched description"}}
         )
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -581,13 +581,13 @@ class TestUpdateCategoryV2:
     async def test_patch_category_keeps_parent_and_children(self, client, test_database):
         """Test patching localizations does not change the hierarchy"""
         parent = CategoryInput.model_validate({"title": {"en": "Patch Hierarchy Parent"}})
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
         child = CategoryInput.model_validate({"title": {"en": "Patch Hierarchy Child"}, "parent_id": parent_id})
-        child_id = await test_database.category.create(child, application="test_application")
+        child_id = await category_database.create(test_database, child, application="test_application")
         grandchild = CategoryInput.model_validate(
             {"title": {"en": "Patch Hierarchy Grandchild"}, "parent_id": child_id}
         )
-        grandchild_id = await test_database.category.create(grandchild, application="test_application")
+        grandchild_id = await category_database.create(test_database, grandchild, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{child_id}",
@@ -603,7 +603,7 @@ class TestUpdateCategoryV2:
     async def test_patch_category_with_own_title_allowed(self, client, test_database):
         """Test resending the category's own title is not treated as a duplicate"""
         category = CategoryInput.model_validate({"title": {"en": "Patch Own Title"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -617,9 +617,9 @@ class TestUpdateCategoryV2:
     async def test_patch_category_duplicate_sibling_title_rejected(self, client, test_database):
         """Test a title that duplicates a sibling category in the same language is rejected"""
         sibling = CategoryInput.model_validate({"title": {"zh": "重复标题", "en": "Patch Sibling"}})
-        await test_database.category.create(sibling, application="test_application")
+        await category_database.create(test_database, sibling, application="test_application")
         category = CategoryInput.model_validate({"title": {"en": "Patch Duplicate Target"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -637,11 +637,11 @@ class TestUpdateCategoryV2:
     async def test_patch_category_same_title_under_different_parent_allowed(self, client, test_database):
         """Test a title used by a category under another parent is allowed"""
         other = CategoryInput.model_validate({"title": {"en": "Patch Other Parent"}})
-        other_id = await test_database.category.create(other, application="test_application")
+        other_id = await category_database.create(test_database, other, application="test_application")
         cousin = CategoryInput.model_validate({"title": {"zh": "表亲标题"}, "parent_id": other_id})
-        await test_database.category.create(cousin, application="test_application")
+        await category_database.create(test_database, cousin, application="test_application")
         category = CategoryInput.model_validate({"title": {"en": "Patch Root Without Cousin"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -667,7 +667,7 @@ class TestUpdateCategoryV2:
         """Test a category cannot be patched through another application"""
         await _seed_app_b(test_database)
         category = CategoryInput.model_validate({"title": {"en": "Patch Cross App"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -701,7 +701,7 @@ class TestUpdateCategoryV2:
     async def test_patch_category_invalid_language_code(self, client, test_database):
         """Test patching with a language code not in /v2/languages returns 400"""
         category = CategoryInput.model_validate({"title": {"en": "Patch Invalid Language"}})
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         response = await client.patch(
             f"/v2/categories/{category_id}",
@@ -718,7 +718,7 @@ class TestUpdateCategoryV2:
         category = CategoryInput.model_validate(
             {"title": {"en": "Patch Rollback"}, "description": {"en": "Rollback description"}}
         )
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
         before = await snapshot_graph(test_database)
 
         response = await client.patch(
@@ -735,7 +735,7 @@ class TestUpdateCategoryV2:
         category = CategoryInput.model_validate(
             {"title": {"en": "Patch Orphan Check"}, "description": {"en": "Orphan description"}}
         )
-        category_id = await test_database.category.create(category, application="test_application")
+        category_id = await category_database.create(test_database, category, application="test_application")
 
         count_query = """
             MATCH (c:Category {id: $category_id})
@@ -803,15 +803,15 @@ class TestCategoryHierarchy:
         """Test creating a three-level category hierarchy"""
         grandparent_data = {"title": {"en": "Grandparent"}}
         grandparent = CategoryInput.model_validate(grandparent_data)
-        grandparent_id = await test_database.category.create(grandparent, application="test_application")
+        grandparent_id = await category_database.create(test_database, grandparent, application="test_application")
 
         parent_data = {"title": {"en": "Parent"}, "parent_id": grandparent_id}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child_data = {"title": {"en": "Child"}, "parent_id": parent_id}
         child = CategoryInput.model_validate(child_data)
-        child_id = await test_database.category.create(child, application="test_application")
+        child_id = await category_database.create(test_database, child, application="test_application")
 
         response = await client.get("/v2/categories/", headers=APPLICATION_HEADER)
         categories = response.json()
@@ -832,13 +832,13 @@ class TestCategoryHierarchy:
         """Test that a parent can have multiple children"""
         parent_data = {"title": {"en": "Multi Child Parent"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         child_ids = []
         for i in range(5):
             child_data = {"title": {"en": f"Child {i}"}, "parent_id": parent_id}
             child = CategoryInput.model_validate(child_data)
-            child_id = await test_database.category.create(child, application="test_application")
+            child_id = await category_database.create(test_database, child, application="test_application")
             child_ids.append(child_id)
 
         response = await client.get("/v2/categories/", headers=APPLICATION_HEADER)
@@ -854,19 +854,19 @@ class TestCategoryHierarchy:
         """Test that sibling categories don't affect each other's children"""
         parent_data = {"title": {"en": "Sibling Test Parent"}}
         parent = CategoryInput.model_validate(parent_data)
-        parent_id = await test_database.category.create(parent, application="test_application")
+        parent_id = await category_database.create(test_database, parent, application="test_application")
 
         sibling1_data = {"title": {"en": "Sibling 1"}, "parent_id": parent_id}
         sibling1 = CategoryInput.model_validate(sibling1_data)
-        sibling1_id = await test_database.category.create(sibling1, application="test_application")
+        sibling1_id = await category_database.create(test_database, sibling1, application="test_application")
 
         sibling2_data = {"title": {"en": "Sibling 2"}, "parent_id": parent_id}
         sibling2 = CategoryInput.model_validate(sibling2_data)
-        sibling2_id = await test_database.category.create(sibling2, application="test_application")
+        sibling2_id = await category_database.create(test_database, sibling2, application="test_application")
 
         child_of_sibling1_data = {"title": {"en": "Child of Sibling 1"}, "parent_id": sibling1_id}
         child_of_sibling1 = CategoryInput.model_validate(child_of_sibling1_data)
-        child_of_sibling1_id = await test_database.category.create(child_of_sibling1, application="test_application")
+        child_of_sibling1_id = await category_database.create(test_database, child_of_sibling1, application="test_application")
 
         response = await client.get(f"/v2/categories/?parent_id={parent_id}", headers=APPLICATION_HEADER)
         siblings = response.json()
@@ -992,9 +992,7 @@ class TestCategoryDescription:
             "title": {"en": "Desc Via DB"},
             "description": {"en": "Created via database with description"},
         })
-        category_id = await test_database.category.create(
-            category_with_desc, application="test_application"
-        )
+        category_id = await category_database.create(test_database, category_with_desc, application="test_application")
 
         response = await client.get("/v2/categories/", headers=APPLICATION_HEADER)
         categories = response.json()

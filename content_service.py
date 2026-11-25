@@ -4,14 +4,14 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING
 
+from database import edition, excerpt, recording, segment
+from database import span as span_database
 from database.content_state import advance_revision, lock_connected_editions, read_at_revision, read_state
-from database.excerpt_database import ExcerptDatabase
-from exceptions import DataConflictError, DataValidationError
+from errors import DataConflictError, DataValidationError
 from identifier import generate_id
 from models.content_operation import ContentOperation, DeleteOperation, InsertOperation
 from models.enums import AudioFormat
-from storage import PRESIGNED_URL_TTL_SECONDS, Storage
-from storage.keys import edition_key, recording_key
+from storage import PRESIGNED_URL_TTL_SECONDS, Storage, edition_key, recording_key
 
 if TYPE_CHECKING:
     from fastapi import UploadFile
@@ -26,11 +26,11 @@ async def create_edition(db: Database, storage: Storage, text_id: str, data: Edi
     edition_id = generate_id()
     if data.content is None:
         length = sum(span.end - span.start for span in data.excerpt_of.spans) if data.excerpt_of else 0
-        return await db.edition.create(data.metadata, edition_id, text_id, length, excerpt_of=data.excerpt_of)
-
+        return await edition.create(db, data.metadata, edition_id, text_id, length, excerpt_of=data.excerpt_of)
     key = edition_key(text_id, edition_id)
     await storage.put_immutable(key, data.content.encode(), "text/plain; charset=utf-8")
-    return await db.edition.create(
+    return await edition.create(
+        db,
         data.metadata,
         edition_id,
         text_id,
@@ -45,9 +45,7 @@ async def read_content(
     db: Database, storage: Storage, edition_id: str, *, span_start: int | None = None, span_end: int | None = None
 ) -> str:
     """Slice edition content when both bounds are supplied, after assembling an excerpt in reading order."""
-    state, slices = await db.transactions.execute_read(
-        read_at_revision, edition_id, partial(ExcerptDatabase.get_slices_with_transaction, edition_id=edition_id)
-    )
+    state, slices = await db.read(read_at_revision, edition_id, partial(excerpt.get_slices, edition_id=edition_id))
     if state.is_excerpt:
         source = await storage.read_text(slices[0].key)
         content = "".join(source[piece.start : piece.end] for piece in slices)
@@ -59,25 +57,25 @@ async def read_content(
 
 
 async def read_segment_content(db: Database, storage: Storage, segment_id: str, application: str | None) -> str:
-    key, span = await db.transactions.execute_read(db.segment.get_content_location, segment_id, application)
+    key, span = await segment.get_content_location(db, segment_id, application)
     content = await storage.read_text(key)
     return content[span.start : span.end]
 
 
 async def sign_edition_content_url(db: Database, storage: Storage, edition_id: str) -> tuple[str, datetime]:
-    state = await db.transactions.execute_read(read_state, edition_id)
+    state = await db.read(read_state, edition_id)
     expires_at = datetime.now(UTC) + timedelta(seconds=PRESIGNED_URL_TTL_SECONDS)
     url = await storage.generate_url(state.stored_key)
-    return url, expires_at
+    return (url, expires_at)
 
 
 async def sign_recording_audio_url(db: Database, storage: Storage, recording_id: str) -> str:
-    key = await db.recording.get_storage_location(recording_id)
+    key = await recording.get_storage_location(db, recording_id)
     return await storage.generate_url(key)
 
 
 async def edit_content(db: Database, storage: Storage, edition_id: str, data: ContentOperation) -> None:
-    state = await db.transactions.execute_read(read_state, edition_id)
+    state = await db.read(read_state, edition_id)
     edit = data.operation
     start, end = (edit.position, edit.position) if isinstance(edit, InsertOperation) else (edit.start, edit.end)
     replacement = "" if isinstance(edit, DeleteOperation) else edit.text
@@ -98,8 +96,8 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
         if current.revision != state.revision:
             raise DataConflictError(f"Edition changed: expected revision {state.revision}, current {current.revision}")
         if text_changed:
-            await db.span.adjust_with_transaction(tx, edition_id, start, end, len(replacement))
-            await ExcerptDatabase.propagate_edit_with_transaction(tx, edition_id, start, end, len(replacement))
+            await span_database.adjust_spans(tx, edition_id, start, end, len(replacement))
+            await excerpt.propagate_edit(tx, edition_id, start, end, len(replacement))
         await tx.run(
             """
             MATCH (e:Edition {id: $id})
@@ -112,7 +110,7 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
         for related_id in related:
             await advance_revision(tx, related_id)
 
-    await db.transactions.execute_write(write)
+    await db.write(write)
 
 
 async def create_recording(
@@ -124,12 +122,11 @@ async def create_recording(
     size = file.size
     if not size:
         raise DataValidationError("Audio file is empty or its size is unavailable")
-    # Reject a missing Audio or a wrong edition before uploading, so a bad request leaves no object behind.
-    await db.recording.validate_target(audio_id, metadata.edition_id)
+    await recording.validate_target(db, audio_id, metadata.edition_id)
     await file.seek(0)
     recording_id = generate_id()
     key = recording_key(recording_id, audio_format)
     await storage.put_immutable(key, file.file, audio_format.content_type)
-    return await db.recording.add(
-        audio_id, metadata, recording_id, audio_key=key, audio_format=audio_format, size_bytes=size
+    return await recording.add(
+        db, audio_id, metadata, recording_id, audio_key=key, audio_format=audio_format, size_bytes=size
     )

@@ -1,9 +1,11 @@
 """Convert recordings from the edition-attached shape into an Audio plus its Recording."""
-
 import asyncio
 
 import pytest
 
+from database import audio as audio_database
+from database import edition, text
+from database import recording as recording_database
 from database.migrations import (
     audit_schema,
     legacy_recording_ids,
@@ -11,13 +13,7 @@ from database.migrations import (
     unconvertible_recording_ids,
     upgrade_recordings,
 )
-from database.neo4j_triggers import (
-    SYSTEM_DATABASE_NAME,
-    _required_rel_trigger,
-    bind_changes,
-    install_triggers,
-    wait_for_triggers,
-)
+from database.neo4j_triggers import SYSTEM_DATABASE_NAME, _required_rel_trigger, install_triggers, wait_for_triggers
 from identifier import generate_id
 from models.edition import EditionInput
 from models.recording import RecordingCue
@@ -48,9 +44,7 @@ FINISH
 """
 
 # The required-relationship trigger installed with the edition-attached shape.
-OLD_RECORDING_TRIGGER = _required_rel_trigger(
-    "enforce_recording_recording_of", "Recording requires RECORDING_OF", "Recording", "RECORDING_OF", "Edition"
-)[0]
+OLD_RECORDING_TRIGGER = _required_rel_trigger('enforce_recording_recording_of', 'Recording', 'RECORDING_OF', 'Edition')
 
 
 async def _replace_triggers_with_old_rule(db) -> None:
@@ -60,19 +54,19 @@ async def _replace_triggers_with_old_rule(db) -> None:
             await session.run(
                 "CALL apoc.trigger.install($database, $name, $statement, {phase: 'before'})",
                 database=db._database,
-                name=OLD_RECORDING_TRIGGER["name"],
-                statement=f"CYPHER 25 {bind_changes(OLD_RECORDING_TRIGGER['query'])}",
+                name=OLD_RECORDING_TRIGGER.name,
+                statement=f"CYPHER 25 {OLD_RECORDING_TRIGGER.query}",
             )
         ).consume()
     await asyncio.sleep(NEO4J_TRIGGER_REFRESH_SECONDS)
 
 
 async def _legacy_recording(db, *, with_metadata: bool = True) -> tuple[str, str, str]:
-    text_id = await db.text.create(
-        TextInput(title={"bo": f"Legacy host {generate_id()[:6]}"}, language="bo", category_id="category")
+    text_id = await text.create(
+        db, TextInput(title={"bo": f"Legacy host {generate_id()[:6]}"}, language="bo", category_id="category")
     )
     edition_id = generate_id()
-    await db.edition.create(EditionInput(type="critical"), edition_id, text_id, 20)
+    await edition.create(db, EditionInput(type="critical"), edition_id, text_id, 20)
     recording_id = generate_id()
     await _replace_triggers_with_old_rule(db)
     async with db.get_session() as session:
@@ -106,12 +100,12 @@ async def test_migration_converts_legacy_recording_and_keeps_its_cues(test_datab
     await migrate(db._driver, db._database)
 
     assert await legacy_recording_ids(db._driver, db._database) == []
-    recording = await db.recording.get(recording_id)
+    recording = await recording_database.get(db, recording_id)
     assert recording.text_id == text_id
     assert recording.edition_id == edition_id
     assert recording.title is None  # The legacy title described the performance, so it moved to the Audio.
     assert recording.duration_ms == 1000
-    audio = await db.audio.get(recording.audio_id)
+    audio = await audio_database.get(db, recording.audio_id)
     assert audio.text_id == text_id
     assert audio.title.root == {"en": "Legacy reading"}
     assert audio.language == "bo"
@@ -119,8 +113,10 @@ async def test_migration_converts_legacy_recording_and_keeps_its_cues(test_datab
     assert audio.date == "2024"
     assert audio.recordings == [recording_id]
     assert [(c.type, c.role) for c in audio.contributions] == [("ai", "narrator")]
-    assert await db.recording.get_storage_location(recording_id) == f"recordings/{edition_id}/{recording_id}.mp3"
-    assert await db.recording.get_cues(recording_id) == [
+    assert (
+        await recording_database.get_storage_location(db, recording_id) == f"recordings/{edition_id}/{recording_id}.mp3"
+    )
+    assert await recording_database.get_cues(db, recording_id) == [
         RecordingCue.model_validate({"span": {"start": 0, "end": 4}, "start_ms": 0, "end_ms": 500})
     ]
     async with db.get_session() as session:
@@ -156,7 +152,7 @@ async def test_conversion_fills_missing_language_and_license(test_database):
 
     assert await upgrade_recordings(db._driver, db._database) == 1
 
-    audio = await db.audio.get((await db.recording.get(recording_id)).audio_id)
+    audio = await audio_database.get(db, (await recording_database.get(db, recording_id)).audio_id)
     assert audio.language == "bo"  # The recited text's language.
     assert audio.license == "public"
 
@@ -187,7 +183,7 @@ async def test_conversion_handles_several_recordings_each_with_its_own_audio(tes
 
     assert await upgrade_recordings(db._driver, db._database) == 2
 
-    audios = {(await db.recording.get(recording_id)).audio_id for recording_id in (first, second)}
+    audios = {(await recording_database.get(db, recording_id)).audio_id for recording_id in (first, second)}
     assert len(audios) == 2  # One performance each; recordings are never grouped.
     assert await audit_schema(db._driver, db._database) == {}
 

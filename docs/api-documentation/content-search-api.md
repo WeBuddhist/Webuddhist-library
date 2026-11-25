@@ -83,8 +83,8 @@ This builds replacements, verifies document counts, and switches both configured
 Relevant code:
 
 - `routers/content_search.py`
-- `content_search/service.py`
+- `search/content.py`
 - `models/content_search.py`
 - `models/requests.py`
-- `database/segment_database.py`
+- `database/segment.py`
 - `scripts/reindex.py`

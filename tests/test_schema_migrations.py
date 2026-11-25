@@ -3,11 +3,15 @@ import asyncio
 import pytest
 from neo4j.exceptions import ClientError
 
+from database import application, audio, category, tag
+from database import edition as edition_database
+from database import person as person_database
+from database import text as text_database
+from database.annotation import segmentation as segmentation_database
+from database.annotation import table_of_contents
 from database.migrations import audit_schema, migrate
-from database.database_validator import DatabaseValidator
-from database.text_database import TextDatabase
+from errors import DataValidationError
 from identifier import generate_id
-from exceptions import DataValidationError
 from models.category import CategoryInput
 from models.tag import TagInput
 from models.text import TextInput, TextOutput, TextPatch
@@ -25,7 +29,7 @@ def contend_before(monkeypatch, target, method):
         if arrivals <= 2:
             await asyncio.wait_for(barrier.wait(), timeout=10)
         return await original(*args, **kwargs)
-    monkeypatch.setattr(target, method, staticmethod(simultaneous) if isinstance(target, type) else simultaneous)
+    monkeypatch.setattr(target, method, simultaneous)
 
 
 
@@ -39,11 +43,11 @@ async def test_idless_nodes_cannot_skip_required_relationships(test_database, la
 
 async def test_updates_cannot_invert_spans(test_database):
     db = test_database
-    text = await db.text.create(TextInput(title={"en": "Mutable spans"}, language="en", category_id="category"))
-    from models.edition import EditionInput
+    text = await text_database.create(db, TextInput(title={"en": "Mutable spans"}, language="en", category_id="category"))
     from models.annotation import SegmentationInput
+    from models.edition import EditionInput
     edition = generate_id()
-    await db.edition.create(EditionInput(type="critical"), edition, text, 20,
+    await edition_database.create(db, EditionInput(type="critical"), edition, text, 20,
                             segmentation=SegmentationInput(segments=[{"lines": [{"start": 2, "end": 5}]}]))
     async with db.get_session() as session:
         with pytest.raises(ClientError, match="enforce_span_start_lte_end"):
@@ -51,28 +55,28 @@ async def test_updates_cannot_invert_spans(test_database):
 
 
 async def test_title_uniqueness_survives_concurrent_creates_and_updates(test_database, monkeypatch):
-    contend_before(monkeypatch, DatabaseValidator, "validate_text_creation")
+    contend_before(monkeypatch, text_database, "validate_text_creation")
     db = test_database
     title = TextInput(title={"en": "Contended title"}, language="en", category_id="category")
-    results = await asyncio.gather(db.text.create(title), db.text.create(title), return_exceptions=True)
+    results = await asyncio.gather(text_database.create(db, title), text_database.create(db, title), return_exceptions=True)
     assert sum(isinstance(result, str) for result in results) == 1, results
     errors = [r for r in results if isinstance(r, Exception)]
     assert len(errors) == 1, results
     error = errors[0]
     assert (isinstance(error, DataValidationError) and "Contended title" in str(error) and "already exists" in str(error)) or (isinstance(error, ClientError) and "enforce_text_title_unique: Duplicate title+language exists" in str(error)), results
-    second = await db.text.create(TextInput(title={"en": "Second title"}, language="en", category_id="category"))
+    second = await text_database.create(db, TextInput(title={"en": "Second title"}, language="en", category_id="category"))
     async with db.get_session() as session:
         with pytest.raises(ClientError, match="enforce_text_title_unique"):
             await (await session.run("MATCH (:Text {id: $id})-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(t:LocalizedText) SET t.text = 'Contended title'", id=second)).consume()
 
 
 async def test_concurrent_title_changes_cannot_claim_the_same_title(test_database, monkeypatch):
-    contend_before(monkeypatch, TextDatabase, "_get_for_update")
+    contend_before(monkeypatch, text_database, "_get_for_update")
     db = test_database
-    ids = [await db.text.create(TextInput(title={"en": title}, language="en", category_id="category"))
+    ids = [await text_database.create(db, TextInput(title={"en": title}, language="en", category_id="category"))
            for title in ("First title", "Second title")]
     results = await asyncio.gather(
-        *(db.text.update(text_id, TextPatch(title={"en": "Shared title"})) for text_id in ids),
+        *(text_database.update(db, text_id, TextPatch(title={"en": "Shared title"})) for text_id in ids),
         return_exceptions=True,
     )
     assert sum(isinstance(result, TextOutput) for result in results) == 1, results
@@ -86,10 +90,10 @@ async def test_concurrent_title_changes_cannot_claim_the_same_title(test_databas
         assert errors[0].code == "Neo.ClientError.Transaction.TransactionHookFailed"
         loser = next(text_id for text_id, result in zip(ids, results) if isinstance(result, Exception))
         with pytest.raises(ClientError, match="enforce_text_title_unique: Duplicate title\\+language exists"):
-            await db.text.update(loser, TextPatch(title={"en": "Shared title"}))
+            await text_database.update(db, loser, TextPatch(title={"en": "Shared title"}))
     else:
         assert "enforce_text_title_unique: Duplicate title+language exists" in message
-    titles = [(await db.text.get(text_id)).title.root for text_id in ids]
+    titles = [(await text_database.get(db, text_id)).title.root for text_id in ids]
     assert titles.count({"en": "Shared title"}) == 1
     for index, result in enumerate(results):
         if isinstance(result, Exception):
@@ -99,7 +103,7 @@ async def test_concurrent_title_changes_cannot_claim_the_same_title(test_databas
 async def test_title_language_relationship_updates_cannot_create_duplicates(test_database):
     db = test_database
     for language in ("en", "en-US"):
-        text_id = await db.text.create(TextInput(
+        text_id = await text_database.create(db, TextInput(
             title={language: "Same spelling"}, language="en", category_id="category",
         ))
     async with db.get_session() as session:
@@ -109,15 +113,15 @@ async def test_title_language_relationship_updates_cannot_create_duplicates(test
                       -[language:HAS_LANGUAGE]->(:Language)
                 SET language.bcp47 = 'EN'
             """, id=text_id)).consume()
-    assert (await db.text.get(text_id)).title.root == {"en-US": "Same spelling"}
+    assert (await text_database.get(db, text_id)).title.root == {"en-US": "Same spelling"}
 
 
 @pytest.mark.parametrize("entity,model", [("tag", TagInput), ("category", CategoryInput)])
 async def test_taxonomy_title_check_serializes_with_create(test_database, entity, model, monkeypatch):
-    repository = getattr(test_database, entity)
-    contend_before(monkeypatch, repository, "_validate_not_exists_tx")
+    module = {"tag": tag, "category": category}[entity]
+    contend_before(monkeypatch, module, '_validate_not_exists')
     value = model(title={"en": "Contended"})
-    results = await asyncio.gather(repository.create(value, "test_application"), repository.create(value, "test_application"), return_exceptions=True)
+    results = await asyncio.gather(module.create(test_database, value, "test_application"), module.create(test_database, value, "test_application"), return_exceptions=True)
     assert sum(isinstance(result, str) for result in results) == 1, results
     errors = [r for r in results if isinstance(r, Exception)]
     assert len(errors) == 1 and isinstance(errors[0], DataValidationError), results
@@ -140,12 +144,14 @@ async def test_schema_upgrade_rejects_legacy_segmentation_overlap_or_gap(test_da
     from models.edition import EditionInput
 
     db = test_database
-    text = await db.text.create(TextInput(title={"en": "Legacy segmentation"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "Legacy segmentation"}, language="en", category_id="category"))
     edition = generate_id()
     lines = [{"start": 0, "end": 5}, {"start": 5, "end": 10}]
     segments = [{"lines": lines}] if same_segment else [{"lines": [line]} for line in lines]
-    await db.edition.create(EditionInput(type="critical"), edition, text, 10, segmentation=SegmentationInput(segments=segments))
-    segmentation = await db.annotation.segmentation.get_by_edition(edition)
+    await edition_database.create(
+        db, EditionInput(type="critical"), edition, text, 10, segmentation=SegmentationInput(segments=segments)
+    )
+    segmentation = await segmentation_database.get_by_edition(db, edition)
     async with db.get_session() as session:
         await (await session.run("MATCH (s:Span {start: 5}) SET s.start = $start", start=second_start)).consume()
     violations = await audit_schema(db._driver, db._database)
@@ -176,12 +182,12 @@ async def test_updates_cannot_change_audio_role_or_toc_parent_bounds(test_databa
     from models.edition import EditionInput
 
     db = test_database
-    text = await db.text.create(TextInput(title={"en": "Mutable semantics"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "Mutable semantics"}, language="en", category_id="category"))
     edition = generate_id()
-    await db.edition.create(EditionInput(type="critical"), edition, text, 20)
-    await db.audio.create(text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
+    await edition_database.create(db, EditionInput(type="critical"), edition, text, 20)
+    await audio.create(db, text, AudioInput(contributions=[{"type": "ai", "id": "tts", "role": "narrator"}]))
     toc = TableOfContentsInput(sections=[{"title": {"en": "Parent"}, "span": {"start": 0, "end": 20}, "subsections": [{"title": {"en": "Child"}, "span": {"start": 5, "end": 10}}]}])
-    await db.annotation.table_of_contents.add(edition, toc)
+    await table_of_contents.add(db, edition, toc)
     async with db.get_session() as session:
         with pytest.raises(ClientError, match="enforce_audio_contribution_role"):
             await (await session.run("MATCH (r:RoleType {name: 'narrator'}) SET r.name = 'unsupported-role'")).consume()
@@ -192,12 +198,12 @@ async def test_updates_cannot_change_audio_role_or_toc_parent_bounds(test_databa
 async def test_installed_trigger_rejects_relationship_deletion_and_rolls_back(test_database):
     from models.person import PersonInput
     db = test_database
-    person = await db.person.create(PersonInput(name={'en':'Required name'}))
-    original = await db.person.get(person)
+    person = await person_database.create(db, PersonInput(name={"en": "Required name"}))
+    original = await person_database.get(db, person)
     async with db.get_session() as session:
         with pytest.raises(ClientError, match='enforce_person_has_name'):
             await (await session.run('MATCH (:Person {id:$id})-[r:HAS_NAME]->() DELETE r',id=person)).consume()
-    assert await db.person.get(person) == original
+    assert await person_database.get(db, person) == original
 
 
 @pytest.mark.parametrize('rows', [0,2])
@@ -205,7 +211,7 @@ async def test_invalid_create_result_rolls_back_real_transaction(test_database, 
     from neo4j.exceptions import ResultNotSingleError
     db = test_database
     query = f'CREATE (a:Application {{id:$application_id,name:$name}}) WITH a UNWIND {list(range(rows))} AS duplicate RETURN a.id AS id'
-    monkeypatch.setattr(db.application, 'CREATE_QUERY', query)
+    monkeypatch.setattr(application, 'CREATE_QUERY', query)
     with pytest.raises(ResultNotSingleError):
-        await db.application.create('unpublished','Unpublished')
-    assert not await db.application.exists('unpublished')
+        await application.create(db, "unpublished", "Unpublished")
+    assert not await application.exists(db, 'unpublished')

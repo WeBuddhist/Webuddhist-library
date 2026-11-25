@@ -10,18 +10,21 @@ from pathlib import Path
 from typing import LiteralString, cast
 
 import httpx
-from neo4j import AsyncGraphDatabase, GraphDatabase
 import pytest
 import pytest_asyncio
-from testcontainers.core.container import DockerContainer
+from neo4j import AsyncGraphDatabase, GraphDatabase
 from testcontainers.community.neo4j import Neo4jContainer
+from testcontainers.core.container import DockerContainer
 
-from catalog_search import CatalogSearchService
-from config import Settings
-from content_search import ContentSearchService
+from config import Settings, settings
 from database.database import Database
 from database.neo4j_triggers import install_triggers
-from search_client import create_search_client
+from database.schema import schema_statements
+from main import create_app
+from search.catalog import CatalogSearchService
+from search.client import create_search_client
+from search.content import ContentSearchService
+from tests.helpers import create_unauthenticated_app
 
 # Suppress verbose Neo4j driver logging
 logging.getLogger("neo4j").setLevel(logging.WARNING)
@@ -50,15 +53,6 @@ def _opensearch_command() -> str:
         "./opensearch-docker-entrypoint.sh opensearch",
     ]
     return 'bash -c "' + ' && '.join(commands) + '"'
-
-
-def load_constraints_file() -> list[str]:
-    constraints_path = Path(__file__).parent.parent / "database" / "neo4j_constraints.cypher"
-    if not constraints_path.exists():
-        return []
-    with open(constraints_path) as f:
-        content = f.read()
-    return [stmt.strip() for stmt in content.split(";") if stmt.strip()]
 
 
 
@@ -120,7 +114,7 @@ def _neo4j_container(_docker_runtime):
                 with driver.session(database="system") as session:
                     session.run("ALTER DATABASE $database SET DEFAULT LANGUAGE CYPHER 25", database=NEO4J_TEST_DATABASE).consume()
                 with driver.session(database=NEO4J_TEST_DATABASE) as session:
-                    for statement in load_constraints_file():
+                    for statement in schema_statements():
                         session.run(cast(LiteralString, statement)).consume()
 
             async def do_install_triggers():
@@ -265,7 +259,7 @@ async def content_search(_opensearch_endpoint: str) -> AsyncGenerator[ContentSea
         yield service
     finally:
         with suppress(Exception):
-            await service.index.delete_index()
+            await _delete_index(client, service.index.index_name)
         await client.close()
 
 
@@ -285,7 +279,7 @@ async def catalog_search(request) -> AsyncGenerator[CatalogSearchService]:
         yield service
     finally:
         with suppress(Exception):
-            await service.index.delete_index()
+            await _delete_index(client, service.index.index_name)
         await client.close()
 
 
@@ -297,8 +291,17 @@ async def _assert_catalog_analyzers(endpoint: str, service: CatalogSearchService
         assert "analysis-tibetan" in plugin_text
         assert "analysis-bdrc" in plugin_text
 
-    await service.index.analyze({"analyzer": "catalog_tibetan", "text": "ཞི་བ་ལྷ་"})
-    await service.index.analyze({"analyzer": "catalog_sanskrit_roman", "text": "Śāntideva"})
+    for analyzer, text in (("catalog_tibetan", "ཞི་བ་ལྷ་"), ("catalog_sanskrit_roman", "Śāntideva")):
+        await service.index._client.indices.analyze(
+            index=service.index.index_name, body={"analyzer": analyzer, "text": text}
+        )
+
+
+async def _delete_index(client, name: str) -> None:
+    if await client.indices.exists_alias(name=name):
+        await client.indices.delete(index=",".join(await client.indices.get_alias(name=name)))
+    elif await client.indices.exists(index=name):
+        await client.indices.delete(index=name)
 
 
 
@@ -312,13 +315,13 @@ class MockS3Storage:
         if not isinstance(body, bytes):
             body = body.read()
         if key in self._storage:
-            from exceptions import DataConflictError
+            from errors import DataConflictError
             raise DataConflictError("Storage key already exists")
         self._storage[key] = body
 
     async def read_text(self, key):
         if key not in self._storage:
-            from exceptions import DataNotFoundError
+            from errors import DataNotFoundError
             raise DataNotFoundError(f"Content object '{key}' not found")
         value = self._storage[key]
         return value.decode() if isinstance(value, bytes) else value
@@ -346,79 +349,41 @@ def noop_content_search():
     return NoOpContentSearch()
 
 
+def _api_client(app, db, storage, content_search, catalog_search=None):
+    app.state.db = db
+    app.state.storage = storage
+    app.state.content_search = content_search
+    app.state.catalog_search = catalog_search
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", follow_redirects=True)
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def client(test_database, mock_storage, noop_content_search):
-    """Create async HTTP client with app.state configured for testing."""
-    import httpx
-
-    from main import create_app
-
-    fastapi_app = create_app(testing=True)
-    fastapi_app.state.db = test_database
-    fastapi_app.state.storage = mock_storage
-    fastapi_app.state.content_search = noop_content_search
-    fastapi_app.state.catalog_search = None
-    transport = httpx.ASGITransport(app=fastapi_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as ac:
-        yield ac
+    async with _api_client(create_unauthenticated_app(), test_database, mock_storage, noop_content_search) as client:
+        yield client
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def search_client(test_database, mock_storage, content_search):
-    """Create async HTTP client backed by real OpenSearch for search tests."""
-    import httpx
-
-    from main import create_app
-
-    fastapi_app = create_app(testing=True)
-    fastapi_app.state.db = test_database
-    fastapi_app.state.storage = mock_storage
-    fastapi_app.state.content_search = content_search
-    fastapi_app.state.catalog_search = None
-    transport = httpx.ASGITransport(app=fastapi_app)
-
     async def refresh_before_search(request):
         if request.url.path == "/v2/content-search":
             await content_search.index.refresh_index()
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as ac:
-        ac.event_hooks["request"].append(refresh_before_search)
-        yield ac
+    async with _api_client(create_unauthenticated_app(), test_database, mock_storage, content_search) as client:
+        client.event_hooks["request"].append(refresh_before_search)
+        yield client
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def catalog_client(test_database, mock_storage, noop_content_search, catalog_search):
-    """Create async HTTP client backed by real OpenSearch catalog search."""
-    import httpx
-
-    from main import create_app
-
-    fastapi_app = create_app(testing=True)
-    fastapi_app.state.db = test_database
-    fastapi_app.state.storage = mock_storage
-    fastapi_app.state.content_search = noop_content_search
-    fastapi_app.state.catalog_search = catalog_search
-    transport = httpx.ASGITransport(app=fastapi_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as ac:
-        yield ac
+    async with _api_client(
+        create_unauthenticated_app(), test_database, mock_storage, noop_content_search, catalog_search
+    ) as client:
+        yield client
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def auth_client(test_database, mock_storage, noop_content_search, monkeypatch):
-    """Create async HTTP client with real API key authentication (testing=False)."""
-    import httpx
-
-    from main import create_app
-    from config import settings
-
-    fastapi_app = create_app(testing=False)
-    fastapi_app.state.db = test_database
-    fastapi_app.state.storage = mock_storage
-    fastapi_app.state.content_search = noop_content_search
-    fastapi_app.state.catalog_search = None
-
     monkeypatch.setattr(settings, "environment", "test")
-
-    transport = httpx.ASGITransport(app=fastapi_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as ac:
-        yield ac
+    async with _api_client(create_app(), test_database, mock_storage, noop_content_search) as client:
+        yield client

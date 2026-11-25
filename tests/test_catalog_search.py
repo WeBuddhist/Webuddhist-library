@@ -1,7 +1,9 @@
-# ruff: noqa: ANN001, ANN201, S101
 import pytest
 
-
+from database import category as category_database
+from database import person as person_database
+from database import tag as tag_database
+from database import text as text_database
 from models.base import LocalizedString
 from models.contribution import PersonContributionInput
 from models.enums import ContributorRole, LicenseType
@@ -15,11 +17,12 @@ async def _create_person(
     name: dict[str, str],
     alt_names: list[dict[str, str]] | None = None,
 ) -> str:
-    return await test_database.person.create(
+    return await person_database.create(
+        test_database,
         PersonInput(
             name=LocalizedString(name),
             alt_names=[LocalizedString(alt) for alt in alt_names] if alt_names else None,
-        )
+        ),
     )
 
 
@@ -31,14 +34,15 @@ async def _create_text(
     language: str = "sa",
     alt_titles: list[dict[str, str]] | None = None,
 ) -> str:
-    return await test_database.text.create(
+    return await text_database.create(
+        test_database,
         TextInput(
             category_id="category",
             title=LocalizedString(title),
             alt_titles=[LocalizedString(alt) for alt in alt_titles] if alt_titles else None,
             language=language,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
-        )
+        ),
     )
 
 
@@ -415,7 +419,7 @@ class TestCatalogSearch:
 @pytest.mark.asyncio(loop_scope="session")
 async def test_language_filter_matches_graph_and_catalog(catalog_client, catalog_search, test_database):
     for index, language in enumerate(("en", "en-US", "en-GB", "bo")):
-        await test_database.text.create(TextInput(title={"en": f"Language parity {index}", language: f"Language parity {index}"}, language=language, category_id="category"))
+        await text_database.create(test_database, TextInput(title={"en": f"Language parity {index}", language: f"Language parity {index}"}, language=language, category_id="category"))
     await publish_catalog(catalog_search, test_database)
     for language, expected in (("EN", 3), ("en-us", 1), ("en-GB", 1), ("bo", 1)):
         graph = await catalog_client.get("/v2/texts", params={"language": language})
@@ -430,7 +434,7 @@ async def test_catalog_paging_skips_entire_stale_page(catalog_search, test_datab
     from models.requests import PersonFilter
     db = test_database
     valid = await _create_person(db, name={"en": "Current person"})
-    record = await db.person.get(valid)
+    record = await person_database.get(db, valid)
     observed = []
 
     async def pages(body):
@@ -561,14 +565,14 @@ async def test_http_person_patch_replaces_search_names(catalog_client, catalog_s
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_catalog_title_filters_combine_without_broadening_results(catalog_client, catalog_search, test_database):
-    from models.tag import TagInput
     from models.category import CategoryInput
+    from models.tag import TagInput
 
     db, client, search = test_database, catalog_client, catalog_search
     a, b, c = [
-        await db.tag.create(TagInput(title={"en": name}), "test_application") for name in ("Tag A", "Tag B", "Tag C")
+        await tag_database.create(db, TagInput(title={"en": name}), "test_application") for name in ("Tag A", "Tag B", "Tag C")
     ]
-    category = await db.category.create(CategoryInput(title={"en": "Other category"}), "test_application")
+    category = await category_database.create(db, CategoryInput(title={"en": "Other category"}), "test_application")
     ids = []
     for i, (tags, cat, bdrc, wiki) in enumerate(
         [
@@ -578,7 +582,8 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
         ]
     ):
         ids.append(
-            await db.text.create(
+            await text_database.create(
+                db,
                 TextInput(
                     title={"en": f"Filter manuscript {i}"},
                     language="en",
@@ -586,7 +591,7 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
                     tag_ids=tags,
                     bdrc=bdrc,
                     wiki=wiki,
-                )
+                ),
             )
         )
     await publish_catalog(search, db)
@@ -613,8 +618,9 @@ async def test_catalog_title_filters_combine_without_broadening_results(catalog_
 async def test_catalog_title_search_filters_by_current_license(catalog_client, catalog_search, test_database):
     db, client, search = test_database, catalog_client, catalog_search
     public_id, copyrighted_id = [
-        await db.text.create(
-            TextInput(title={"en": f"Licensed manuscript {i}"}, language="en", category_id="category", license=license)
+        await text_database.create(
+            db,
+            TextInput(title={"en": f"Licensed manuscript {i}"}, language="en", category_id="category", license=license),
         )
         for i, license in enumerate((LicenseType.PUBLIC_DOMAIN_MARK, LicenseType.UNDER_COPYRIGHT))
     ]
@@ -624,7 +630,7 @@ async def test_catalog_title_search_filters_by_current_license(catalog_client, c
     assert await text_search_ids(client, search, title=title, license="copyrighted") == {copyrighted_id}
     assert await text_search_ids(client, search, title=title, license=["public", "cc0"]) == {public_id}
 
-    await db.text.update(copyrighted_id, TextPatch(license=LicenseType.CC0))
+    await text_database.update(db, copyrighted_id, TextPatch(license=LicenseType.CC0))
     assert await text_search_ids(client, search, title=title, license="copyrighted") == set()
     assert await text_search_ids(client, search, title=title, license=["public", "cc0"]) == {public_id, copyrighted_id}
 

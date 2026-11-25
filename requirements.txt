@@ -1,9 +1,8 @@
 fastapi==0.162.7
 uvicorn[standard]==0.52.4
-gunicorn==26.0.0
-uvicorn-worker==0.4.0
 pydantic==2.14.4
 pydantic-settings==2.14.1
+PyYAML==6.0.4
 python-dotenv==1.2.4
 python-multipart==0.0.32
 neo4j-rust-ext==6.4.1.0

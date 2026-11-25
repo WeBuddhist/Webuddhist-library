@@ -271,4 +271,4 @@ curl -X DELETE "https://dev.library.webuddhist.com/api/v2/segments/SEG001/tags/T
 **Developer Notes:**
 - Implemented in `routers/segments.py`.
 - Segment response models live in `models/annotation.py`.
-- Content search is implemented in `routers/content_search.py` and `content_search/service.py`, with response models in `models/content_search.py`.
+- Content search is implemented in `routers/content_search.py` and `search/content.py`, with response models in `models/content_search.py`.

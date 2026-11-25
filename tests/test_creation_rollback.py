@@ -1,10 +1,13 @@
 """Failed multi-step creates must leave the entire existing graph unchanged."""
-
 import pytest
 from neo4j import AsyncManagedTransaction
 
-from database.annotation.table_of_contents_database import TableOfContentsDatabase
-from exceptions import DataConflictError, DataValidationError, InvalidRequestError
+from database import category, tag
+from database import edition as edition_database
+from database import person as person_database
+from database import text as text_database
+from database.annotation import table_of_contents
+from errors import DataConflictError, DataValidationError, InvalidRequestError
 from identifier import generate_id
 from models.annotation import PaginationInput, SegmentationInput, TableOfContentsInput
 from models.category import CategoryInput
@@ -21,7 +24,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 async def test_duplicate_person_identifier_leaves_no_names(test_database, identifier):
     db = test_database
     external_id = {identifier: "existing-person"}
-    await db.person.create(PersonInput(
+    await person_database.create(db, PersonInput(
         name={"en": "Existing person", "bo": "མི་"},
         alt_names=[{"en": "Existing alias"}], **external_id,
     ))
@@ -29,7 +32,7 @@ async def test_duplicate_person_identifier_leaves_no_names(test_database, identi
 
     # Primary and alternative names are written before the uniqueness constraint fails.
     with pytest.raises(DataConflictError):
-        await db.person.create(PersonInput(
+        await person_database.create(db, PersonInput(
             name={"en": "Rejected person", "bo": "མི་གཞན་"},
             alt_names=[{"en": "Rejected alias", "bo": "མིང་གཞན་"}], **external_id,
         ))
@@ -41,13 +44,13 @@ async def test_duplicate_person_identifier_leaves_no_names(test_database, identi
 async def test_duplicate_text_identifier_leaves_no_work_or_titles(test_database, identifier):
     db = test_database
     external_id = {identifier: "existing-text"}
-    await db.text.create(TextInput(
+    await text_database.create(db, TextInput(
         title={"en": "Existing text"}, language="en", category_id="category", **external_id,
     ))
     before = await snapshot_graph(db)
 
     with pytest.raises(DataConflictError):
-        await db.text.create(TextInput(
+        await text_database.create(db, TextInput(
             title={"en": "Rejected text", "bo": "དཔེ་ཆ་"},
             alt_titles=[{"en": "Rejected alternative title"}],
             language="en", category_id="category", **external_id,
@@ -61,8 +64,8 @@ async def test_duplicate_text_identifier_leaves_no_work_or_titles(test_database,
 ])
 async def test_missing_tag_rolls_back_text_and_contributions(test_database, relation):
     db = test_database
-    person = await db.person.create(PersonInput(name={"en": "Existing author"}))
-    original = await db.text.create(TextInput(
+    person = await person_database.create(db, PersonInput(name={"en": "Existing author"}))
+    original = await text_database.create(db, TextInput(
         title={"bo": "དཔེ་ཆ་"}, language="bo", category_id="category",
     ))
     fields = {relation: original} if relation else {}
@@ -73,7 +76,7 @@ async def test_missing_tag_rolls_back_text_and_contributions(test_database, rela
     # Tags are checked after the text, titles, category link and contributions are written.
     # Translations use an existing Work; originals and commentaries create a new one.
     with pytest.raises(DataValidationError, match="Referenced tags do not exist"):
-        await db.text.create(TextInput(
+        await text_database.create(db, TextInput(
             title={"en": "Rejected text"}, alt_titles=[{"en": "Rejected alias"}], language="en",
             contributions=[
                 {"type": "person", "id": person, "role": "author"},
@@ -85,20 +88,15 @@ async def test_missing_tag_rolls_back_text_and_contributions(test_database, rela
     assert await snapshot_graph(db) == before
 
 
-@pytest.mark.parametrize("entity", ["category", "tag"])
-async def test_invalid_description_language_rolls_back_title(test_database, entity):
+@pytest.mark.parametrize(
+    "repository,model,fields",
+    [(category, CategoryInput, {"parent_id": "category"}), (tag, TagInput, {})],
+)
+async def test_invalid_description_language_rolls_back_title(test_database, repository, model, fields):
     db = test_database
-    model = CategoryInput if entity == "category" else TagInput
-    fields = {"parent_id": "category"} if entity == "category" else {}
     before = await snapshot_graph(db)
-
-    # The valid title is persisted before the description's language is checked.
     with pytest.raises(InvalidRequestError, match="xx"):
-        await getattr(db, entity).create(model(
-            title={"en": "Rejected title", "bo": "མིང་"},
-            description={"xx": "Unknown language"}, **fields,
-        ), "test_application")
-
+        await repository.create(db, model(title={'en': 'Rejected title', 'bo': 'མིང་'}, description={'xx': 'Unknown language'}, **fields), 'test_application')
     assert await snapshot_graph(db) == before
 
 
@@ -108,24 +106,35 @@ async def test_invalid_pagination_rolls_back_new_text_edition_and_segmentation(t
 
     # Pagination fails after the nested text, edition and segmentation have all been written.
     with pytest.raises(DataValidationError, match="Offsets extend to 7"):
-        await db.edition.create(
+        await edition_database.create(
+            db,
             EditionInput(
-                type="critical", source="Rollback test source",
+                type="critical",
+                source="Rollback test source",
                 incipit_title={"en": "Rejected incipit"},
                 alt_incipit_titles=[{"en": "Rejected alternate incipit"}],
             ),
-            generate_id(), generate_id(), content_length=6,
+            generate_id(),
+            generate_id(),
+            content_length=6,
             text=TextInput(
-                title={"en": "Rejected edition text"}, alt_titles=[{"en": "Rejected title alias"}],
-                language="en", category_id="category",
+                title={"en": "Rejected edition text"},
+                alt_titles=[{"en": "Rejected title alias"}],
+                language="en",
+                category_id="category",
                 contributions=[{"type": "ai", "id": "edition-ai", "role": "author"}],
             ),
             segmentation=SegmentationInput(
-                segments=[{"lines": [{"start": 0, "end": 6}]}], metadata={"name": "Segments"},
+                segments=[{"lines": [{"start": 0, "end": 6}]}],
+                metadata={"name": "Segments"},
             ),
-            pagination=PaginationInput(volumes=[{
-                "pages": [{"reference": "1", "lines": [{"start": 0, "end": 7}]}],
-            }]),
+            pagination=PaginationInput(
+                volumes=[
+                    {
+                        "pages": [{"reference": "1", "lines": [{"start": 0, "end": 7}]}],
+                    }
+                ]
+            ),
         )
 
     assert await snapshot_graph(db) == before
@@ -133,22 +142,22 @@ async def test_invalid_pagination_rolls_back_new_text_edition_and_segmentation(t
 
 async def test_failure_after_toc_hierarchy_rolls_back_sections_names_and_revision(test_database, monkeypatch):
     db = test_database
-    text = await db.text.create(TextInput(title={"en": "TOC rollback"}, language="en", category_id="category"))
+    text = await text_database.create(db, TextInput(title={"en": "TOC rollback"}, language="en", category_id="category"))
     edition = generate_id()
-    await db.edition.create(EditionInput(type="critical"), edition, text, 6)
+    await edition_database.create(db, EditionInput(type="critical"), edition, text, 6)
     before = await snapshot_graph(db)
     run = AsyncManagedTransaction.run
 
     async def fail_after_hierarchy(tx, query, *args, **kwargs):
         result = await run(tx, query, *args, **kwargs)
-        if query == TableOfContentsDatabase.CREATE_HIERARCHY_QUERY:
+        if query == table_of_contents.CREATE_HIERARCHY_QUERY:
             await result.consume()
             raise RuntimeError("after TOC hierarchy")
         return result
 
     monkeypatch.setattr(AsyncManagedTransaction, "run", fail_after_hierarchy)
     with pytest.raises(RuntimeError, match="after TOC hierarchy"):
-        await db.annotation.table_of_contents.add(edition, TableOfContentsInput(
+        await table_of_contents.add(db, edition, TableOfContentsInput(
             metadata={"name": "Rejected TOC"},
             sections=[{
                 "title": {"en": "Parent", "bo": "མིང་"}, "summary": {"en": "Parent summary"},

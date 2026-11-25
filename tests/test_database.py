@@ -1,17 +1,19 @@
-# pylint: disable=redefined-outer-name,too-many-lines
 """Repository integration and span tests using the disposable Neo4j fixture."""
-
 import pytest
-from database.span_database import adjust_annotation_span
-from exceptions import DataNotFoundError, DataValidationError
+
+from database import edition as edition_database
+from database import person as person_database
+from database import text as text_database
+from database.span import adjust_annotation_span
+from errors import DataNotFoundError, DataValidationError
 from identifier import generate_id
 from models.annotation import Page, PaginationInput, Span, Volume
 from models.base import LocalizedString
 from models.contribution import PersonContributionInput
 from models.edition import EditionInput, EditionType
 from models.enums import ContributorRole
-from models.text import TextInput
 from models.person import PersonInput
+from models.text import TextInput
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -27,12 +29,12 @@ class TestDatabase:
         )
 
         # Create in database
-        person_id = await db.person.create(person)
+        person_id = await person_database.create(db, person)
         assert person_id is not None
         assert len(person_id) == 21  # NanoID length
 
         # Retrieve the person
-        retrieved_person = await db.person.get(person_id)
+        retrieved_person = await person_database.get(db, person_id)
         assert retrieved_person.id == person_id
 
         # Compare LocalizedString objects properly
@@ -53,12 +55,12 @@ class TestDatabase:
         person2 = PersonInput(name=LocalizedString({"bo": "རིན་ཆེན་སྡེ།"}))
         person3 = PersonInput(name=LocalizedString({"sa": "मञ्जुश्री", "en": "Manjushri"}))
 
-        id1 = await db.person.create(person1)
-        id2 = await db.person.create(person2)
-        id3 = await db.person.create(person3)
+        id1 = await person_database.create(db, person1)
+        id2 = await person_database.create(db, person2)
+        id3 = await person_database.create(db, person3)
 
         # Retrieve all
-        all_persons = await db.person.get_all()
+        all_persons = await person_database.get_all(db)
         assert len(all_persons) == 3
 
         # Check that our created persons are in the results
@@ -73,7 +75,7 @@ class TestDatabase:
         db = test_database
 
         with pytest.raises(DataNotFoundError, match="Person with ID 'nonexistent' not found"):
-            await db.person.get("nonexistent")
+            await person_database.get(db, "nonexistent")
 
 
     async def test_person_with_bdrc_and_wiki_fields(self, test_database):
@@ -89,12 +91,12 @@ class TestDatabase:
         )
 
         # Create person using the actual create_person_neo4j method
-        person_id = await db.person.create(person)
+        person_id = await person_database.create(db, person)
         assert person_id is not None
         assert len(person_id) == 21  # NanoID length
 
         # Retrieve the person and validate ALL fields
-        retrieved_person = await db.person.get(person_id)
+        retrieved_person = await person_database.get(db, person_id)
 
         # Validate that bdrc and wiki are properly stored and retrieved
         assert retrieved_person.id == person_id
@@ -110,7 +112,7 @@ class TestDatabase:
         db = test_database
 
         # Test texts query with no data
-        result = await db.text.get_all(offset=0, limit=10, filters=None)
+        result = await text_database.get_all(db, offset=0, limit=10, filters=None)
         assert isinstance(result, list)
         assert len(result) == 0  # Empty database
 
@@ -120,13 +122,13 @@ class TestDatabase:
         db = test_database
 
         with pytest.raises(DataNotFoundError, match="Text with ID 'nonexistent' not found"):
-            await db.text.get("nonexistent")
+            await text_database.get(db, "nonexistent")
 
 
     async def test_edition_not_found(self, test_database):
         """Test retrieving editions for non-existent text"""
         # Test that getting editions for non-existent text returns empty list
-        editions = await test_database.edition.get_all("nonexistent-text-id")
+        editions = await edition_database.get_all(test_database, "nonexistent-text-id")
         assert isinstance(editions, list)
         assert len(editions) == 0
 
@@ -143,7 +145,7 @@ class TestDatabase:
             name=LocalizedString({"en": "Test Author", "bo": "རྩོམ་པ་པོ་"}),
             alt_names=[LocalizedString({"en": "Alternative Author Name"})],
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Create ROOT text (no commentary_of or translation_of)
         text = TextInput(
@@ -158,14 +160,14 @@ class TestDatabase:
         )
 
         # Create the text
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         # Verify the text was created
         assert text_id is not None
         assert len(text_id) > 0
 
         # Verify we can retrieve the text
-        retrieved_text = await test_database.text.get(text_id)
+        retrieved_text = await text_database.get(test_database, text_id)
         assert retrieved_text.id == text_id
         assert retrieved_text.bdrc == "W789012"
         assert retrieved_text.wiki == "Q789012"
@@ -203,7 +205,7 @@ class TestDatabase:
 
         # Should raise DataValidationError for missing person
         with pytest.raises(DataValidationError) as exc_info:
-            await test_database.text.create(text)
+            await text_database.create(test_database, text)
 
         assert "non-existent-person-id" in str(exc_info.value)
 
@@ -215,7 +217,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Person"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Test various language inputs - BCP47 tags should be preserved
         test_cases = [
@@ -234,11 +236,11 @@ class TestDatabase:
             )
 
             # Should create successfully
-            text_id = await test_database.text.create(text)
+            text_id = await text_database.create(test_database, text)
             assert text_id is not None
 
             # Verify BCP47 language code is preserved
-            retrieved = await test_database.text.get(text_id)
+            retrieved = await text_database.get(test_database, text_id)
             assert retrieved.language == input_lang
 
 
@@ -248,12 +250,12 @@ class TestDatabase:
         author = PersonInput(
             name=LocalizedString({"en": "Primary Author"}),
         )
-        author_id = await test_database.person.create(author)
+        author_id = await person_database.create(test_database, author)
 
         reviser = PersonInput(
             name=LocalizedString({"en": "Reviser"}),
         )
-        reviser_id = await test_database.person.create(reviser)
+        reviser_id = await person_database.create(test_database, reviser)
 
         text = TextInput(
             category_id="category",
@@ -265,8 +267,8 @@ class TestDatabase:
             ],
         )
 
-        text_id = await test_database.text.create(text)
-        retrieved = await test_database.text.get(text_id)
+        text_id = await text_database.create(test_database, text)
+        retrieved = await text_database.get(test_database, text_id)
 
         # Verify both contributions
         assert len(retrieved.contributions) == 2
@@ -288,7 +290,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Minimal Person"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Minimal text (no bdrc, wiki, date, alt_titles)
         text = TextInput(
@@ -298,8 +300,8 @@ class TestDatabase:
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
 
-        text_id = await test_database.text.create(text)
-        retrieved = await test_database.text.get(text_id)
+        text_id = await text_database.create(test_database, text)
+        retrieved = await text_database.get(test_database, text_id)
 
         assert retrieved.id == text_id
         assert retrieved.bdrc is None
@@ -317,7 +319,7 @@ class TestDatabase:
             name=LocalizedString({"en": "BDRC Person", "bo": "བདྲ་ཅ་མི་སྣ།"}),
             bdrc="P123456",  # This is the BDRC ID we'll use for lookup
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Create text using bdrc_id instead of id
         text = TextInput(
@@ -334,8 +336,8 @@ class TestDatabase:
         )
 
         # Should successfully create text using BDRC ID
-        text_id = await test_database.text.create(text)
-        retrieved = await test_database.text.get(text_id)
+        text_id = await text_database.create(test_database, text)
+        retrieved = await text_database.get(test_database, text_id)
 
         # Verify the text was created correctly
         assert retrieved.id == text_id
@@ -363,7 +365,7 @@ class TestDatabase:
 
         # Should raise DataValidationError for missing person
         with pytest.raises(DataValidationError) as exc_info:
-            await test_database.text.create(text)
+            await text_database.create(test_database, text)
 
         assert "P999999" in str(exc_info.value)
 
@@ -374,7 +376,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Original Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         root_text = TextInput(
             category_id="category",
@@ -382,13 +384,13 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        root_text_id = await test_database.text.create(root_text)
+        root_text_id = await text_database.create(test_database, root_text)
 
         # Create translator person
         translator = PersonInput(
             name=LocalizedString({"en": "Translator Name"}),
         )
-        translator_id = await test_database.person.create(translator)
+        translator_id = await person_database.create(test_database, translator)
 
         # Now create a translation text using translation_of
         translation_text = TextInput(
@@ -399,8 +401,8 @@ class TestDatabase:
             contributions=[PersonContributionInput(type="person", id=translator_id, role=ContributorRole.TRANSLATOR)],
         )
 
-        translation_id = await test_database.text.create(translation_text)
-        retrieved = await test_database.text.get(translation_id)
+        translation_id = await text_database.create(test_database, translation_text)
+        retrieved = await text_database.get(test_database, translation_id)
 
         # Verify the translation was created correctly
         assert retrieved.id == translation_id
@@ -417,7 +419,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Create a root text first
         root_text = TextInput(
@@ -426,7 +428,7 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        root_id = await test_database.text.create(root_text)
+        root_id = await text_database.create(test_database, root_text)
 
         # Try to create text with both commentary_of and translation_of - should fail validation
         with pytest.raises(ValueError, match="Cannot be both a commentary and translation"):
@@ -446,7 +448,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Translator"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Create translation with non-existent target
         translation_text = TextInput(
@@ -459,7 +461,7 @@ class TestDatabase:
 
         # Should fail when trying to create in database
         with pytest.raises(DataNotFoundError, match="nonexistent-target-id"):
-            await test_database.text.create(translation_text)
+            await text_database.create(test_database, translation_text)
 
 
     async def test_create_commentary_text_success(self, test_database):
@@ -468,7 +470,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Original Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         root_text = TextInput(
             category_id="category",
@@ -476,13 +478,13 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        root_text_id = await test_database.text.create(root_text)
+        root_text_id = await text_database.create(test_database, root_text)
 
         # Create commentator person
         commentator = PersonInput(
             name=LocalizedString({"en": "Commentator Name"}),
         )
-        commentator_id = await test_database.person.create(commentator)
+        commentator_id = await person_database.create(test_database, commentator)
 
         # Now create a commentary text using commentary_of
         commentary_text = TextInput(
@@ -493,8 +495,8 @@ class TestDatabase:
             contributions=[PersonContributionInput(type="person", id=commentator_id, role=ContributorRole.AUTHOR)],
         )
 
-        commentary_id = await test_database.text.create(commentary_text)
-        retrieved = await test_database.text.get(commentary_id)
+        commentary_id = await text_database.create(test_database, commentary_text)
+        retrieved = await text_database.get(test_database, commentary_id)
 
         # Verify the commentary was created correctly
         assert retrieved.id == commentary_id
@@ -516,7 +518,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Commentator"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Create commentary text with non-existent target
         commentary_text = TextInput(
@@ -529,7 +531,7 @@ class TestDatabase:
 
         # Should fail when trying to create in database
         with pytest.raises(DataNotFoundError, match="nonexistent-target-id"):
-            await test_database.text.create(commentary_text)
+            await text_database.create(test_database, commentary_text)
 
 
     async def test_create_commentary_text_with_multiple_contributions(self, test_database):
@@ -538,7 +540,7 @@ class TestDatabase:
         author = PersonInput(
             name=LocalizedString({"en": "Original Author"}),
         )
-        author_id = await test_database.person.create(author)
+        author_id = await person_database.create(test_database, author)
 
         root_text = TextInput(
             category_id="category",
@@ -546,18 +548,18 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=author_id, role=ContributorRole.AUTHOR)],
         )
-        root_text_id = await test_database.text.create(root_text)
+        root_text_id = await text_database.create(test_database, root_text)
 
         # Create multiple contributors for commentary
         commentator = PersonInput(
             name=LocalizedString({"en": "Commentator"}),
         )
-        commentator_id = await test_database.person.create(commentator)
+        commentator_id = await person_database.create(test_database, commentator)
 
         reviser = PersonInput(
             name=LocalizedString({"en": "Reviser"}),
         )
-        reviser_id = await test_database.person.create(reviser)
+        reviser_id = await person_database.create(test_database, reviser)
 
         # Create commentary with multiple contributions
         commentary_text = TextInput(
@@ -571,8 +573,8 @@ class TestDatabase:
             ],
         )
 
-        commentary_id = await test_database.text.create(commentary_text)
-        retrieved = await test_database.text.get(commentary_id)
+        commentary_id = await text_database.create(test_database, commentary_text)
+        retrieved = await text_database.get(test_database, commentary_id)
 
         # Verify multiple contributions
         assert len(retrieved.contributions) == 2
@@ -588,7 +590,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput(
             category_id="category",
@@ -596,10 +598,10 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         # Get editions for text with no editions
-        editions = await test_database.edition.get_all(text_id)
+        editions = await edition_database.get_all(test_database, text_id)
         assert editions == []
 
 
@@ -609,7 +611,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Test ROOT text
         root_text = TextInput(
@@ -618,7 +620,7 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        root_id = await test_database.text.create(root_text)
+        root_id = await text_database.create(test_database, root_text)
 
         # Test TRANSLATION text
         translation_text = TextInput(
@@ -628,7 +630,7 @@ class TestDatabase:
             translation_of=root_id,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.TRANSLATOR)],
         )
-        translation_id = await test_database.text.create(translation_text)
+        translation_id = await text_database.create(test_database, translation_text)
 
         # Test COMMENTARY text
         commentary_text = TextInput(
@@ -638,17 +640,17 @@ class TestDatabase:
             commentary_of=root_id,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        commentary_id = await test_database.text.create(commentary_text)
+        commentary_id = await text_database.create(test_database, commentary_text)
 
-        from models.edition import EditionInput
         from identifier import generate_id
+        from models.edition import EditionInput
         expected = {}
         for text_id in (root_id, translation_id, commentary_id):
             edition_id = generate_id()
-            await test_database.edition.create(EditionInput(type="critical"), edition_id, text_id, 10)
+            await edition_database.create(test_database, EditionInput(type="critical"), edition_id, text_id, 10)
             expected[text_id] = edition_id
         for text_id, edition_id in expected.items():
-            editions = await test_database.edition.get_all(text_id)
+            editions = await edition_database.get_all(test_database, text_id)
             assert [edition.id for edition in editions] == [edition_id]
 
 
@@ -658,7 +660,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput(
             category_id="category",
@@ -666,7 +668,7 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         edition = EditionInput(
             type=EditionType.CRITICAL,
@@ -676,10 +678,10 @@ class TestDatabase:
 
         # Create edition in database
         edition_id = generate_id()
-        await test_database.edition.create(edition, edition_id, text_id, content_length=10)
+        await edition_database.create(test_database, edition, edition_id, text_id, content_length=10)
 
         # Verify we can get raw editions list
-        retrieved_editions = await test_database.edition.get_all(text_id)
+        retrieved_editions = await edition_database.get_all(test_database, text_id)
         assert isinstance(retrieved_editions, list)
         assert len(retrieved_editions) == 1
         assert retrieved_editions[0].id == edition_id
@@ -691,7 +693,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput(
             category_id="category",
@@ -699,7 +701,7 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         # Create first edition (CRITICAL)
         edition1 = EditionInput(
@@ -708,7 +710,7 @@ class TestDatabase:
             colophon="First edition",
         )
         edition1_id = generate_id()
-        await test_database.edition.create(edition1, edition1_id, text_id, content_length=10)
+        await edition_database.create(test_database, edition1, edition1_id, text_id, content_length=10)
 
         # Create second edition (DIPLOMATIC - requires bdrc)
         edition2 = EditionInput(
@@ -721,12 +723,12 @@ class TestDatabase:
         edition2_pagination = PaginationInput(
             volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=1)])])]
         )
-        await test_database.edition.create(
-            edition2, edition2_id, text_id, content_length=10, pagination=edition2_pagination
+        await edition_database.create(
+            test_database, edition2, edition2_id, text_id, content_length=10, pagination=edition2_pagination
         )
 
         # Retrieve all editions
-        retrieved_editions = await test_database.edition.get_all(text_id)
+        retrieved_editions = await edition_database.get_all(test_database, text_id)
         assert len(retrieved_editions) == 2
 
         # Verify both editions are present
@@ -749,7 +751,7 @@ class TestDatabase:
 
         # Should raise DataValidationError for non-existent text
         with pytest.raises(DataValidationError, match="Text nonexistent-id does not exist"):
-            await test_database.edition.create(edition, generate_id(), "nonexistent-id", content_length=10)
+            await edition_database.create(test_database, edition, generate_id(), "nonexistent-id", content_length=10)
 
 
     async def test_create_edition_with_source(self, test_database):
@@ -758,7 +760,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput(
             category_id="category",
@@ -766,7 +768,7 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         # Create edition with source
         edition = EditionInput(
@@ -775,10 +777,10 @@ class TestDatabase:
             colophon="Test colophon",
         )
         edition_id = generate_id()
-        await test_database.edition.create(edition, edition_id, text_id, content_length=10)
+        await edition_database.create(test_database, edition, edition_id, text_id, content_length=10)
 
         # Retrieve and verify source is returned
-        retrieved = await test_database.edition.get(edition_id)
+        retrieved = await edition_database.get(test_database, edition_id)
         assert retrieved.id == edition_id
         assert retrieved.source == "BDRC Library"
         assert retrieved.colophon == "Test colophon"
@@ -791,7 +793,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput(
             category_id="category",
@@ -799,17 +801,17 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         # Create edition without source
         edition = EditionInput(
             type=EditionType.CRITICAL,
         )
         edition_id = generate_id()
-        await test_database.edition.create(edition, edition_id, text_id, content_length=10)
+        await edition_database.create(test_database, edition, edition_id, text_id, content_length=10)
 
         # Retrieve and verify source is None
-        retrieved = await test_database.edition.get(edition_id)
+        retrieved = await edition_database.get(test_database, edition_id)
         assert retrieved.id == edition_id
         assert retrieved.source is None
         assert retrieved.type == EditionType.CRITICAL
@@ -821,7 +823,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Test Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Create text input (not yet in database)
         text = TextInput(
@@ -841,24 +843,22 @@ class TestDatabase:
         # Create both in same transaction
         edition_id = generate_id()
         text_id = generate_id()
-        await test_database.edition.create(
-            edition, edition_id, text_id, content_length=10, text=text
-        )
+        await edition_database.create(test_database, edition, edition_id, text_id, content_length=10, text=text)
 
         # Verify text was created
-        retrieved_text = await test_database.text.get(text_id)
+        retrieved_text = await text_database.get(test_database, text_id)
         assert retrieved_text.id == text_id
         assert retrieved_text.title.root["en"] == "New text Created With Edition"
         assert len(retrieved_text.contributions) == 1
 
         # Verify edition was created and linked
-        retrieved_edition = await test_database.edition.get(edition_id)
+        retrieved_edition = await edition_database.get(test_database, edition_id)
         assert retrieved_edition.id == edition_id
         assert retrieved_edition.source == "Test Source"
         assert retrieved_edition.type == EditionType.CRITICAL
 
         # Verify edition is linked to text
-        editions = await test_database.edition.get_all(text_id)
+        editions = await edition_database.get_all(test_database, text_id)
         assert len(editions) == 1
         assert editions[0].id == edition_id
 
@@ -883,16 +883,14 @@ class TestDatabase:
 
         # Should fail due to invalid person in text
         with pytest.raises(DataValidationError, match="nonexistent-person-id"):
-            await test_database.edition.create(
-                edition, edition_id, text_id, content_length=10, text=text
-            )
+            await edition_database.create(test_database, edition, edition_id, text_id, content_length=10, text=text)
 
         # Verify nothing was created (transaction rolled back)
         with pytest.raises(DataNotFoundError):
-            await test_database.text.get(text_id)
+            await text_database.get(test_database, text_id)
 
         with pytest.raises(DataNotFoundError):
-            await test_database.edition.get(edition_id)
+            await edition_database.get(test_database, edition_id)
 
 
     async def test_create_edition_with_translation_text(self, test_database):
@@ -901,7 +899,7 @@ class TestDatabase:
         person = PersonInput(
             name=LocalizedString({"en": "Author"}),
         )
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         # Create root text first (parent)
         root_text = TextInput(
@@ -910,7 +908,7 @@ class TestDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        root_text_id = await test_database.text.create(root_text)
+        root_text_id = await text_database.create(test_database, root_text)
 
         # Create translation text input
         translation_text = TextInput(
@@ -932,18 +930,24 @@ class TestDatabase:
         pagination = PaginationInput(
             volumes=[Volume(pages=[Page(reference="1a", lines=[Span(start=0, end=1)])])]
         )
-        await test_database.edition.create(
-            edition, edition_id, translation_id, content_length=10, text=translation_text, pagination=pagination
+        await edition_database.create(
+            test_database,
+            edition,
+            edition_id,
+            translation_id,
+            content_length=10,
+            text=translation_text,
+            pagination=pagination,
         )
 
         # Verify translation text was created with parent link
-        retrieved_text = await test_database.text.get(translation_id)
+        retrieved_text = await text_database.get(test_database, translation_id)
         assert retrieved_text.id == translation_id
         assert retrieved_text.translation_of == root_text_id
         assert retrieved_text.language == "bo"
 
         # Verify edition was created
-        retrieved_edition = await test_database.edition.get(edition_id)
+        retrieved_edition = await edition_database.get(test_database, edition_id)
         assert retrieved_edition.id == edition_id
         assert retrieved_edition.type == EditionType.DIPLOMATIC
 
@@ -955,7 +959,7 @@ class TestSpanDatabase:
     async def _create_test_setup(self, test_database):
         """Helper to create text, edition, segmentation, and segment for testing."""
         person = PersonInput(name=LocalizedString({"en": "Test Author"}))
-        person_id = await test_database.person.create(person)
+        person_id = await person_database.create(test_database, person)
 
         text = TextInput(
             category_id="category",
@@ -963,11 +967,11 @@ class TestSpanDatabase:
             language="en",
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
         )
-        text_id = await test_database.text.create(text)
+        text_id = await text_database.create(test_database, text)
 
         edition = EditionInput(type=EditionType.CRITICAL)
         edition_id = generate_id()
-        await test_database.edition.create(edition, edition_id, text_id, content_length=10)
+        await edition_database.create(test_database, edition, edition_id, text_id, content_length=10)
 
         segment_id = generate_id()
         segmentation_id = generate_id()
@@ -1047,42 +1051,42 @@ class TestSpanAdjustmentFunctions:
 
     async def test_continuous_insert_at_position_zero_expands_first_segment(self):
         """Insert at position 0 should expand first continuous span (start=0)."""
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         result = _adjust_continuous_for_insert(start=0, end=10, insert_pos=0, insert_len=5)
         assert result == (0, 15)
 
     async def test_continuous_insert_at_position_zero_shifts_non_first_segment(self):
         """Insert at position 0 should shift continuous spans that don't start at 0."""
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         result = _adjust_continuous_for_insert(start=5, end=15, insert_pos=0, insert_len=5)
         assert result == (10, 20)
 
     async def test_continuous_insert_at_start_boundary_shifts(self):
         """Insert at continuous span start boundary should shift it."""
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         result = _adjust_continuous_for_insert(start=10, end=20, insert_pos=10, insert_len=5)
         assert result == (15, 25)
 
     async def test_continuous_insert_at_end_boundary_expands(self):
         """Insert at continuous span end boundary should expand it."""
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         result = _adjust_continuous_for_insert(start=10, end=20, insert_pos=20, insert_len=5)
         assert result == (10, 25)
 
     async def test_continuous_insert_inside_expands(self):
         """Insert inside continuous span should expand it."""
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         result = _adjust_continuous_for_insert(start=10, end=20, insert_pos=15, insert_len=5)
         assert result == (10, 25)
 
     async def test_continuous_insert_after_unchanged(self):
         """Insert after continuous span should leave it unchanged."""
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         result = _adjust_continuous_for_insert(start=10, end=20, insert_pos=25, insert_len=5)
         assert result == (10, 20)
@@ -1151,7 +1155,7 @@ class TestSpanAdjustmentFunctions:
         ],
     )
     async def test_continuous_replacement_preserves_lines_and_markers(self, is_page, lines, start, end, new_len, expected):
-        from database.span_database import _adjust_continuous_entities
+        from database.span import _adjust_continuous_entities
 
         assert _adjust_continuous_entities({("collection", "entity", is_page): lines}, start, end, new_len) == expected
 
@@ -1232,7 +1236,7 @@ class TestSpanAdjustmentEdgeCases:
         Operation: Insert at position 10
         Expected: S1 expands to [0, 15), S2 shifts to [15, 25) - no overlap
         """
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         s1_result = _adjust_continuous_for_insert(start=0, end=10, insert_pos=10, insert_len=5)
         s2_result = _adjust_continuous_for_insert(start=10, end=20, insert_pos=10, insert_len=5)
@@ -1299,7 +1303,7 @@ class TestSpanAdjustmentEdgeCases:
 
 
     async def test_independent_collections_choose_their_own_replacement_owner(self):
-        from database.span_database import _adjust_continuous_entities
+        from database.span import _adjust_continuous_entities
 
         entities = {
             ("segmentation", "a1", False): [("a1", 0, 20)],
@@ -1350,7 +1354,7 @@ class TestSpanAdjustmentEdgeCases:
 
     async def test_continuous_insert_before_shifts(self):
         """Insert before continuous span should shift it."""
-        from database.span_database import _adjust_continuous_for_insert
+        from database.span import _adjust_continuous_for_insert
 
         result = _adjust_continuous_for_insert(start=10, end=20, insert_pos=5, insert_len=5)
         assert result == (15, 25)

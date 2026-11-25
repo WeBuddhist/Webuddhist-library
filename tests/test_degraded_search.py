@@ -1,18 +1,18 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from catalog_search import CatalogSearchService
 from config import Settings
-from content_search import ContentSearchService
-from main import create_app
-from search_client import create_search_client
+from search.catalog import CatalogSearchService
+from search.client import create_search_client
+from search.content import ContentSearchService
+from tests.helpers import create_unauthenticated_app
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def test_search_outage_preserves_canonical_crud_and_reports_degradation(test_database, caplog):
     db = test_database
-    app = create_app(testing=True)
+    app = create_unauthenticated_app()
     app.state.db = db
     config = Settings(opensearch_endpoint="http://127.0.0.1:1", opensearch_auth_mode="none")
     transport = create_search_client(config, request_timeout=1, max_retries=0)

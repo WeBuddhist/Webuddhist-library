@@ -1,15 +1,14 @@
-import logging
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, Path, UploadFile, status
+from fastapi import APIRouter, File, Form, UploadFile, status
 
 from content_service import create_recording
+from database import audio, recording
 from dependencies import DatabaseDep, StorageDep
 from models.audio import AudioOutput, AudioPatch
 from models.recording import RecordingInput, RecordingOutput
 from models.responses import IdResponse
-
-logger = logging.getLogger(__name__)
+from routers.params import AudioId
 
 router = APIRouter(prefix="/v2/audios", tags=["Audios"])
 
@@ -20,11 +19,8 @@ router = APIRouter(prefix="/v2/audios", tags=["Audios"])
     description="Retrieve one performance of a text, with its contributors and recordings.",
     response_model_exclude_none=True,
 )
-async def get_audio(
-    audio_id: Annotated[str, Path(description="The ID of the audio")],
-    db: DatabaseDep,
-) -> AudioOutput:
-    return await db.audio.get(audio_id)
+async def get_audio(audio_id: AudioId, db: DatabaseDep) -> AudioOutput:
+    return await audio.get(db, audio_id)
 
 
 @router.patch(
@@ -33,13 +29,8 @@ async def get_audio(
     description="Partially update an audio's metadata. The recited text cannot change.",
     response_model_exclude_none=True,
 )
-async def update_audio(
-    audio_id: Annotated[str, Path(description="The ID of the audio")],
-    data: AudioPatch,
-    db: DatabaseDep,
-) -> AudioOutput:
-    logger.info("Updating audio %s with: %s", audio_id, data.model_dump_json())
-    return await db.audio.update(audio_id, data)
+async def update_audio(audio_id: AudioId, data: AudioPatch, db: DatabaseDep) -> AudioOutput:
+    return await audio.update(db, audio_id, data)
 
 
 @router.delete(
@@ -48,11 +39,8 @@ async def update_audio(
     summary="Delete audio",
     description="Delete an audio that has no recordings.",
 )
-async def delete_audio(
-    audio_id: Annotated[str, Path(description="The ID of the audio")],
-    db: DatabaseDep,
-) -> None:
-    await db.audio.delete(audio_id)
+async def delete_audio(audio_id: AudioId, db: DatabaseDep) -> None:
+    await audio.delete(db, audio_id)
 
 
 @router.get(
@@ -61,11 +49,8 @@ async def delete_audio(
     description="Retrieve every recording (version) of an audio.",
     response_model_exclude_none=True,
 )
-async def get_recordings(
-    audio_id: Annotated[str, Path(description="The ID of the audio")],
-    db: DatabaseDep,
-) -> list[RecordingOutput]:
-    return await db.recording.get_all_by_audio(audio_id)
+async def get_recordings(audio_id: AudioId, db: DatabaseDep) -> list[RecordingOutput]:
+    return await recording.get_all_by_audio(db, audio_id)
 
 
 @router.post(
@@ -75,7 +60,7 @@ async def get_recordings(
     description="Upload one recording of an audio, with its metadata as a JSON form field.",
 )
 async def post_recording(
-    audio_id: Annotated[str, Path(description="The ID of the audio")],
+    audio_id: AudioId,
     metadata: Annotated[str, Form(description="JSON-encoded recording metadata")],
     file: Annotated[UploadFile, File(description="Audio file")],
     db: DatabaseDep,

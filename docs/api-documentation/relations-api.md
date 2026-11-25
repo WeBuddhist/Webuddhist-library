@@ -69,4 +69,4 @@ This returns editions related through alignment or through the related texts beh
 
 - Text relation fields are modeled in `models/text.py`.
 - Text creation and retrieval are implemented in `routers/texts.py`.
-- Related edition lookup is implemented in `routers/editions.py` and `database/edition_database.py`.
+- Related edition lookup is implemented in `routers/editions.py` and `database/edition.py`.

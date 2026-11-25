@@ -1,9 +1,7 @@
-# ruff: noqa: ANN001, ANN201, E501, S101
 import pytest
 
-from catalog_search import CatalogSearchService, catalog_index_body
 from config import Settings, settings
-from content_search import ContentSearchService, content_index_body
+from database import person, text
 from identifier import generate_id
 from main import create_app
 from models.base import LocalizedString
@@ -11,12 +9,17 @@ from models.contribution import PersonContributionInput
 from models.enums import ContributorRole, EditionType
 from models.person import PersonInput
 from models.text import TextInput
-from search_client import create_search_client
+from search.catalog import CatalogSearchService
+from search.catalog_mapping import catalog_index_body
+from search.client import create_search_client
+from search.content import ContentSearchService
+from search.content_mapping import content_index_body
 
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_non_testing_startup_allows_missing_opensearch_endpoint(monkeypatch) -> None:
     from unittest.mock import AsyncMock, Mock
+
     import main
     db = AsyncMock()
     storage = AsyncMock()
@@ -27,7 +30,7 @@ async def test_non_testing_startup_allows_missing_opensearch_endpoint(monkeypatc
     search = Mock(side_effect=AssertionError("Search must stay disabled"))
     monkeypatch.setattr(main, "create_search_client", search)
     monkeypatch.setattr(main, "setup_telemetry", Mock())
-    app = create_app(testing=False)
+    app = create_app()
     async with app.router.lifespan_context(app):
         db.__aenter__.assert_awaited_once()
         storage.__aenter__.assert_awaited_once()
@@ -67,17 +70,18 @@ async def test_startup_keeps_existing_concrete_index_and_documents(_opensearch_e
 
 
 async def _create_person(db) -> str:
-    return await db.person.create(PersonInput(name=LocalizedString({"en": "Search Author"}), bdrc="P" + generate_id()[:8]))
+    return await person.create(db, PersonInput(name=LocalizedString({"en": "Search Author"}), bdrc="P" + generate_id()[:8]))
 
 
 async def _create_text(db, person_id: str, title: str = "Search Text", language: str = "bo") -> str:
-    return await db.text.create(
+    return await text.create(
+        db,
         TextInput(
             category_id="category",
             title=LocalizedString({language: title}),
             language=language,
             contributions=[PersonContributionInput(type="person", id=person_id, role=ContributorRole.AUTHOR)],
-        )
+        ),
     )
 
 
