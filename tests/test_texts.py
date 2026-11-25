@@ -256,7 +256,7 @@ class TestGetAllTextsV2:
         response = await client.get("/v2/texts?title=Buddha")
 
         assert response.status_code == 503
-        assert response.json()["error"] == "Catalog search is required for text title search"
+        assert response.json()["detail"] == "Catalog search is required for text title search"
 
     async def test_get_all_metadata_filter_by_title_rejects_short_search(self, client):
         """Title search requires at least 2 characters to avoid broad substring scans."""
@@ -647,7 +647,7 @@ class TestGetSingleTextV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "not found" in data["error"].lower()
+        assert "not found" in data["detail"].lower()
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -727,8 +727,8 @@ class TestPostTextV2:
         response_2 = await client.post("/v2/texts", json=duplicate_text_data)
 
         assert response_2.status_code == 422
-        assert "error" in response_2.json()
-        assert "already exists" in response_2.json()["error"].lower()
+        assert "detail" in response_2.json()
+        assert "already exists" in response_2.json()["detail"].lower()
 
     @pytest.mark.parametrize("root_language,translation_language", [("bo", "en"), ("en", "bo")])
     async def test_translation_may_reuse_title_its_root_carries_in_that_language(
@@ -754,7 +754,7 @@ class TestPostTextV2:
             "/v2/texts", json={**base, "title": shared, "language": translation_language, "category_id": "category"}
         )
         assert duplicate.status_code == 422
-        assert "already exists" in duplicate.json()["error"].lower()
+        assert "already exists" in duplicate.json()["detail"].lower()
 
     async def test_create_text_missing_json(self, client):
         """Test POST with no JSON data"""
@@ -1012,8 +1012,8 @@ class TestPostTextV2:
         response_2 = await client.post("/v2/texts", json=duplicate_text_data)
 
         assert response_2.status_code == 409
-        assert "error" in response_2.json()
-        assert "already exists" in response_2.json()["error"].lower()
+        assert "detail" in response_2.json()
+        assert "already exists" in response_2.json()["detail"].lower()
 
     async def test_create_text_with_nonexistent_category_id(self, client, test_database, test_person_data):
         """Test creating a text with a non-existent category_id returns an error"""
@@ -1031,7 +1031,7 @@ class TestPostTextV2:
 
         assert response.status_code == 422
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -1163,7 +1163,7 @@ class TestPatchTextV2:
         )
 
         assert response.status_code == 422
-        assert "do not exist" in response.json()["error"].lower()
+        assert "do not exist" in response.json()["detail"].lower()
 
         get_response = await client.get(f"/v2/texts/{text_id}")
         assert get_response.json()["contributions"][0]["id"] == person_id
@@ -1382,8 +1382,8 @@ class TestPatchTextV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
-        assert "not found" in data["error"].lower()
+        assert "detail" in data
+        assert "not found" in data["detail"].lower()
 
     async def test_patch_text_empty_payload_rejected(self, client, test_database, test_person_data):
         """Test that empty payload is rejected"""
@@ -1432,9 +1432,9 @@ class TestPatchTextV2:
         )
 
         assert response.status_code == 422
-        error = response.json()["detail"][0]
-        assert error["loc"] == ["body", "bdrc"]
-        assert error["type"] == "string_type"
+        error = response.json()["errors"][0]
+        assert error["pointer"] == "#/body/bdrc"
+        assert error["detail"] == "Input should be a valid string"
 
     async def test_patch_text_unknown_field_rejected(self, client, test_database, test_person_data):
         """Test that unknown fields are rejected"""
@@ -1561,16 +1561,7 @@ class TestPatchTextV2:
 
         assert response.status_code == 422
         data = response.json()
-        assert "detail" in data
-        # Handle both FastAPI field validation (list) and Pydantic model validation (string)
-        detail = data["detail"]
-        if isinstance(detail, list):
-            # FastAPI field validation errors
-            assert any("language" in str(error.get("msg", "")).lower() for error in detail)
-        else:
-            # Pydantic model validation error
-            assert isinstance(detail, str)
-            assert "language" in detail.lower()
+        assert any("language" in error["detail"].lower() for error in data["errors"])
 
         get_response = await client.get(f"/v2/texts/{text_id}")
         assert get_response.status_code == 200
@@ -1981,8 +1972,8 @@ class TestPatchTextV2:
 
         assert response.status_code == 409
         data = response.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
 
 @pytest.mark.asyncio(loop_scope="session")

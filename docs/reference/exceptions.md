@@ -1,50 +1,75 @@
 # Exceptions reference
 
-This document describes the API error types in [exceptions.py](../../exceptions.py) and how they map to HTTP status codes and JSON responses.
+This document describes the API error types in [exceptions.py](../../exceptions.py) and the error responses built from them in [main.py](../../main.py).
 
 ---
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Base class](#base-class)
-3. [Exception classes](#exception-classes)
-4. [Usage](#usage)
+1. [Error responses](#error-responses)
+2. [Exception classes](#exception-classes)
+3. [Usage](#usage)
 
 ---
 
-## Overview
+## Error responses
 
-All API errors used by the OpenPecha backend inherit from `OpenPechaError`. They are raised by the API and database layers and are handled in [main.py](../../main.py), which returns JSON responses with the appropriate status code.
+Every error response is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details object, served as `application/problem+json`:
 
----
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Text with ID 'abc' not found"
+}
+```
 
-## Base class
+- `type` is always `about:blank`, so `title` is the standard phrase of the HTTP status.
+- `status` repeats the HTTP status code.
+- `detail` is the human-readable message for this occurrence.
 
-**OpenPechaError**
+Validation failures (422) add `errors`, one entry per failed field. `detail` repeats the first entry's message.
 
-- **Attributes:** `message` (str), `status_code` (int, default 500).
-- **Method:** `to_dict() -> dict[str, str]` – returns `{"error": self.message}` for use in JSON responses.
+```json
+{
+  "type": "about:blank",
+  "title": "Unprocessable Content",
+  "status": 422,
+  "detail": "Input should be a valid string",
+  "errors": [{"detail": "Input should be a valid string", "pointer": "#/body/bdrc"}]
+}
+```
 
-Subclasses override `status_code` only; `to_dict()` is inherited.
+For request input, `pointer` starts with where the value came from (`#/body/...`, `#/query/...`, `#/path/...`, `#/header/...`). For a document validated inside a handler, such as the recording metadata form field, it points into that document (`#/title`).
+
+| Source | Status |
+|--------|--------|
+| `OpenPechaError` subclasses | The class's `status_code` |
+| Invalid request input, or a Pydantic `ValidationError` | 422, with `errors` |
+| Neo4j trigger failures / constraint violations / other client errors | 422 / 409 / 400 |
+| OpenSearch errors | 503 |
+| Unknown routes and disallowed methods | 404 / 405 |
+| Anything else | 500 |
 
 ---
 
 ## Exception classes
 
+All API errors raised by the OpenPecha backend inherit from `OpenPechaError`, which carries a `message` and a class-level `status_code` (default 500). Subclasses override `status_code` only.
+
 | Class | status_code | Typical use |
 |-------|-------------|-------------|
-| **DataNotFoundError** | 404 | Resource missing (e.g. text, person, edition not found). |
-| **InvalidRequestError** | 400 | Bad request (e.g. missing required header, malformed input). |
-| **DataConflictError** | 409 | Conflict (e.g. duplicate resource, constraint violation). |
-| **DataValidationError** | 422 | Business or database validation failure (e.g. referenced person does not exist, invalid text relationship). |
+| **InvalidRequestError** | 400 | Bad request (e.g. malformed input). |
 | **UnauthorizedError** | 401 | Invalid or missing API key, or API key not authorized for the requested application. |
+| **ForbiddenError** | 403 | Application administration with an application-bound API key. |
+| **DataNotFoundError** | 404 | Resource missing (e.g. text, person, edition not found). |
+| **DataConflictError** | 409 | Conflict (e.g. duplicate resource, resource still referenced). |
+| **DataValidationError** | 422 | Business or database validation failure (e.g. referenced person does not exist). |
+| **ServiceUnavailableError** | 503 | A dependency such as search is unavailable. |
 
 ---
 
 ## Usage
 
-- **Raising:** Use the appropriate subclass where the failure occurs (e.g. `raise DataNotFoundError("Text not found")`).
-- **Handling:** The global exception handler in [main.py](../../main.py) catches `OpenPechaError`, calls `to_dict()`, and returns the result with the exception’s `status_code`. Clients receive a JSON body like `{"error": "Text not found"}` and the corresponding HTTP status.
-
-Pydantic `ValidationError` is handled separately in main (422 with the first validation message); it is not an `OpenPechaError` subclass.
+Raise the appropriate subclass where the failure occurs, e.g. `raise DataNotFoundError("Text with ID 'abc' not found")`. The handler in [main.py](../../main.py) turns it into a problem details response with the class's status and the message as `detail`.

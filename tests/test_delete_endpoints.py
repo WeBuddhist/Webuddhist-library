@@ -130,7 +130,7 @@ class TestReferenceDeletes:
         response = await client.delete(f"/v2/languages/{code}")
 
         assert response.status_code == 409
-        assert "HAS_LANGUAGE" in response.json()["error"]
+        assert "HAS_LANGUAGE" in response.json()["detail"]
         assert await _scalar(test_database, "RETURN EXISTS { (:Language {code: $code}) }", code=code) is True
 
     async def test_delete_unused_application(self, client, test_database):
@@ -158,7 +158,7 @@ class TestReferenceDeletes:
         response = await client.delete(f"/v2/applications/{name}")
 
         assert response.status_code == 409
-        assert "category" in response.json()["error"].lower()
+        assert "category" in response.json()["detail"].lower()
         assert await _scalar(test_database, "RETURN EXISTS { (:Application {id: $name}) }", name=name) is True
 
     async def test_delete_application_conflicts_with_tag_or_api_key(self, client, test_database):
@@ -174,7 +174,7 @@ class TestReferenceDeletes:
         response = await client.delete(f"/v2/applications/{tag_app}")
 
         assert response.status_code == 409
-        assert "tag" in response.json()["error"].lower()
+        assert "tag" in response.json()["detail"].lower()
 
         key_app = f"app{generate_id()[:6].lower()}"
         assert (await client.post("/v2/applications", json={"name": key_app})).status_code == 201
@@ -183,7 +183,7 @@ class TestReferenceDeletes:
         response = await client.delete(f"/v2/applications/{key_app}")
 
         assert response.status_code == 409
-        assert "api key" in response.json()["error"].lower()
+        assert "api key" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -217,7 +217,7 @@ class TestPersonAndCategoryDeletes:
         response = await client.delete(f"/v2/persons/{person_id}")
 
         assert response.status_code == 409
-        assert "contribution" in response.json()["error"].lower()
+        assert "contribution" in response.json()["detail"].lower()
         assert await _scalar(test_database, "RETURN EXISTS { (:Person {id: $person_id}) }", person_id=person_id) is True
 
     async def test_delete_category_conflicts_when_work_depends_on_descendant(self, client, test_database):
@@ -249,7 +249,7 @@ class TestPersonAndCategoryDeletes:
         response = await client.delete(f"/v2/categories/{parent_id}", headers=APPLICATION_HEADER)
 
         assert response.status_code == 409
-        assert "work" in response.json()["error"].lower()
+        assert "work" in response.json()["detail"].lower()
         assert await _scalar(test_database, "RETURN EXISTS { (:Category {id: $id}) }", id=parent_id) is True
         assert await _scalar(test_database, "RETURN EXISTS { (:Category {id: $id}) }", id=child_id) is True
         assert await _scalar(test_database, "RETURN EXISTS { (:Category {id: $id}) }", id=grandchild_id) is True
@@ -314,7 +314,7 @@ class TestTextDeletes:
         response = await client.delete(f"/v2/texts/{text_id}")
 
         assert response.status_code == 409
-        assert "edition" in response.json()["error"].lower()
+        assert "edition" in response.json()["detail"].lower()
         assert await _scalar(test_database, "RETURN EXISTS { (:Text {id: $text_id}) }", text_id=text_id) is True
 
     async def test_delete_text_conflicts_when_other_text_points_to_it(self, client, test_database):
@@ -325,7 +325,7 @@ class TestTextDeletes:
         response = await client.delete(f"/v2/texts/{root_id}")
 
         assert response.status_code == 409
-        assert "translation" in response.json()["error"].lower()
+        assert "translation" in response.json()["detail"].lower()
         assert await _scalar(test_database, "RETURN EXISTS { (:Text {id: $text_id}) }", text_id=root_id) is True
 
     async def test_delete_text_conflicts_when_commentary_points_to_it(self, client, test_database):
@@ -336,7 +336,7 @@ class TestTextDeletes:
         response = await client.delete(f"/v2/texts/{root_id}")
 
         assert response.status_code == 409
-        assert "commentary" in response.json()["error"].lower()
+        assert "commentary" in response.json()["detail"].lower()
         assert await _scalar(test_database, "RETURN EXISTS { (:Text {id: $text_id}) }", text_id=root_id) is True
 
     async def test_delete_translation_preserves_shared_work_and_tags(self, client, test_database):

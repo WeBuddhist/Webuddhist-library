@@ -114,7 +114,7 @@ class TestGetEditionContent(TestEditionsEndpoints):
         response = await client.get("/v2/editions/non-existent-id/content")
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_get_content_with_span(self, client, test_database, test_person_data):
         """Test content retrieval with span parameters"""
@@ -187,7 +187,7 @@ class TestGetEditionMetadata(TestEditionsEndpoints):
         response = await client.get("/v2/editions/non-existent-id")
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_get_metadata_with_all_fields(self, client, test_database, test_person_data):
         """Test metadata retrieval with all optional fields populated"""
@@ -343,7 +343,7 @@ class TestCreateEdition(TestEditionsEndpoints):
         response = await client.post("/v2/texts/non-existent-id/editions", json=edition_data)
 
         assert response.status_code == 422
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_create_edition_malformed_json(self, client, test_database, test_person_data):
         """Test edition creation with malformed JSON"""
@@ -440,7 +440,7 @@ class TestCreateEdition(TestEditionsEndpoints):
         second_response = await client.post(f"/v2/texts/{text_id}/editions", json=second_edition_data)
 
         assert second_response.status_code == 422
-        assert "error" in second_response.json()
+        assert "detail" in second_response.json()
 
     @pytest.mark.parametrize("include_segmentation", [False, True])
     async def test_create_edition_round_trip(self, client, test_database, test_person_data, include_segmentation):
@@ -972,7 +972,7 @@ class TestDeleteEdition(TestEditionsEndpoints):
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_delete_edition_with_annotations(self, client, test_database, test_person_data):
         """Test deleting an edition that has annotations"""

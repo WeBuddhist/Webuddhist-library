@@ -90,7 +90,7 @@ class TestCreateLanguage(TestLanguagesEndpoints):
         response = await client.post("/v2/languages", json=language_data)
 
         assert response.status_code == 422
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_create_language_missing_code(self, client, test_database):
         """Test that creating a language without code fails"""

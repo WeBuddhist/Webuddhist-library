@@ -214,9 +214,7 @@ class TestGetAllPersonsV2:
         assert response.status_code == 422
         data = response.json()
         assert "detail" in data
-        detail = data["detail"]
-        assert isinstance(detail, list)
-        assert any("greater than or equal to 1" in str(error.get("msg", "")) for error in detail)
+        assert any("greater than or equal to 1" in error["detail"] for error in data["errors"])
 
     async def test_get_all_persons_invalid_limit_too_high(self, client, test_database):
         """Test pagination with limit greater than 100"""
@@ -224,9 +222,7 @@ class TestGetAllPersonsV2:
         assert response.status_code == 422
         data = response.json()
         assert "detail" in data
-        detail = data["detail"]
-        assert isinstance(detail, list)
-        assert any("less than or equal to 100" in str(error.get("msg", "")) for error in detail)
+        assert any("less than or equal to 100" in error["detail"] for error in data["errors"])
 
     async def test_get_all_persons_invalid_offset_negative(self, client, test_database):
         """Test pagination with negative offset"""
@@ -234,9 +230,7 @@ class TestGetAllPersonsV2:
         assert response.status_code == 422
         data = response.json()
         assert "detail" in data
-        detail = data["detail"]
-        assert isinstance(detail, list)
-        assert any("greater than or equal to 0" in str(error.get("msg", "")) for error in detail)
+        assert any("greater than or equal to 0" in error["detail"] for error in data["errors"])
 
     async def test_get_all_persons_offset_beyond_results(self, client, test_database):
         """Test pagination with offset beyond available results"""
@@ -310,7 +304,7 @@ class TestGetAllPersonsV2:
         response = await client.get("/v2/persons/?name=John")
 
         assert response.status_code == 503
-        assert response.json()["error"] == "Catalog search is required for person name search"
+        assert response.json()["detail"] == "Catalog search is required for person name search"
 
     async def test_get_all_persons_filter_by_name_rejects_short_search(self, client):
         """Name search requires at least 2 characters to avoid broad substring scans."""
@@ -400,9 +394,9 @@ class TestGetSinglePersonV2:
         assert response.status_code == 404
         data = response.json()
         assert isinstance(data, dict)
-        assert "error" in data
-        assert "not" in data["error"].lower()
-        assert "found" in data["error"].lower()
+        assert "detail" in data
+        assert "not" in data["detail"].lower()
+        assert "found" in data["detail"].lower()
 
     async def test_get_single_person_minimal_data(
         self, client, test_database, test_person_data_minimal
@@ -629,8 +623,8 @@ class TestPostPersonV2:
         # Mirror /v2/texts duplicate behavior (likely 400)
         assert response2.status_code == 409
         data = response2.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
     async def test_create_person_success_minimal_data(self, client, test_database):
         """Test creating person with minimal data and verify optional fields are absent"""
@@ -817,8 +811,8 @@ class TestPostPersonV2:
         )
         assert response2.status_code == 409
         data = response2.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
     async def test_create_person_with_both_bdrc_and_wiki(self, client, test_database):
         """Test creating person with both BDRC and Wiki identifiers and verify roundtrip"""
@@ -970,8 +964,8 @@ class TestPostPersonV2:
 
         assert response.status_code == 400
         data = response.json()
-        assert "error" in data
-        assert "not present" in data["error"].lower() or "language" in data["error"].lower()
+        assert "detail" in data
+        assert "not present" in data["detail"].lower() or "language" in data["detail"].lower()
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -1191,7 +1185,7 @@ class TestPatchPersonV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_patch_person_empty_payload_rejected(self, client, test_database):
         """Test that empty payload is rejected"""
@@ -1220,9 +1214,9 @@ class TestPatchPersonV2:
         )
 
         assert response.status_code == 422
-        error = response.json()["detail"][0]
-        assert error["loc"] == ["body", "bdrc"]
-        assert error["type"] == "string_type"
+        error = response.json()["errors"][0]
+        assert error["pointer"] == "#/body/bdrc"
+        assert error["detail"] == "Input should be a valid string"
 
     async def test_patch_person_unknown_field_rejected(self, client, test_database):
         """Test that unknown fields are rejected"""
@@ -1258,8 +1252,8 @@ class TestPatchPersonV2:
 
         assert response.status_code == 409
         data = response.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
         get_response = await client.get(f"/v2/persons/{person2_id}")
         assert get_response.status_code == 200
@@ -1284,8 +1278,8 @@ class TestPatchPersonV2:
 
         assert response.status_code == 409
         data = response.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
         get_response = await client.get(f"/v2/persons/{person2_id}")
         assert get_response.status_code == 200
@@ -1525,7 +1519,7 @@ class TestPatchPersonV2:
 
         assert response.status_code == 400
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
         get_response = await client.get(f"/v2/persons/{person_id}")
         assert get_response.status_code == 200

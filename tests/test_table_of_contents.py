@@ -177,7 +177,7 @@ class TestTableOfContents:
         )
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_table_of_contents_creates_span_of_for_every_section(
         self, client, test_database, test_person_data

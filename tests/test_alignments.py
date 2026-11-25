@@ -254,7 +254,7 @@ class TestEditionPairAlignments:
         )
 
         assert response.status_code == 400
-        assert "target segment references" in response.json()["error"]
+        assert "target segment references" in response.json()["detail"]
 
         get_response = await client.get(path)
         assert get_response.status_code == 200

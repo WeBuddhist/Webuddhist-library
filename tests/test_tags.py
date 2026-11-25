@@ -131,7 +131,7 @@ class TestGetAllTags:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -192,8 +192,8 @@ class TestCreateTag:
         response2 = await client.post("/v2/tags/", json=tag_data, headers=APPLICATION_HEADER)
         assert response2.status_code == 422
         data = response2.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
     async def test_create_tag_missing_title(self, client, test_database):
         """Test creating tag without title fails"""
@@ -245,7 +245,7 @@ class TestDeleteTag:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_delete_tag_missing_application_header(self, client, test_database):
         """Test deleting tag without X-Application header fails"""

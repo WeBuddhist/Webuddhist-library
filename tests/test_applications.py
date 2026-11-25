@@ -22,8 +22,8 @@ class TestApplications:
         response = await client.post("/v2/applications", json=payload)
         assert response.status_code == 409
         data = response.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
     async def test_create_application_normalizes_to_lowercase(self, client, test_database):
         """Test input WeBuddhist is stored as webuddhist in both id and name."""

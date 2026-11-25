@@ -31,7 +31,7 @@ async def test_protected_route_rejects_missing_key(monkeypatch, method, path):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.request(method, url, json={})
     assert response.status_code == 401, (method, path, response.text)
-    assert response.json()["error"] == "Missing required header: X-API-Key"
+    assert response.json()["detail"] == "Missing required header: X-API-Key"
 
 
 async def test_health_schema_and_documentation_are_public(monkeypatch):

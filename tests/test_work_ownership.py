@@ -79,7 +79,7 @@ async def test_missing_tag_identifies_tag(client, work, application):
     response = await client.post(f"/v2/texts/{work['text']}/tags/missing-tag", headers=headers)
     scope = f" in application '{application}'" if application else ""
     assert response.status_code == 404, response.text
-    assert response.json() == {"error": f"Tag 'missing-tag' not found{scope}"}
+    assert response.json()["detail"] == f"Tag 'missing-tag' not found{scope}"
 
 
 async def test_missing_work_identifies_work(test_database, work):
@@ -131,7 +131,7 @@ async def test_foreign_tag_cannot_be_attached_or_removed(auth_client, test_datab
         )
         assert response.status_code == 404, response.text
         if resource == "texts" and method == "POST":
-            assert response.json() == {"error": f"Tag '{work['b']}' not found in application 'test_application'"}
+            assert response.json()["detail"] == f"Tag '{work['b']}' not found in application 'test_application'"
     assert work["b"] in (await test_database.text.get(work["text"])).tag_ids
     assert work["b"] in (await test_database.segment.get(segment.id)).tag_ids
 

@@ -161,7 +161,7 @@ class TestApiKeyAuthMiddleware:
 
         assert response.status_code == 401
         data = response.json()
-        assert "X-API-Key" in data["error"]
+        assert "X-API-Key" in data["detail"]
 
     async def test_invalid_api_key_returns_401(self, auth_client, test_database):
         """Test request with invalid API key returns 401."""
@@ -175,7 +175,7 @@ class TestApiKeyAuthMiddleware:
 
         assert response.status_code == 401
         data = response.json()
-        assert "Invalid API key" in data["error"]
+        assert "Invalid API key" in data["detail"]
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -224,7 +224,7 @@ class TestApiKeyAuthMiddlewareWithKeys:
         )
 
         assert response.status_code == 401
-        assert response.json()["error"] == "API key not authorized for this application"
+        assert response.json()["detail"] == "API key not authorized for this application"
 
     async def test_app_bound_key_accepts_missing_application(self, auth_client, test_database):
         """Test app-bound key works on routes where X-Application is optional and not sent."""

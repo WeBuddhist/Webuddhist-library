@@ -147,7 +147,7 @@ class TestGetSegmentation(TestAnnotationsEndpoints):
         response = await client.get("/v2/editions/nonexistent_id/segmentation")
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_get_segmentation_with_multiple_spans(self, client, test_database, test_person_data):
         """Test segmentation with segments containing multiple spans"""
@@ -306,7 +306,7 @@ class TestGetPagination(TestAnnotationsEndpoints):
         response = await client.get("/v2/paginations/nonexistent_id")
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_get_pagination_with_multiple_lines_per_page(self, client, test_database, test_person_data):
         """Test pagination with pages containing multiple line spans"""
@@ -408,7 +408,7 @@ class TestGetDurchen(TestAnnotationsEndpoints):
         response = await client.get("/v2/durchens/nonexistent_id")
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
 
 class TestDeleteDurchen(TestAnnotationsEndpoints):
@@ -559,7 +559,7 @@ class TestFootnote(TestAnnotationsEndpoints):
     async def test_get_footnote_not_found(self, client, test_database):
         response = await client.get("/v2/footnotes/nonexistent_id")
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_delete_footnote_not_found(self, client, test_database):
         response = await client.delete("/v2/footnotes/nonexistent_id")
@@ -707,7 +707,7 @@ class TestYigchung(TestAnnotationsEndpoints):
         response = await client.get("/v2/yigchungs/nonexistent_id")
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_delete_yigchung_not_found(self, client, test_database):
         response = await client.delete("/v2/yigchungs/nonexistent_id")
@@ -750,7 +750,7 @@ class TestGetBibliographic(TestAnnotationsEndpoints):
         response = await client.get("/v2/bibliographic/nonexistent_id")
 
         assert response.status_code == 404
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_get_bibliographic_different_types(self, client, test_database, test_person_data):
         """Test bibliographic metadata with different types"""
@@ -863,7 +863,7 @@ class TestAddAnnotationSpanBounds(TestAnnotationsEndpoints):
         )
 
         assert response.status_code == 422
-        assert "error" in response.json()
+        assert "detail" in response.json()
 
     async def test_post_durchen_rejects_span_beyond_content(self, client, test_database, test_person_data):
         """Test that a durchen note span past the end of the content is rejected"""
@@ -1238,7 +1238,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
 
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 422
-        errors = response.json()["detail"]
+        errors = response.json()["errors"]
         assert any("overlap" in str(error).lower() for error in errors)
 
     async def test_add_pagination_volumes_ordered_against_index_fails(
@@ -1352,7 +1352,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
 
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 422
-        errors = response.json()["detail"]
+        errors = response.json()["errors"]
         
         # Should have validation error about missing index or invalid sequence
         assert any("index" in str(error).lower() or "sequence" in str(error).lower() for error in errors)
@@ -1384,7 +1384,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
 
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 422
-        errors = response.json()["detail"]
+        errors = response.json()["errors"]
         
         # Should have validation error about duplicate indexes
         assert any("unique" in str(error).lower() or "duplicate" in str(error).lower() for error in errors)
@@ -1408,7 +1408,7 @@ class TestAddPagination(TestAnnotationsEndpoints):
 
         response = await client.post(f"/v2/editions/{edition_id}/pagination", json=pagination_data)
         assert response.status_code == 422
-        assert any("multiple volumes must have indexes" in str(error) for error in response.json()["detail"])
+        assert any("multiple volumes must have indexes" in str(error) for error in response.json()["errors"])
 
     async def test_add_pagination_non_continuous_indexes_succeeds(self, client, test_database, test_person_data):
         """Test that volume indexes may skip numbers, since they are volume numbers in the source collection"""

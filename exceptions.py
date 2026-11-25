@@ -5,9 +5,6 @@ class OpenPechaError(Exception):
         super().__init__(message)
         self.message = message
 
-    def to_dict(self) -> dict[str, str]:
-        return {"error": self.message}
-
 
 class DataNotFoundError(OpenPechaError):
     status_code = 404

@@ -81,7 +81,7 @@ class TestGetAllCategoriesV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_get_all_categories_with_parent_id_filter(self, client, test_database):
         """Test filtering categories by parent_id"""
@@ -202,7 +202,7 @@ class TestGetCategoryByIdV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_get_category_by_id_missing_application_header(self, client, test_database):
         """Test requesting a category without X-Application header fails"""
@@ -221,7 +221,7 @@ class TestGetCategoryByIdV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_get_category_by_id_wrong_application(self, client, test_database):
         """Test that a category from one application is not visible to another"""
@@ -360,7 +360,7 @@ class TestCreateCategoryV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_create_category_missing_title(self, client, test_database):
         """Test creating category without title fails"""
@@ -398,7 +398,7 @@ class TestCreateCategoryV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_create_category_rejects_parent_from_other_application(self, client, test_database):
         """Test child categories cannot cross application boundaries."""
@@ -414,7 +414,7 @@ class TestCreateCategoryV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_create_category_duplicate_title_rejected(self, client, test_database):
         """Test creating category with duplicate title in same parent fails"""
@@ -434,8 +434,8 @@ class TestCreateCategoryV2:
         )
         assert response2.status_code == 422
         data = response2.json()
-        assert "error" in data
-        assert "already exists" in data["error"].lower()
+        assert "detail" in data
+        assert "already exists" in data["detail"].lower()
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -629,7 +629,7 @@ class TestUpdateCategoryV2:
 
         assert response.status_code == 422
         data = response.json()
-        assert "already exists" in data["error"].lower()
+        assert "already exists" in data["detail"].lower()
 
         get_response = await client.get(f"/v2/categories/{category_id}", headers=APPLICATION_HEADER)
         assert get_response.json()["title"] == {"en": "Patch Duplicate Target"}
@@ -661,7 +661,7 @@ class TestUpdateCategoryV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_patch_category_from_other_application_not_found(self, client, test_database):
         """Test a category cannot be patched through another application"""
@@ -690,7 +690,7 @@ class TestUpdateCategoryV2:
 
         assert response.status_code == 404
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_patch_category_missing_application_header(self, client, test_database):
         """Test patching without X-Application header fails"""
@@ -711,7 +711,7 @@ class TestUpdateCategoryV2:
 
         assert response.status_code == 400
         data = response.json()
-        assert "error" in data
+        assert "detail" in data
 
     async def test_patch_category_invalid_description_language_rolls_back_title(self, client, test_database):
         """Test a failing description leaves the graph untouched, including the title"""
