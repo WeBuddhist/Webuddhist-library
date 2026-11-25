@@ -8,6 +8,7 @@ from opensearchpy.exceptions import RequestError
 
 import search_client
 from catalog_search import CatalogSearchService
+from config import Settings
 from content_search import ContentSearchService
 from exceptions import InvalidRequestError
 from search_client import SearchIndex
@@ -246,14 +247,16 @@ async def test_search_auth_configuration(monkeypatch, mode):
     app = web.Application()
     app.router.add_head("/content-search", index_exists)
     async with TestServer(app) as server:
-        async with search_client.create_search_client(
-            endpoint=str(server.make_url("/")),
-            region="ap-southeast-1",
-            auth_mode=mode,
-            username="reader",
-            password="password",
-            max_retries=0,
-        ) as client:
+        config = Settings(
+            opensearch_endpoint=str(server.make_url("/")),
+            aws_region="ap-southeast-1",
+            opensearch_auth_mode=mode,
+            opensearch_username="reader",
+            opensearch_password="password",
+        )
+        async with search_client.create_search_client(config) as client:
+            assert client.transport.max_retries == 3
+            assert client.transport.get_connection().timeout == 120
             assert await client.indices.exists(index="content-search")
 
     headers = received[0]
@@ -280,5 +283,6 @@ def test_search_auth_configuration_errors(monkeypatch, endpoint, mode, match):
     monkeypatch.setattr(
         search_client.botocore.session, "get_session", lambda: SimpleNamespace(get_credentials=lambda: None)
     )
+    config = Settings(opensearch_endpoint=endpoint, aws_region="test", opensearch_auth_mode=mode)
     with pytest.raises(InvalidRequestError, match=match):
-        search_client.create_search_client(endpoint=endpoint, region="test", auth_mode=mode)
+        search_client.create_search_client(config)

@@ -10,7 +10,7 @@ from models.requests import TextFacetFilter, TextFilter
 from models.responses import TextLanguageResponse
 from models.text import TextBase, TextInput, TextOutput, TextPatch
 
-from .contribution_database import ContributionDatabase, contributions_return
+from .contribution_database import ContributionDatabase
 from .database_validator import DatabaseValidator
 from .nomen_database import NomenDatabase
 from .repository import SessionRepository
@@ -24,9 +24,8 @@ TEXT_LABEL: LiteralString = "Text"
 
 
 class TextDatabase(SessionRepository):
-    _TEXT_RETURN: LiteralString = (
-        """
-    {
+    _TEXT_RETURN: LiteralString = f"""
+    {{
         id: e.id,
         bdrc: e.bdrc,
         wiki: e.wiki,
@@ -36,27 +35,19 @@ class TextDatabase(SessionRepository):
         commentaries: [(e)<-[:COMMENTARY_OF]-(c_child:Text) | c_child.id],
         translations: [(e)<-[:TRANSLATION_OF]-(t_child:Text) | t_child.id],
         parts: [(e)<-[:PART_OF]-(part:Text) | part.id],
-        contributions: """
-        + contributions_return("e")
-        + """,
+        contributions: {ContributionDatabase.return_list("e")},
         date: e.date,
-        title: apoc.map.fromPairs([(e)-[:HAS_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->
-            (lt:LocalizedText)-[r:HAS_LANGUAGE]->(lang:Language)
-            WHERE NOT EXISTS { (n)-[:ALTERNATIVE_OF]->(:Nomen) } |
-            [coalesce(r.bcp47, lang.code), lt.text]]),
-        alt_titles: [(e)-[:HAS_TITLE]->(:Nomen)<-[:ALTERNATIVE_OF]-(an:Nomen) |
-            apoc.map.fromPairs([(an)-[:HAS_LOCALIZATION]->(lt:LocalizedText)-[r:HAS_LANGUAGE]->(lang:Language) |
-                [coalesce(r.bcp47, lang.code), lt.text]])],
+        title: {NomenDatabase.localized_map("(e)-[:HAS_TITLE]->(n:Nomen WHERE NOT (n)-[:ALTERNATIVE_OF]->(:Nomen))")},
+        alt_titles: {NomenDatabase.alternative_maps("(e)-[:HAS_TITLE]->(:Nomen)")},
         language: [(e)-[r:HAS_LANGUAGE]->(lang:Language) | coalesce(r.bcp47, lang.code)][0],
         category_id: [(e)-[:TEXT_OF]->(work:Work)-[:HAS_CATEGORY]->(cat:Category) | cat.id][0],
         license: coalesce([(e)-[:HAS_LICENSE]->(license:LicenseType) | license.name][0], "public"),
         editions: [(e)<-[:EDITION_OF]-(m:Edition) | m.id],
         audios: [(e)<-[:RECITATION_OF]-(a:Audio) | a.id],
         tag_ids: [(e)-[:TEXT_OF]->(w:Work)-[:HAS_TAG]->(t:Tag)
-            WHERE ($application IS NULL OR (t)-[:BELONGS_TO]->(:Application {id: $application})) | t.id]
-    } AS text
+            WHERE ($application IS NULL OR (t)-[:BELONGS_TO]->(:Application {{id: $application}})) | t.id]
+    }} AS text
     """
-    )
 
     GET_QUERY: LiteralString = f"""
     MATCH (e:Text {{id: $id}})-[:TEXT_OF]->(w:Work)

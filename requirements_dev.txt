@@ -7,5 +7,5 @@ pre-commit
 pyright
 ty
 testcontainers
-types-aioboto3
+types-aiobotocore[s3]==3.10.0
 

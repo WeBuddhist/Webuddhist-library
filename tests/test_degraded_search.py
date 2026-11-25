@@ -2,6 +2,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from catalog_search import CatalogSearchService
+from config import Settings
 from content_search import ContentSearchService
 from main import create_app
 from search_client import create_search_client
@@ -13,7 +14,8 @@ async def test_search_outage_preserves_canonical_crud_and_reports_degradation(te
     db = test_database
     app = create_app(testing=True)
     app.state.db = db
-    transport = create_search_client(endpoint="http://127.0.0.1:1", region="", auth_mode="none", request_timeout=1, max_retries=0)
+    config = Settings(opensearch_endpoint="http://127.0.0.1:1", opensearch_auth_mode="none")
+    transport = create_search_client(config, request_timeout=1, max_retries=0)
     app.state.catalog_search = CatalogSearchService(client=transport, index_name="catalog")
     app.state.content_search = ContentSearchService(client=transport, index_name="content")
     try:

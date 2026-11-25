@@ -46,9 +46,8 @@ class RelocationStorage(Storage):
     async def _fingerprint(self, key: str) -> tuple[str, bytes]:
         response = await self._client.get_object(Bucket=self.bucket_name, Key=key)
         digest = sha256()
-        body = response["Body"]
-        async with body:
-            while chunk := await body.read(1024 * 1024):
+        async with response["Body"] as body:
+            async for chunk in body.iter_chunks(1024 * 1024):
                 digest.update(chunk)
         return response["ContentType"], digest.digest()
 
@@ -139,7 +138,7 @@ async def main() -> None:
     args = parser.parse_args()
     async with (
         Database.from_settings(settings) as db,
-        RelocationStorage.open(settings.aws_s3_bucket, settings.aws_region) as storage,
+        RelocationStorage.open(settings) as storage,
     ):
         logger.info("Bucket %s, Neo4j database %s", storage.bucket_name, settings.neo4j_database)
         count, objects = await relocate_objects(db, storage, apply=args.apply)

@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import logging
-from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, LiteralString
 from uuid import uuid4
 
@@ -92,17 +91,11 @@ async def main() -> None:
     )
     parser.parse_args()
     check_environment(settings)
-    async with AsyncExitStack() as stack:
-        db = await stack.enter_async_context(Database.from_settings(settings))
-        storage = await stack.enter_async_context(Storage.open(settings.aws_s3_bucket, settings.aws_region))
-        client = create_search_client(
-            endpoint=settings.opensearch_endpoint,
-            region=settings.aws_region,
-            auth_mode=settings.opensearch_auth_mode,
-            username=settings.opensearch_username,
-            password=settings.opensearch_password,
-        )
-        stack.push_async_callback(client.close)
+    async with (
+        Database.from_settings(settings) as db,
+        Storage.open(settings) as storage,
+        create_search_client(settings) as client,
+    ):
         result = await rebuild(db, storage, client, settings.opensearch_catalog_index, settings.opensearch_index)
         logger.info("Cutover: %s", result)
 

@@ -44,31 +44,23 @@ class EditionDatabase(SessionRepository):
     FINISH
     """
 
-    _EDITION_RETURN: LiteralString = """
-    RETURN {
+    _EDITION_RETURN: LiteralString = f"""
+    RETURN {{
         id: m.id, bdrc: m.bdrc, wiki: m.wiki, colophon: m.colophon,
         source: [(m)-[:HAS_SOURCE]->(s:Source) | s.name][0],
         type: [(m)-[:HAS_TYPE]->(mt:EditionType) | mt.name][0],
-        incipit_title: CASE WHEN EXISTS {
-            (m)-[:HAS_INCIPIT_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(:LocalizedText)
-        } THEN apoc.map.fromPairs([(m)-[:HAS_INCIPIT_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->
-            (lt:LocalizedText)-[r:HAS_LANGUAGE]->(l:Language) |
-            [coalesce(r.bcp47, l.code), lt.text]]) ELSE null END,
-        alt_incipit_titles: CASE WHEN EXISTS {
-            (m)-[:HAS_INCIPIT_TITLE]->(:Nomen)<-[:ALTERNATIVE_OF]-(:Nomen)
-        } THEN [(m)-[:HAS_INCIPIT_TITLE]->(:Nomen)<-[:ALTERNATIVE_OF]-(an:Nomen) |
-            apoc.map.fromPairs([(an)-[:HAS_LOCALIZATION]->(lt:LocalizedText)-[r:HAS_LANGUAGE]->(l:Language) |
-                [coalesce(r.bcp47, l.code), lt.text]])] ELSE null END,
-        excerpt_of: [(m)-[:EXCERPT_OF]->(source:Edition) | {
+        incipit_title: {NomenDatabase.optional_localized_map("(m)-[:HAS_INCIPIT_TITLE]->(:Nomen)")},
+        alt_incipit_titles: nullIf({NomenDatabase.alternative_maps("(m)-[:HAS_INCIPIT_TITLE]->(:Nomen)")}, []),
+        excerpt_of: [(m)-[:EXCERPT_OF]->(source:Edition) | {{
             edition_id: source.id,
-            spans: COLLECT {
+            spans: COLLECT {{
                 MATCH (span:Span)-[:SPAN_OF]->(m)
                 WITH span ORDER BY span.index
-                RETURN {start: span.start, end: span.end}
-            }
-        }][0],
+                RETURN {{start: span.start, end: span.end}}
+            }}
+        }}][0],
         text_id: e.id
-    } as edition
+    }} as edition
     """
 
     GET_BY_ID_QUERY: LiteralString = f"""

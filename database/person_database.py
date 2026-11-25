@@ -18,19 +18,14 @@ if TYPE_CHECKING:
 
 
 class PersonDatabase(SessionRepository):
-    _PERSON_RETURN: LiteralString = """
-    {
+    _PERSON_RETURN: LiteralString = f"""
+    {{
         id: p.id,
         bdrc: p.bdrc,
         wiki: p.wiki,
-        name: apoc.map.fromPairs([(p)-[:HAS_NAME]->(n:Nomen)-[:HAS_LOCALIZATION]->
-               (lt:LocalizedText)-[r:HAS_LANGUAGE]->(l:Language) | [coalesce(r.bcp47, l.code), lt.text]]),
-        alt_names: CASE WHEN EXISTS {
-            (p)-[:HAS_NAME]->(:Nomen)<-[:ALTERNATIVE_OF]-(:Nomen)
-        } THEN [(p)-[:HAS_NAME]->(:Nomen)<-[:ALTERNATIVE_OF]-(an:Nomen) |
-                       apoc.map.fromPairs([(an)-[:HAS_LOCALIZATION]->(at:LocalizedText)
-                           -[ar:HAS_LANGUAGE]->(al:Language) | [coalesce(ar.bcp47, al.code), at.text]])] ELSE null END
-    }
+        name: {NomenDatabase.localized_map("(p)-[:HAS_NAME]->(:Nomen)")},
+        alt_names: nullIf({NomenDatabase.alternative_maps("(p)-[:HAS_NAME]->(:Nomen)")}, [])
+    }}
     """
 
     GET_QUERY: LiteralString = f"""

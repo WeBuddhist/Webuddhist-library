@@ -30,7 +30,7 @@ async def run(*, apply: bool, content: bool = False) -> None:
                 logger.info("%d legacy recording(s) will be converted by --apply: %s", len(pending), pending[:20])
             logger.info("Schema audit passed")
         if content:
-            async with Storage.open(settings.aws_s3_bucket, settings.aws_region) as storage:
+            async with Storage.open(settings) as storage:
                 count = await migrate_content(db, storage, apply=apply)
                 logger.info("Verified %d edition content objects", count)
 

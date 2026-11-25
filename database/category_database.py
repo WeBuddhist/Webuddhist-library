@@ -28,18 +28,14 @@ def _merge_localizations(existing: dict[str, str], patch: dict[str, str]) -> dic
 
 
 class CategoryDatabase(SessionRepository):
-    _CATEGORY_RETURN: LiteralString = """
-    {
+    _CATEGORY_RETURN: LiteralString = f"""
+    {{
         id: c.id,
-        title: apoc.map.fromPairs([(c)-[:HAS_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-            -[r:HAS_LANGUAGE]->(l:Language) | [coalesce(r.bcp47, l.code), lt.text]]),
-        description: CASE WHEN EXISTS {
-            (c)-[:HAS_DESCRIPTION]->(:Nomen)-[:HAS_LOCALIZATION]->(:LocalizedText)
-        } THEN apoc.map.fromPairs([(c)-[:HAS_DESCRIPTION]->(dn:Nomen)-[:HAS_LOCALIZATION]->(dlt:LocalizedText)
-            -[r:HAS_LANGUAGE]->(dl:Language) | [coalesce(r.bcp47, dl.code), dlt.text]]) ELSE null END,
+        title: {NomenDatabase.localized_map("(c)-[:HAS_TITLE]->(:Nomen)")},
+        description: {NomenDatabase.optional_localized_map("(c)-[:HAS_DESCRIPTION]->(:Nomen)")},
         parent_id: [(c)-[:HAS_PARENT]->(parent:Category) | parent.id][0],
         children: [(child:Category)-[:HAS_PARENT]->(c) | child.id]
-    } AS category
+    }} AS category
     """
 
     GET_ROOTS_QUERY: LiteralString = f"""

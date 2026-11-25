@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import aioboto3
+from aiobotocore.session import AioSession
 from botocore.exceptions import BotoCoreError
 from neo4j import AsyncGraphDatabase
 from opensearchpy.exceptions import OpenSearchException
@@ -50,7 +50,7 @@ async def test_lifespan_cleans_up_every_acquired_resource(monkeypatch, failure):
             step(self.index_name)
 
     monkeypatch.setattr(AsyncGraphDatabase, "driver", Mock(return_value=Driver()))
-    monkeypatch.setattr(aioboto3.Session, "client", Mock(return_value=S3Context()))
+    monkeypatch.setattr(AioSession, "create_client", Mock(return_value=S3Context()))
     monkeypatch.setattr(main, "ContentSearchService", Search)
     monkeypatch.setattr(main, "CatalogSearchService", Search)
     factory = Mock(return_value=shared_client)
@@ -95,7 +95,7 @@ async def test_lifespan_cleans_up_every_acquired_resource(monkeypatch, failure):
     else:
         assert events[-2:] == ["close_storage", "close_database"]
         assert events[-3:] == ["close", "close_storage", "close_database"]
-        factory.assert_called_once()
+        factory.assert_called_once_with(main.settings, request_timeout=10, max_retries=0)
 
 
 @pytest.mark.parametrize("stage,error", [

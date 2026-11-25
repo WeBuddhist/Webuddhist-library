@@ -16,17 +16,13 @@ if TYPE_CHECKING:
 
 
 class TagDatabase(SessionRepository):
-    GET_ALL_QUERY: LiteralString = """
-    MATCH (t:Tag)-[:BELONGS_TO]->(:Application {id: $application})
-    RETURN {
+    GET_ALL_QUERY: LiteralString = f"""
+    MATCH (t:Tag)-[:BELONGS_TO]->(:Application {{id: $application}})
+    RETURN {{
         id: t.id,
-        title: apoc.map.fromPairs([(t)-[:HAS_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-            -[r:HAS_LANGUAGE]->(l:Language) | [coalesce(r.bcp47, l.code), lt.text]]),
-        description: CASE WHEN EXISTS {
-            (t)-[:HAS_DESCRIPTION]->(:Nomen)-[:HAS_LOCALIZATION]->(:LocalizedText)
-        } THEN apoc.map.fromPairs([(t)-[:HAS_DESCRIPTION]->(dn:Nomen)-[:HAS_LOCALIZATION]->(dlt:LocalizedText)
-            -[r:HAS_LANGUAGE]->(dl:Language) | [coalesce(r.bcp47, dl.code), dlt.text]]) ELSE null END
-    } AS tag
+        title: {NomenDatabase.localized_map("(t)-[:HAS_TITLE]->(:Nomen)")},
+        description: {NomenDatabase.optional_localized_map("(t)-[:HAS_DESCRIPTION]->(:Nomen)")}
+    }} AS tag
     """
 
     CREATE_QUERY: LiteralString = """

@@ -5,38 +5,10 @@ from exceptions import DataNotFoundError
 from models.contribution import ContributionInputItem, PersonContributionBase
 
 from .database_validator import DatabaseValidator
+from .nomen_database import NomenDatabase
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
-
-
-def contributions_return(source: LiteralString) -> LiteralString:
-    """Build the contributions list for a node's return map, given the variable holding that node.
-
-    Every variable is prefixed so the fragment can be spliced into any query without shadowing its
-    variables.
-    """
-    return f"""(
-        [({source})-[:HAS_CONTRIBUTION]->(cn_c:Contribution)-[:BY]->(cn_person:Person) | {{
-            type: "person",
-            id: cn_person.id,
-            bdrc_id: cn_person.bdrc,
-            role: [(cn_c)-[:WITH_ROLE]->(cn_role:RoleType) | cn_role.name][0],
-            name: CASE WHEN EXISTS {{
-                (cn_person)-[:HAS_NAME]->(cn_check:Nomen)-[:HAS_LOCALIZATION]->(:LocalizedText)
-                WHERE NOT EXISTS {{ (cn_check)-[:ALTERNATIVE_OF]->(:Nomen) }}
-            }} THEN apoc.map.fromPairs([(cn_person)-[:HAS_NAME]->(cn_nomen:Nomen)-[:HAS_LOCALIZATION]->
-                (cn_lt:LocalizedText)-[cn_rel:HAS_LANGUAGE]->(cn_lang:Language)
-                WHERE NOT EXISTS {{ (cn_nomen)-[:ALTERNATIVE_OF]->(:Nomen) }} |
-                [coalesce(cn_rel.bcp47, cn_lang.code), cn_lt.text]]) ELSE null END
-        }}]
-        +
-        [({source})-[:HAS_CONTRIBUTION]->(cn_c:Contribution)-[:BY]->(cn_ai:AI) | {{
-            type: "ai",
-            id: cn_ai.id,
-            role: [(cn_c)-[:WITH_ROLE]->(cn_role:RoleType) | cn_role.name][0]
-        }}]
-    )"""
 
 
 class ContributionDatabase:
@@ -48,6 +20,20 @@ class ContributionDatabase:
     The reviewed 2026.07.1 plan still used DynamicLabelNodeLookup for the dynamic equivalent.
     Retain static labels unless PROFILE on the deployed version shows comparable DB hits.
     """
+
+    @staticmethod
+    def return_list(source: LiteralString) -> LiteralString:
+        """Project person and AI contributions for the source node in a Cypher return map."""
+        path = f"({source})-[:HAS_CONTRIBUTION]->(cn_c:Contribution)-[:BY]->"
+        role = "[(cn_c)-[:WITH_ROLE]->(cn_role:RoleType) | cn_role.name][0]"
+        name = "(cn_person)-[:HAS_NAME]->(cn_nomen:Nomen WHERE NOT (cn_nomen)-[:ALTERNATIVE_OF]->(:Nomen))"
+        return f"""(
+            [{path}(cn_person:Person) | {{
+                type: "person", id: cn_person.id, bdrc_id: cn_person.bdrc, role: {role},
+                name: {NomenDatabase.optional_localized_map(name)}
+            }}]
+            + [{path}(cn_ai:AI) | {{type: "ai", id: cn_ai.id, role: {role}}}]
+        )"""
 
     @staticmethod
     def create_person_query(label: LiteralString) -> LiteralString:

@@ -180,6 +180,7 @@ class TestGetEditionMetadata(TestEditionsEndpoints):
         assert data["type"] == "diplomatic"
         assert data["bdrc"] is not None
         assert data["source"] == "Test Source"
+        assert data["incipit_title"] is None
 
     async def test_get_metadata_not_found(self, client, test_database):
         """Test metadata retrieval with non-existent edition ID"""
@@ -199,7 +200,7 @@ class TestGetEditionMetadata(TestEditionsEndpoints):
             wiki="Q123456",
             source="Test Source",
             colophon="Test colophon text",
-            incipit_title=LocalizedString({"en": "Opening words", "bo": "དབུ་ཚིག"}),
+            incipit_title=LocalizedString({"en-GB": "Opening words", "bo": "དབུ་ཚིག"}),
             alt_incipit_titles=[LocalizedString({"en": "Alt incipit", "bo": "མཚན་བྱང་གཞན།"})],
         )
         edition_id = generate_id()
@@ -208,6 +209,13 @@ class TestGetEditionMetadata(TestEditionsEndpoints):
         )
         await test_database.edition.create(edition_data, edition_id, text_id, content_length=1, pagination=pagination)
 
+        # Older localizations carry only the base code on the Language node.
+        async with test_database.get_session() as session:
+            await session.run(
+                """MATCH (:Edition {id: $id})-[:HAS_INCIPIT_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->
+                   (:LocalizedText)-[rel:HAS_LANGUAGE]->(:Language {code: 'bo'}) REMOVE rel.bcp47""",
+                id=edition_id,
+            )
         response = await client.get(f"/v2/editions/{edition_id}")
 
         assert response.status_code == 200
@@ -215,7 +223,8 @@ class TestGetEditionMetadata(TestEditionsEndpoints):
         assert data["bdrc"] == "W12345"
         assert data["wiki"] == "Q123456"
         assert data["colophon"] == "Test colophon text"
-        assert data["incipit_title"]["en"] == "Opening words"
+        assert data["incipit_title"] == {"en-GB": "Opening words", "bo": "དབུ་ཚིག"}
+        assert data["alt_incipit_titles"] == [{"en": "Alt incipit", "bo": "མཚན་བྱང་གཞན།"}]
 
 
 @pytest.mark.asyncio(loop_scope="session")

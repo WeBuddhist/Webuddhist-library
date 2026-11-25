@@ -19,18 +19,14 @@ if TYPE_CHECKING:
 class RecordingDatabase(SessionRepository):
     """One audio file of an Audio. Cues align it with the edition it follows."""
 
-    _RECORDING_RETURN: LiteralString = """
-    RETURN {
+    _RECORDING_RETURN: LiteralString = f"""
+    RETURN {{
         id: r.id, format: r.format, size_bytes: r.size_bytes, duration_ms: r.duration_ms,
         audio_id: a.id,
         text_id: [(a)-[:RECITATION_OF]->(t:Text) | t.id][0],
         edition_id: [(r)-[:FOLLOWS]->(m:Edition) | m.id][0],
-        title: CASE WHEN EXISTS {
-            (r)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(:LocalizedText)
-        } THEN apoc.map.fromPairs([(r)-[:HAS_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->
-            (lt:LocalizedText)-[title_rel:HAS_LANGUAGE]->(title_lang:Language) |
-            [coalesce(title_rel.bcp47, title_lang.code), lt.text]]) ELSE null END
-    } AS recording
+        title: {NomenDatabase.optional_localized_map("(r)-[:HAS_TITLE]->(:Nomen)")}
+    }} AS recording
     """
 
     GET_BY_ID_QUERY: LiteralString = f"""

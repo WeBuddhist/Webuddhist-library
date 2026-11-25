@@ -32,6 +32,23 @@ class NomenDatabase:
     """
 
     @staticmethod
+    def localized_map(nomen_path: LiteralString) -> LiteralString:
+        """Project a Cypher path ending at a Nomen into a language-to-text map."""
+        return f"""apoc.map.fromPairs([{nomen_path}-[:HAS_LOCALIZATION]->(loc_text:LocalizedText)
+            -[loc_rel:HAS_LANGUAGE]->(loc_lang:Language) | [coalesce(loc_rel.bcp47, loc_lang.code), loc_text.text]])"""
+
+    @staticmethod
+    def optional_localized_map(nomen_path: LiteralString) -> LiteralString:
+        """Return null when the path has no LocalizedText node."""
+        return f"""CASE WHEN EXISTS {{ {nomen_path}-[:HAS_LOCALIZATION]->(:LocalizedText) }}
+            THEN {NomenDatabase.localized_map(nomen_path)} END"""
+
+    @staticmethod
+    def alternative_maps(nomen_path: LiteralString) -> LiteralString:
+        return f"""[{nomen_path}<-[:ALTERNATIVE_OF]-(alt_nomen:Nomen) |
+            {NomenDatabase.localized_map("(alt_nomen)")}]"""
+
+    @staticmethod
     async def create_many_with_transaction(tx: AsyncManagedTransaction, nomens: dict[str, dict[str, str]]) -> None:
         base_codes = {tag: base_language_code(tag) for texts in nomens.values() for tag in texts}
         await DatabaseValidator.validate_language_codes_exist(tx, sorted(set(base_codes.values())))

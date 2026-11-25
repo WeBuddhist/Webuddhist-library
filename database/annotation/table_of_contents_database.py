@@ -86,27 +86,16 @@ class TableOfContentsDatabase(SessionRepository):
     ORDER BY toc.id
     """
 
-    GET_SECTIONS_QUERY: LiteralString = """
-    MATCH (section:TableOfContentsSection)-[:SECTION_OF]->(:TableOfContents {id: $toc_id})
+    GET_SECTIONS_QUERY: LiteralString = f"""
+    MATCH (section:TableOfContentsSection)-[:SECTION_OF]->(:TableOfContents {{id: $toc_id}})
     MATCH (span:Span)-[:SPAN_OF]->(section)
     OPTIONAL MATCH (section)-[:SUBSECTION_OF]->(parent:TableOfContentsSection)
-    WITH section, parent, span,
-           apoc.map.fromPairs([
-               (section)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(title:LocalizedText)
-                   -[title_rel:HAS_LANGUAGE]->(title_lang:Language) |
-               [coalesce(title_rel.bcp47, title_lang.code), title.text]
-           ]) AS title,
-           apoc.map.fromPairs([
-               (section)-[:HAS_SUMMARY]->(:Nomen)-[:HAS_LOCALIZATION]->(summary:LocalizedText)
-                   -[summary_rel:HAS_LANGUAGE]->(summary_lang:Language) |
-               [coalesce(summary_rel.bcp47, summary_lang.code), summary.text]
-           ]) AS summary
-    RETURN {
+    RETURN {{
         id: section.id,
-        title: title,
-        summary: CASE WHEN size(keys(summary)) = 0 THEN null ELSE summary END,
-        span: {start: span.start, end: span.end}
-    } AS section,
+        title: {NomenDatabase.localized_map("(section)-[:HAS_TITLE]->(:Nomen)")},
+        summary: nullIf({NomenDatabase.localized_map("(section)-[:HAS_SUMMARY]->(:Nomen)")}, {{}}),
+        span: {{start: span.start, end: span.end}}
+    }} AS section,
     parent.id AS parent_id
     ORDER BY parent_id, section.span.start, section.span.end, section.id
     """

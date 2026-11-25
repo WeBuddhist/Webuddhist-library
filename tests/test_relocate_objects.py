@@ -1,8 +1,8 @@
 import io
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-from aiobotocore.response import StreamingBody
+from aiobotocore.response import AioStreamingBody
 from botocore.exceptions import ClientError
 
 from content_service import read_content
@@ -21,10 +21,9 @@ class MemoryS3:
 
     async def get_object(self, *, Bucket, Key):
         mime, data = self.objects[Key]
-        response = AsyncMock()
-        response.content.read.side_effect = io.BytesIO(data).read
-        response.__aenter__.return_value.read.return_value = data
-        return {"ContentType": mime, "Body": StreamingBody(response, str(len(data)))}
+        response = Mock()
+        response.content.read = AsyncMock(side_effect=io.BytesIO(data).read)
+        return {"ContentType": mime, "Body": AioStreamingBody(response, str(len(data)))}
 
     async def copy_object(self, *, Bucket, CopySource, Key, IfNoneMatch):
         assert CopySource["Bucket"] == Bucket and IfNoneMatch == "*"

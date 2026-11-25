@@ -1,6 +1,7 @@
 import base64
 import logging
 from collections.abc import AsyncGenerator, Iterable
+from typing import TYPE_CHECKING
 
 import botocore.session
 from opensearchpy import AsyncHttpConnection, AsyncOpenSearch, AWSV4SignerAsyncAuth
@@ -8,6 +9,9 @@ from opensearchpy.exceptions import OpenSearchException, RequestError
 from opensearchpy.helpers import async_bulk
 
 from exceptions import InvalidRequestError
+
+if TYPE_CHECKING:
+    from config import Settings
 
 BULK_CHUNK_BYTES = 5 * 1024 * 1024
 logger = logging.getLogger(__name__)
@@ -17,28 +21,22 @@ def term_filters(**fields: str | None) -> list[dict]:
     return [{"term": {name: value}} for name, value in fields.items() if value is not None]
 
 
-def create_search_client(
-    *,
-    endpoint: str,
-    region: str,
-    auth_mode: str = "basic",
-    username: str = "",
-    password: str = "",
-    request_timeout: int = 120,
-    max_retries: int = 3,
-) -> AsyncOpenSearch:
+def create_search_client(config: Settings, *, request_timeout: int = 120, max_retries: int = 3) -> AsyncOpenSearch:
     """Create a transport owned and closed by the calling lifespan/context."""
+    endpoint = config.opensearch_endpoint
+    auth_mode = config.opensearch_auth_mode
     if not endpoint:
         raise InvalidRequestError("OPENSEARCH_ENDPOINT is required")
     http_auth: AWSV4SignerAsyncAuth | None = None
     headers = {}
     if auth_mode == "basic":
-        headers["Authorization"] = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+        basic_credentials = f"{config.opensearch_username}:{config.opensearch_password}"
+        headers["Authorization"] = "Basic " + base64.b64encode(basic_credentials.encode()).decode()
     elif auth_mode == "aws":
         credentials = botocore.session.get_session().get_credentials()
         if credentials is None:
             raise InvalidRequestError("AWS credentials are required for OpenSearch SigV4 auth")
-        http_auth = _AWSV4SignerAsyncAuth(credentials, region, "es")
+        http_auth = _AWSV4SignerAsyncAuth(credentials, config.aws_region, "es")
     elif auth_mode not in {"none", ""}:
         raise InvalidRequestError(f"Unsupported OpenSearch auth mode: {auth_mode}")
 

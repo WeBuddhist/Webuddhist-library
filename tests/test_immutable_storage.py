@@ -2,10 +2,14 @@ import io
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import aioboto3
 import pytest
-from botocore.exceptions import ClientError
+from aiobotocore.httpchecksum import AioStreamingChecksumBody
+from aiobotocore.session import AioSession, get_session
+from aiobotocore.stub import AioStubber
+from botocore.exceptions import ClientError, FlexibleChecksumError
+from botocore.httpchecksum import Crc32Checksum
 
+from config import Settings
 from storage import Storage
 from exceptions import DataNotFoundError
 
@@ -71,17 +75,36 @@ async def test_read_text_decodes_utf8_and_closes_body(payload):
     body.__aexit__.assert_awaited_once()
 
 
-@pytest.mark.parametrize("code,expected", [("NoSuchKey", DataNotFoundError), ("AccessDenied", ClientError)])
-async def test_storage_read_preserves_error_meaning(code, expected):
-    error = ClientError({"Error": {"Code": code}}, "GetObject")
-    storage = Storage("bucket", SimpleNamespace(get_object=AsyncMock(side_effect=error)))
-    with pytest.raises(expected) as caught:
+async def test_read_text_rejects_an_invalid_s3_checksum_and_closes_the_response():
+    raw = Mock()
+    raw.content.read = AsyncMock(return_value=b"text")
+    body = AioStreamingChecksumBody(raw, 4, Crc32Checksum(), "AAAAAA==")
+    storage = Storage("bucket", SimpleNamespace(get_object=AsyncMock(return_value={"Body": body})))
+
+    with pytest.raises(FlexibleChecksumError):
         await storage.read_text("edition")
-    if code == "NoSuchKey":
-        assert caught.value.__cause__ is error
-        assert "edition" in str(caught.value)
-    else:
-        assert caught.value is error
+    raw.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    "code,status,expected",
+    [("NoSuchKey", 404, DataNotFoundError), ("NoSuchBucket", 404, ClientError), ("AccessDenied", 403, ClientError)],
+)
+async def test_storage_read_preserves_error_meaning(code, status, expected):
+    async with get_session().create_client(
+        "s3", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test"
+    ) as client:
+        with AioStubber(client) as stub:
+            stub.add_client_error(
+                "get_object", code, http_status_code=status, expected_params={"Bucket": "bucket", "Key": "edition"}
+            )
+            with pytest.raises(expected) as caught:
+                await Storage("bucket", client).read_text("edition")
+        if code == "NoSuchKey":
+            assert isinstance(caught.value.__cause__, client.exceptions.NoSuchKey)
+            assert "edition" in str(caught.value)
+        else:
+            assert caught.value.response["Error"]["Code"] == code
 
 
 @pytest.mark.parametrize("expiry", [None, 90])
@@ -99,9 +122,10 @@ async def test_signed_url_uses_requested_key_and_expiry(expiry):
 async def test_storage_connection_is_closed_once(monkeypatch):
     context = AsyncMock()
     factory = Mock(return_value=context)
-    monkeypatch.setattr(aioboto3.Session, "client", factory)
-    async with Storage.open("bucket", "region") as storage:
+    monkeypatch.setattr(AioSession, "create_client", factory)
+    async with Storage.open(Settings(aws_s3_bucket="bucket", aws_region="region")) as storage:
         factory.assert_called_once_with("s3", region_name="region")
+        assert storage.bucket_name == "bucket"
         assert storage._client is context.__aenter__.return_value
         context.__aexit__.assert_not_awaited()
     context.__aexit__.assert_awaited_once_with(None, None, None)

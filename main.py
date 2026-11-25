@@ -83,21 +83,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         if not app.state.testing and settings.neo4j_uri:
             check_environment(settings)
             app.state.db = await stack.enter_async_context(Database.from_settings(settings))
-            app.state.storage = await stack.enter_async_context(
-                Storage.open(settings.aws_s3_bucket, settings.aws_region)
-            )
+            app.state.storage = await stack.enter_async_context(Storage.open(settings))
 
             if settings.opensearch_endpoint:
                 try:
-                    search_client = create_search_client(
-                        endpoint=settings.opensearch_endpoint,
-                        region=settings.aws_region,
-                        auth_mode=settings.opensearch_auth_mode,
-                        username=settings.opensearch_username,
-                        password=settings.opensearch_password,
-                        request_timeout=10,
-                        max_retries=0,
-                    )
+                    search_client = create_search_client(settings, request_timeout=10, max_retries=0)
                     stack.push_async_callback(search_client.close)
                     content_search = ContentSearchService(client=search_client, index_name=settings.opensearch_index)
                     catalog_search = CatalogSearchService(

@@ -6,7 +6,7 @@ from exceptions import DataConflictError, DataNotFoundError
 from identifier import generate_id
 from models.audio import AudioInput, AudioOutput, AudioPatch
 
-from .contribution_database import ContributionDatabase, contributions_return
+from .contribution_database import ContributionDatabase
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
@@ -29,12 +29,8 @@ class AudioDatabase(SessionRepository):
         text_id: t.id,
         license: coalesce([(a)-[:HAS_LICENSE]->(license:LicenseType) | license.name][0], "public"),
         language: [(a)-[lang_rel:HAS_LANGUAGE]->(lang:Language) | coalesce(lang_rel.bcp47, lang.code)][0],
-        title: CASE WHEN EXISTS {{
-            (a)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(:LocalizedText)
-        }} THEN apoc.map.fromPairs([(a)-[:HAS_TITLE]->(n:Nomen)-[:HAS_LOCALIZATION]->
-            (lt:LocalizedText)-[title_rel:HAS_LANGUAGE]->(title_lang:Language) |
-            [coalesce(title_rel.bcp47, title_lang.code), lt.text]]) ELSE null END,
-        contributions: {contributions_return("a")},
+        title: {NomenDatabase.optional_localized_map("(a)-[:HAS_TITLE]->(:Nomen)")},
+        contributions: {ContributionDatabase.return_list("a")},
         recordings: apoc.coll.sort([(r:Recording)-[:RENDITION_OF]->(a) | r.id])
     }} AS audio
     """

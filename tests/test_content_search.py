@@ -2,7 +2,7 @@
 import pytest
 
 from catalog_search import CatalogSearchService, catalog_index_body
-from config import settings
+from config import Settings, settings
 from content_search import ContentSearchService, content_index_body
 from identifier import generate_id
 from main import create_app
@@ -50,7 +50,8 @@ def test_search_indexes_use_one_primary_shard() -> None:
     ("catalog-search", CatalogSearchService, catalog_index_body),
 ])
 async def test_startup_keeps_existing_concrete_index_and_documents(_opensearch_endpoint, name, service_type, mapping):
-    async with create_search_client(endpoint=_opensearch_endpoint, region="", auth_mode="none") as client:
+    config = Settings(opensearch_endpoint=_opensearch_endpoint, opensearch_auth_mode="none")
+    async with create_search_client(config) as client:
         await client.indices.create(index=name, body=mapping())
         try:
             document = {"id": "kept"}

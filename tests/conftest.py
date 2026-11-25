@@ -17,6 +17,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.community.neo4j import Neo4jContainer
 
 from catalog_search import CatalogSearchService
+from config import Settings
 from content_search import ContentSearchService
 from database.database import Database
 from database.neo4j_triggers import install_triggers
@@ -254,9 +255,7 @@ def mock_storage():
 async def content_search(_opensearch_endpoint: str) -> AsyncGenerator[ContentSearchService]:
     """Real OpenSearch content search service for tests."""
     client = create_search_client(
-        endpoint=_opensearch_endpoint,
-        region="ap-southeast-1",
-        auth_mode="none",
+        Settings(opensearch_endpoint=_opensearch_endpoint, opensearch_auth_mode="none"),
         request_timeout=30,
         max_retries=0,
     )
@@ -275,9 +274,7 @@ async def catalog_search(request) -> AsyncGenerator[CatalogSearchService]:
     """Real OpenSearch catalog search service for tests that provide BDRC plugin ZIPs."""
     _opensearch_endpoint = request.getfixturevalue("_opensearch_endpoint")
     client = create_search_client(
-        endpoint=_opensearch_endpoint,
-        region="ap-southeast-1",
-        auth_mode="none",
+        Settings(opensearch_endpoint=_opensearch_endpoint, opensearch_auth_mode="none"),
         request_timeout=30,
         max_retries=0,
     )
