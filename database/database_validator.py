@@ -9,6 +9,8 @@ from models.base import base_language_code
 from models.contribution import ContributionInputItem, PersonContributionInput
 from models.text import TextInput
 
+from .repository import require_node
+
 logger = logging.getLogger(__name__)
 
 _MISSING_PERSON_IDS_QUERY: LiteralString = """
@@ -21,6 +23,17 @@ _MISSING_PERSON_BDRC_IDS_QUERY: LiteralString = """
 MATCH (p:Person) WHERE p.bdrc IN $references
 WITH collect(DISTINCT p.bdrc) AS found
 RETURN [x IN $references WHERE NOT x IN found] AS missing
+"""
+
+_MISSING_LANGUAGE_CODES_QUERY: LiteralString = """
+UNWIND $codes AS code
+OPTIONAL MATCH (l:Language {code: code})
+WITH collect(DISTINCT CASE WHEN l IS NULL THEN code END) AS missing
+RETURN missing,
+       CASE WHEN size(missing) > 0
+         THEN COLLECT { MATCH (lang:Language) WITH lang ORDER BY lang.code RETURN lang.code }
+         ELSE []
+       END AS available
 """
 
 
@@ -43,9 +56,7 @@ class DatabaseValidator:
                 continue
 
             result = await tx.run(query, references=references)
-            record = await result.single()
-            missing = record["missing"] if record else []
-
+            missing = (await result.single(strict=True))["missing"]
             if missing:
                 raise DataValidationError(f"Referenced {label} do not exist: {', '.join(missing)}")
 
@@ -57,27 +68,12 @@ class DatabaseValidator:
 
     @staticmethod
     async def validate_text_exists(tx: AsyncManagedTransaction, text_id: str) -> None:
-        query = """
-        RETURN EXISTS { (e:Text {id: $text_id}) } AS exists
-        """
-
-        result = await tx.run(query, text_id=text_id)
-        record = await result.single()
-
-        if not record or not record["exists"]:
-            raise DataValidationError(f"Text {text_id} does not exist. Cannot create edition for non-existent text.")
+        error = DataValidationError(f"Text {text_id} does not exist. Cannot create edition for non-existent text.")
+        await require_node(tx, "Text", text_id, error)
 
     @staticmethod
     async def validate_edition_exists(tx: AsyncManagedTransaction, edition_id: str) -> None:
-        query = """
-        RETURN EXISTS { (m:Edition {id: $edition_id}) } AS exists
-        """
-
-        result = await tx.run(query, edition_id=edition_id)
-        record = await result.single()
-
-        if not record or not record["exists"]:
-            raise DataNotFoundError(f"Edition with ID '{edition_id}' not found")
+        await require_node(tx, "Edition", edition_id, DataNotFoundError(f"Edition with ID '{edition_id}' not found"))
 
     @staticmethod
     async def validated_language_code(tx: AsyncManagedTransaction, tag: str | None) -> str | None:
@@ -88,63 +84,31 @@ class DatabaseValidator:
         return code
 
     @staticmethod
+    async def _missing_language_codes(tx: AsyncManagedTransaction, codes: list[str]) -> tuple[list[str], list[str]]:
+        """Return the codes with no Language node and, only when some are missing, every available code."""
+        result = await tx.run(_MISSING_LANGUAGE_CODES_QUERY, codes=codes)
+        record = await result.single(strict=True)
+        return record["missing"], record["available"]
+
+    @staticmethod
     async def validate_language_code_exists(tx: AsyncManagedTransaction, language_code: str) -> None:
-        """Validate that a given base language code exists.
-
-        Uses direct pattern matching for efficiency, only collecting all codes on failure.
-        Raises InvalidRequest with the available codes listed if not found.
-        """
-        query = """
-        OPTIONAL MATCH (l:Language {code: $code})
-        RETURN l IS NOT NULL AS exists,
-               CASE WHEN l IS NULL
-                 THEN COLLECT {
-                   MATCH (lang:Language)
-                   WITH lang ORDER BY lang.code
-                   RETURN lang.code
-                 }
-                 ELSE null
-               END AS codes
-        """
-
-        result = await tx.run(query, code=language_code)
-        record = await result.single()
-
-        if not record or not record["exists"]:
-            codes = record["codes"] if record else []
-            if not codes:
-                raise InvalidRequestError(f"Language '{language_code}' is not present in Neo4j. No languages found.")
-            raise InvalidRequestError(
-                f"Language '{language_code}' is not present in Neo4j. Available languages: {', '.join(codes)}"
-            )
+        """Raise InvalidRequestError listing the available codes if the base language code does not exist."""
+        missing, available = await DatabaseValidator._missing_language_codes(tx, [language_code])
+        if not missing:
+            return
+        if not available:
+            raise InvalidRequestError(f"Language '{language_code}' is not present in Neo4j. No languages found.")
+        raise InvalidRequestError(
+            f"Language '{language_code}' is not present in Neo4j. Available languages: {', '.join(available)}"
+        )
 
     @staticmethod
     async def validate_language_codes_exist(tx: AsyncManagedTransaction, language_codes: list[str]) -> None:
         """Validate that all given base language codes exist. Raises InvalidRequest listing missing and available."""
-        query = """
-        UNWIND $codes_to_check AS code
-        OPTIONAL MATCH (l:Language {code: code})
-        WITH collect(DISTINCT CASE WHEN l IS NULL THEN code END) AS maybe_missing
-        WITH [code IN maybe_missing WHERE code IS NOT NULL] AS missing
-        RETURN missing,
-               CASE WHEN size(missing) > 0
-                 THEN COLLECT {
-                   MATCH (lang:Language)
-                   WITH lang ORDER BY lang.code
-                   RETURN lang.code
-                 }
-                 ELSE []
-               END AS codes
-        """
-        result = await tx.run(query, codes_to_check=[c.lower() for c in language_codes])
-        record = await result.single()
-        if not record:
-            raise InvalidRequestError("No languages found in Neo4j database")
-        missing = [c for c in (record["missing"] or []) if c]
+        missing, available = await DatabaseValidator._missing_language_codes(tx, [c.lower() for c in language_codes])
         if missing:
             raise InvalidRequestError(
-                f"Languages {', '.join(missing)} are not present in Neo4j. "
-                f"Available languages: {', '.join(record['codes'])}"
+                f"Languages {', '.join(missing)} are not present in Neo4j. Available languages: {', '.join(available)}"
             )
 
     @staticmethod
@@ -187,12 +151,10 @@ class DatabaseValidator:
         """
 
         result = await tx.run(query, tag_ids=tag_ids, application=application)
-        record = await result.single()
-        missing_tags = record["missing_tags"] if record else []
-
-        if missing_tags:
-            raise DataValidationError(f"Referenced tags do not exist: {', '.join(missing_tags)}")
-        if record and record["foreign_tags"]:
+        record = await result.single(strict=True)
+        if record["missing_tags"]:
+            raise DataValidationError(f"Referenced tags do not exist: {', '.join(record['missing_tags'])}")
+        if record["foreign_tags"]:
             raise ForbiddenError("Tags belong to another application")
 
     @staticmethod

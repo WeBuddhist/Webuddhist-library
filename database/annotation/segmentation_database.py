@@ -1,10 +1,11 @@
-from typing import TYPE_CHECKING, LiteralString
+from typing import TYPE_CHECKING, Any, LiteralString
 
 from neo4j.exceptions import ResultNotSingleError
 
 from database.content_state import advance_revision, lock_connected_editions, read_value, touch_edition
+from database.cypher import segment_lines
 from database.excerpt_database import read_edition
-from database.repository import SessionRepository
+from database.repository import SessionRepository, fetch_all, fetch_one, require
 from exceptions import DataConflictError, DataNotFoundError
 
 if TYPE_CHECKING:
@@ -26,15 +27,9 @@ class SegmentationDatabase(SessionRepository):
     ORDER BY id
     """
 
-    _SEGMENT_LINES: LiteralString = """
+    _SEGMENT_LINES: LiteralString = f"""
     MATCH (segment:Segment)-[:SEGMENT_OF]->(segmentation)
-    CALL (segment) {
-        MATCH (span:Span)-[:SPAN_OF]->(segment)
-
-        WITH span ORDER BY span.start, span.end
-        RETURN collect({start: span.start, end: span.end}) AS lines,
-               min(span.start) AS min_start
-    }
+    {segment_lines("segment")}
     WITH segment, lines, min_start
     WHERE size(lines) > 0
     """
@@ -68,10 +63,6 @@ class SegmentationDatabase(SessionRepository):
     GET_ALL_SEGMENTS_BY_EDITION_ID_QUERY: LiteralString = f"""
     MATCH (:Edition {{id: $edition_id}})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
     {_GET_SEGMENTS_QUERY_BODY}
-    """
-
-    CHECK_EDITION_SEGMENTATION_EXISTS_QUERY: LiteralString = """
-    RETURN EXISTS { (:Edition {id: $edition_id})-[:HAS_SEGMENTATION]->(:Segmentation) } AS exists
     """
 
     CREATE_QUERY: LiteralString = """
@@ -133,17 +124,18 @@ class SegmentationDatabase(SessionRepository):
             segments: list[SegmentOutput] = []
             for piece in excerpt.slices:
                 query = SegmentationDatabase.GET_SEGMENTS_IN_RANGE_QUERY
-                result = await tx.run(query, edition_id=source_id, start=piece.start, end=piece.end)
-                segments += piece.project_segments([SegmentOutput.model_validate(r) for r in await result.data()])
+                found = await fetch_all(
+                    tx, query, SegmentOutput, edition_id=source_id, start=piece.start, end=piece.end
+                )
+                segments += piece.project_segments(found)
             return segments[offset : offset + limit]
 
         return await self.execute_read(read_edition, edition_id, read)
 
     async def get_all_segments_by_edition(self, edition_id: str) -> list[SegmentOutput]:
+        query = SegmentationDatabase.GET_ALL_SEGMENTS_BY_EDITION_ID_QUERY
         return await self.execute_read(
-            read_value,
-            edition_id,
-            lambda tx: SegmentationDatabase.get_all_segments_by_edition_with_transaction(tx, edition_id),
+            read_value, edition_id, lambda tx: SegmentationDatabase._segments(tx, query, edition_id)
         )
 
     @staticmethod
@@ -180,11 +172,13 @@ class SegmentationDatabase(SessionRepository):
     @staticmethod
     async def get_by_edition_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> SegmentationOutput:
         await DatabaseValidator.validate_edition_exists(tx, edition_id)
-        result = await tx.run(SegmentationDatabase.GET_BY_EDITION_ID_QUERY, edition_id=edition_id)
-        record = await result.single()
-        if record is None:
-            raise DataNotFoundError(f"Segmentation for edition '{edition_id}' not found")
-        return SegmentationOutput.model_validate(record)
+        return await fetch_one(
+            tx,
+            SegmentationDatabase.GET_BY_EDITION_ID_QUERY,
+            SegmentationOutput,
+            f"Segmentation for edition '{edition_id}' not found",
+            edition_id=edition_id,
+        )
 
     @staticmethod
     async def get_segments_by_edition_with_transaction(
@@ -194,39 +188,30 @@ class SegmentationDatabase(SessionRepository):
         offset: int,
         limit: int,
     ) -> list[SegmentOutput]:
-        await DatabaseValidator.validate_edition_exists(tx, edition_id)
-        result = await tx.run(
-            SegmentationDatabase.GET_SEGMENTS_BY_EDITION_ID_QUERY,
-            edition_id=edition_id,
-            offset=offset,
-            limit=limit,
-        )
-        records = await result.data()
-        if not records:
-            await SegmentationDatabase._validate_edition_has_segmentation(tx, edition_id)
-        return [SegmentOutput.model_validate(record) for record in records]
+        query = SegmentationDatabase.GET_SEGMENTS_BY_EDITION_ID_QUERY
+        return await SegmentationDatabase._segments(tx, query, edition_id, offset=offset, limit=limit)
 
     @staticmethod
-    async def get_all_segments_by_edition_with_transaction(
+    async def _segments(
         tx: AsyncManagedTransaction,
+        query: LiteralString,
         edition_id: str,
+        **params: Any,  # noqa: ANN401
     ) -> list[SegmentOutput]:
         await DatabaseValidator.validate_edition_exists(tx, edition_id)
-        result = await tx.run(SegmentationDatabase.GET_ALL_SEGMENTS_BY_EDITION_ID_QUERY, edition_id=edition_id)
-        records = await result.data()
-        if not records:
+        segments = await fetch_all(tx, query, SegmentOutput, edition_id=edition_id, **params)
+        if not segments:
             await SegmentationDatabase._validate_edition_has_segmentation(tx, edition_id)
-        return [SegmentOutput.model_validate(record) for record in records]
+        return segments
 
     @staticmethod
     async def _validate_edition_has_segmentation(tx: AsyncManagedTransaction, edition_id: str) -> None:
-        exists_result = await tx.run(
-            SegmentationDatabase.CHECK_EDITION_SEGMENTATION_EXISTS_QUERY,
+        await require(
+            tx,
+            "(:Edition {id: $edition_id})-[:HAS_SEGMENTATION]->(:Segmentation)",
+            DataNotFoundError(f"Segmentation for edition '{edition_id}' not found"),
             edition_id=edition_id,
         )
-        exists_record = await exists_result.single()
-        if not exists_record or not exists_record["exists"]:
-            raise DataNotFoundError(f"Segmentation for edition '{edition_id}' not found")
 
     async def delete_by_edition(self, edition_id: str) -> None:
         await self.execute_write(SegmentationDatabase.delete_by_edition_with_transaction, edition_id)

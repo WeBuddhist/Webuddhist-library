@@ -4,9 +4,9 @@ from neo4j.exceptions import ResultNotSingleError
 
 from database.content_state import read_value, touch_annotation, touch_edition
 from database.repository import SessionRepository
-from exceptions import DataConflictError, DataNotFoundError
+from exceptions import DataConflictError
 from identifier import generate_id
-from models.annotation import PaginationInput, PaginationOutput
+from models.annotation import PaginationInput, PaginationOutput, Volume
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -83,14 +83,12 @@ class PaginationDatabase(SessionRepository):
     """
 
     async def get(self, pagination_id: str) -> PaginationOutput:
-        async def read(tx: AsyncManagedTransaction) -> PaginationOutput:
-            result = await tx.run(PaginationDatabase.GET_BY_ID_QUERY, pagination_id=pagination_id)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Pagination with ID '{pagination_id}' not found")
-            return PaginationOutput.model_validate(record)
-
-        return await self.execute_read(read)
+        return await self.query_one(
+            PaginationDatabase.GET_BY_ID_QUERY,
+            PaginationOutput,
+            f"Pagination with ID '{pagination_id}' not found",
+            pagination_id=pagination_id,
+        )
 
     async def get_all(self, edition_id: str) -> PaginationOutput | None:
         async def read(tx: AsyncManagedTransaction) -> PaginationOutput | None:
@@ -112,14 +110,15 @@ class PaginationDatabase(SessionRepository):
         state = await touch_edition(tx, edition_id)
         state.validate_span(pagination.max_end)
 
+        def metadata(item: PaginationInput | Volume) -> list[dict[str, str | None]]:
+            return [] if item.metadata is None else [{"id": generate_id(), "name": item.metadata.name}]
+
         volumes_data = [
             {
                 "id": generate_id(),
                 "index": volume.index,
                 "pages": [page.model_dump() | {"id": generate_id()} for page in volume.pages],
-                "metadata": [{"id": generate_id(), "name": volume.metadata.name}]
-                if volume.metadata is not None
-                else [],
+                "metadata": metadata(volume),
             }
             for volume in pagination.volumes
         ]
@@ -128,9 +127,7 @@ class PaginationDatabase(SessionRepository):
             edition_id=edition_id,
             pagination_id=generate_id(),
             volumes=volumes_data,
-            metadata=[{"id": generate_id(), "name": pagination.metadata.name}]
-            if pagination.metadata is not None
-            else [],
+            metadata=metadata(pagination),
         )
         try:
             record = await result.single(strict=True)

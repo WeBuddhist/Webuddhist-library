@@ -20,10 +20,6 @@ class AnnotationSegmentsPaginationParams(PaginationParams):
     limit: int = Field(default=500, ge=1, le=500, description="Maximum number of segments to return")
 
 
-class AlignmentPaginationParams(AnnotationSegmentsPaginationParams):
-    pass
-
-
 class TextFacetFilter(OpenPechaModel):
     category_id: str | None = None
     tag_id: list[str] = Field(

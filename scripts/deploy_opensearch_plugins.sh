@@ -282,6 +282,5 @@ for entry in "${PLUGINS[@]}"; do
 done
 
 log "All plugins are AVAILABLE and ACTIVE on '${DOMAIN_NAME}'."
-log "Next: run the index bootstrap/backfill against this environment:"
-log "    python -m scripts.catalog_search recreate-index"
-log "    python -m scripts.catalog_search reindex"
+log "Next: with writers paused, rebuild both search indexes against this environment:"
+log "    python -m scripts.reindex --writes-paused"

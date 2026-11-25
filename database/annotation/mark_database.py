@@ -1,14 +1,12 @@
 from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import touch_annotation
-from database.excerpt_database import read_edition
+from database.excerpt_database import read_annotations
 from database.repository import SessionRepository
-from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.excerpt_database import ExcerptMap
 from models.annotation import MarkInput, MarkOutput
 from models.enums import MarkType
 
@@ -58,30 +56,13 @@ class MarkDatabase(SessionRepository):
     """
 
     async def get(self, mark_id: str) -> MarkOutput:
-        async def read(tx: AsyncManagedTransaction) -> MarkOutput:
-            result = await tx.run(MarkDatabase.GET_BY_ID_QUERY, mark_id=mark_id)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Mark with ID '{mark_id}' not found")
-            return MarkOutput.model_validate(record)
+        return await self.query_one(
+            MarkDatabase.GET_BY_ID_QUERY, MarkOutput, f"Mark with ID '{mark_id}' not found", mark_id=mark_id
+        )
 
-        return await self.execute_read(read)
-
-    async def get_all(
-        self,
-        edition_id: str,
-        mark_type: MarkType = MarkType.YIGCHUNG,
-    ) -> list[MarkOutput]:
-        async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> list[MarkOutput]:
-            result = await tx.run(
-                MarkDatabase.GET_BY_EDITION_ID_QUERY,
-                edition_id=source_id,
-                mark_type=mark_type.value,
-            )
-            marks = [MarkOutput.model_validate(record) for record in await result.data()]
-            return excerpt.project_annotations(marks) if excerpt else marks
-
-        return await self.execute_read(read_edition, edition_id, read)
+    async def get_all(self, edition_id: str, mark_type: MarkType = MarkType.YIGCHUNG) -> list[MarkOutput]:
+        query = MarkDatabase.GET_BY_EDITION_ID_QUERY
+        return await self.execute_read(read_annotations, edition_id, query, MarkOutput, mark_type=mark_type.value)
 
     async def add_yigchung(self, edition_id: str, mark: MarkInput) -> str:
         return (await self.add_yigchungs(edition_id, [mark]))[0]

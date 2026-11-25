@@ -7,12 +7,51 @@ from models.tag import TagOutput
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
-from .repository import SessionRepository
+from .repository import SessionRepository, fetch_record, require_node
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
     from models.tag import TagInput
+
+
+def find_existing_title_query(label: LiteralString, scope: LiteralString = "") -> LiteralString:
+    """Find one of $titles already used, case-insensitively, by another node of the label in $application."""
+    return f"""
+        MATCH (app:Application {{id: $application}})
+        UNWIND $titles AS title
+        MATCH (n:{label})-[:BELONGS_TO]->(app)
+        {scope}
+        MATCH (n)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
+            -[r:HAS_LANGUAGE]->(lang:Language)
+        WHERE toLower(coalesce(r.bcp47, lang.code)) = toLower(title.language)
+          AND toLower(lt.text) = toLower(title.text)
+        RETURN title.language AS language, title.text AS title_text
+        LIMIT 1
+    """
+
+
+async def validate_unique_title(
+    tx: AsyncManagedTransaction,
+    label: LiteralString,
+    query: LiteralString,
+    application: str,
+    title: dict[str, str],
+    **params: str | None,
+) -> None:
+    """Serialize on the application, so two concurrent creates cannot both pass the check."""
+    await lock_nodes(tx, "Application", [application])
+    result = await tx.run(
+        query,
+        params,
+        application=application,
+        titles=[{"language": language, "text": title_text} for language, title_text in title.items()],
+    )
+    if record := await result.single():
+        raise DataValidationError(
+            f"{label} with title '{record['title_text']}' in language '{record['language']}' "
+            f"already exists for application '{application}'"
+        )
 
 
 class TagDatabase(SessionRepository):
@@ -38,17 +77,7 @@ class TagDatabase(SessionRepository):
         RETURN t.id AS tag_id
     """
 
-    FIND_EXISTING_QUERY: LiteralString = """
-        MATCH (app:Application {id: $application})
-        UNWIND $titles AS title
-        MATCH (t:Tag)-[:BELONGS_TO]->(app:Application {id: $application})
-        MATCH (t)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-            -[r:HAS_LANGUAGE]->(lang:Language)
-        WHERE toLower(coalesce(r.bcp47, lang.code)) = toLower(title.language)
-          AND toLower(lt.text) = toLower(title.text)
-        RETURN title.language AS language, title.text AS title_text, t.id AS tag_id
-        LIMIT 1
-    """
+    FIND_EXISTING_QUERY: LiteralString = find_existing_title_query("Tag")
 
     DELETE_QUERY: LiteralString = """
         MATCH (t:Tag {id: $tag_id})-[:BELONGS_TO]->(app:Application {id: $application})
@@ -105,11 +134,7 @@ class TagDatabase(SessionRepository):
     """
 
     async def get_all(self, application: str) -> list[TagOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[TagOutput]:
-            result = await tx.run(TagDatabase.GET_ALL_QUERY, application=application)
-            return [TagOutput.model_validate(record["tag"]) for record in await result.data()]
-
-        return await self.execute_read(read)
+        return await self.query_all(TagDatabase.GET_ALL_QUERY, TagOutput, field="tag", application=application)
 
     async def create(self, tag: TagInput, application: str) -> str:
         async def create_transaction(tx: AsyncManagedTransaction) -> str:
@@ -117,9 +142,8 @@ class TagDatabase(SessionRepository):
 
             tag_id = generate_id()
             nomen_id = await NomenDatabase.create_with_transaction(tx, tag.title.root, None)
-            description_nomen_id = None
-            if tag.description is not None:
-                description_nomen_id = await NomenDatabase.create_with_transaction(tx, tag.description.root, None)
+            description = tag.description.root if tag.description else None
+            description_nomen_id = await NomenDatabase.create_optional_with_transaction(tx, description)
 
             result = await tx.run(
                 TagDatabase.CREATE_QUERY,
@@ -145,10 +169,8 @@ class TagDatabase(SessionRepository):
             await lock_nodes(tx, "Tag", [tag_id])
             if not await work_ids() <= works:
                 raise DataConflictError("Tag attachments changed while acquiring locks; retry the operation")
-            result = await tx.run(TagDatabase.DELETE_QUERY, tag_id=tag_id, application=application)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Tag with ID '{tag_id}' not found in application '{application}'")
+            not_found = f"Tag with ID '{tag_id}' not found in application '{application}'"
+            await fetch_record(tx, TagDatabase.DELETE_QUERY, not_found, tag_id=tag_id, application=application)
 
             return sorted(works)
 
@@ -160,9 +182,7 @@ class TagDatabase(SessionRepository):
             await lock_nodes(tx, "Tag", [tag_id])
             result = await tx.run(TagDatabase.TAG_WORK_QUERY, work_id=work_id, tag_id=tag_id, application=application)
             if not await result.single():
-                result = await tx.run("MATCH (w:Work {id: $id}) RETURN w.id", id=work_id)
-                if await result.single() is None:
-                    raise DataNotFoundError(f"Work '{work_id}' not found")
+                await require_node(tx, "Work", work_id, DataNotFoundError(f"Work '{work_id}' not found"))
                 scope = f" in application '{application}'" if application is not None else ""
                 raise DataNotFoundError(f"Tag '{tag_id}' not found{scope}")
 
@@ -172,31 +192,21 @@ class TagDatabase(SessionRepository):
         async def write(tx: AsyncManagedTransaction) -> None:
             await lock_nodes(tx, "Work", [work_id])
             await lock_nodes(tx, "Tag", [tag_id])
-            result = await tx.run(TagDatabase.UNTAG_WORK_QUERY, work_id=work_id, tag_id=tag_id, application=application)
-            if not await result.single():
-                raise DataNotFoundError(f"Tag '{tag_id}' is not attached to Work '{work_id}'")
+            not_found = f"Tag '{tag_id}' is not attached to Work '{work_id}'"
+            params = {"work_id": work_id, "tag_id": tag_id, "application": application}
+            await fetch_record(tx, TagDatabase.UNTAG_WORK_QUERY, not_found, **params)
 
         await self.execute_write(write)
 
     async def tag_segment(self, segment_id: str, tag_id: str, application: str | None = None) -> None:
-        async def write(tx: AsyncManagedTransaction) -> None:
-            result = await tx.run(
-                TagDatabase.TAG_SEGMENT_QUERY, segment_id=segment_id, tag_id=tag_id, application=application
-            )
-            if not await result.single():
-                raise DataNotFoundError(f"Segment '{segment_id}' or Tag '{tag_id}' not found")
-
-        await self.execute_write(write)
+        params = {"segment_id": segment_id, "tag_id": tag_id, "application": application}
+        if not await self.query(TagDatabase.TAG_SEGMENT_QUERY, write=True, **params):
+            raise DataNotFoundError(f"Segment '{segment_id}' or Tag '{tag_id}' not found")
 
     async def untag_segment(self, segment_id: str, tag_id: str, application: str | None = None) -> None:
-        async def write(tx: AsyncManagedTransaction) -> None:
-            result = await tx.run(
-                TagDatabase.UNTAG_SEGMENT_QUERY, segment_id=segment_id, tag_id=tag_id, application=application
-            )
-            if not await result.single():
-                raise DataNotFoundError(f"Tag '{tag_id}' is not attached to Segment '{segment_id}'")
-
-        await self.execute_write(write)
+        params = {"segment_id": segment_id, "tag_id": tag_id, "application": application}
+        if not await self.query(TagDatabase.UNTAG_SEGMENT_QUERY, write=True, **params):
+            raise DataNotFoundError(f"Tag '{tag_id}' is not attached to Segment '{segment_id}'")
 
     @staticmethod
     async def set_work_tags(
@@ -221,15 +231,4 @@ class TagDatabase(SessionRepository):
     async def _validate_not_exists_tx(
         self, tx: AsyncManagedTransaction, application: str, title: dict[str, str]
     ) -> None:
-        await lock_nodes(tx, "Application", [application])
-        result = await tx.run(
-            TagDatabase.FIND_EXISTING_QUERY,
-            application=application,
-            titles=[{"language": language, "text": title_text} for language, title_text in title.items()],
-        )
-        record = await result.single()
-        if record:
-            raise DataValidationError(
-                f"Tag with title '{record['title_text']}' in language '{record['language']}' "
-                f"already exists for application '{application}'"
-            )
+        await validate_unique_title(tx, "Tag", TagDatabase.FIND_EXISTING_QUERY, application, title)

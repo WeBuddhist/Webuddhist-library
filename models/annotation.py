@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from itertools import pairwise
-from typing import Any, Self
+from typing import Self
 
 from pydantic import ConfigDict, Field, model_validator
 
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel
-from .enums import AttributeType, BibliographyType, SegmentType
+from .enums import BibliographyType, SegmentType
 
 
 class Span(OpenPechaModel):
@@ -86,11 +86,6 @@ class SegmentWithContextOutput(SegmentOutput):
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
     tag_ids: list[str] | None = Field(default=None)
-
-
-class RelatedSegmentationOutput(OpenPechaModel):
-    segmentation_id: NonEmptyStr
-    segments: list[SegmentWithContextOutput]
 
 
 class SegmentationInput(OpenPechaModel):
@@ -299,16 +294,3 @@ class MarkOutput(MarkInput):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
-
-
-class AttributeBase(SingleSpanAnnotation):
-    type: AttributeType
-    value: Any
-
-
-class AttributeInput(AttributeBase):
-    pass
-
-
-class AttributeOutput(AttributeBase):
-    id: NonEmptyStr

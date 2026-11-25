@@ -1,11 +1,10 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Path, Query, status
 
-from catalog_search import CatalogSearchService
 from content_service import create_edition as publish_edition
-from dependencies import DatabaseDep, OptionalAppHeader, StorageDep, get_catalog_search
+from dependencies import CatalogSearchDep, DatabaseDep, OptionalAppHeader, StorageDep
 from exceptions import ServiceUnavailableError
 from models.audio import AudioInput, AudioOutput
 from models.edition import EditionOutput
@@ -27,29 +26,17 @@ router = APIRouter(prefix="/v2/texts", tags=["Texts"])
 async def get_all_texts(
     params: Annotated[TextsQueryParams, Query()],
     db: DatabaseDep,
-    catalog_search: Annotated[CatalogSearchService | None, Depends(get_catalog_search)],
+    catalog_search: CatalogSearchDep,
     x_application: OptionalAppHeader = None,
 ) -> PaginatedResponse[TextOutput]:
     """List all texts with optional filtering."""
-    if params.title:
-        if catalog_search is None:
-            raise ServiceUnavailableError("Catalog search is required for text title search")
-        texts = await catalog_search.search_texts(
-            db=db,
-            query=params.title,
-            application=x_application,
-            filters=params,
-            offset=params.offset,
-            limit=params.limit + 1,
-        )
-        return PaginatedResponse.from_items(texts, offset=params.offset, limit=params.limit)
-
-    texts = await db.text.get_all(
-        offset=params.offset,
-        limit=params.limit + 1,
-        filters=params,  # TextsQueryParams inherits from TextFilter, so this works
-        application=x_application,
-    )
+    page = {"filters": params, "application": x_application, "offset": params.offset, "limit": params.limit + 1}
+    if not params.title:
+        texts = await db.text.get_all(**page)
+    elif catalog_search is None:
+        raise ServiceUnavailableError("Catalog search is required for text title search")
+    else:
+        texts = await catalog_search.search_texts(db=db, query=params.title, **page)
     return PaginatedResponse.from_items(texts, offset=params.offset, limit=params.limit)
 
 

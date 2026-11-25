@@ -5,7 +5,7 @@ from database.content_state import read_value, touch_annotation, touch_edition
 from database.database_validator import DatabaseValidator
 from database.excerpt_database import read_edition
 from database.nomen_database import NomenDatabase
-from database.repository import SessionRepository
+from database.repository import SessionRepository, fetch_record
 from exceptions import DataNotFoundError
 from identifier import generate_id
 from models.annotation import (
@@ -19,6 +19,10 @@ if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction, Record
 
     from database.excerpt_database import ExcerptMap
+
+
+def _not_found(toc_id: str) -> str:
+    return f"Table of contents with ID '{toc_id}' not found"
 
 
 class TableOfContentsDatabase(SessionRepository):
@@ -187,9 +191,7 @@ class TableOfContentsDatabase(SessionRepository):
 
     async def get(self, toc_id: str) -> TableOfContentsOutput:
         async def read(tx: AsyncManagedTransaction) -> TableOfContentsOutput:
-            record = await (await tx.run(self.GET_BY_ID_QUERY, toc_id=toc_id)).single()
-            if record is None:
-                raise DataNotFoundError(f"Table of contents with ID '{toc_id}' not found")
+            record = await fetch_record(tx, self.GET_BY_ID_QUERY, _not_found(toc_id), toc_id=toc_id)
             return await read_value(tx, record["toc"]["edition_id"], lambda tx: self.get_with_transaction(tx, toc_id))
 
         return await self.execute_read(read)
@@ -211,10 +213,7 @@ class TableOfContentsDatabase(SessionRepository):
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, toc_id: str) -> TableOfContentsOutput:
-        result = await tx.run(TableOfContentsDatabase.GET_BY_ID_QUERY, toc_id=toc_id)
-        record = await result.single()
-        if record is None:
-            raise DataNotFoundError(f"Table of contents with ID '{toc_id}' not found")
+        record = await fetch_record(tx, TableOfContentsDatabase.GET_BY_ID_QUERY, _not_found(toc_id), toc_id=toc_id)
         return await TableOfContentsDatabase._build_toc_output(tx, record)
 
     @staticmethod

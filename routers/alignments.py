@@ -5,7 +5,7 @@ from fastapi import APIRouter, Path, Query, status
 
 from dependencies import DatabaseDep, OptionalAppHeader
 from models.alignment import EditionAlignmentInput, EditionAlignmentPairOutput
-from models.requests import AlignmentPaginationParams
+from models.requests import AnnotationSegmentsPaginationParams
 from models.responses import PaginatedResponse
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ async def replace_edition_pair_alignments(
 async def get_edition_pair_alignments(
     source_edition_id: Annotated[str, Path(description="The source edition ID")],
     target_edition_id: Annotated[str, Path(description="The target edition ID")],
-    params: Annotated[AlignmentPaginationParams, Query()],
+    params: Annotated[AnnotationSegmentsPaginationParams, Query()],
     db: DatabaseDep,
     x_application: OptionalAppHeader = None,
 ) -> PaginatedResponse[EditionAlignmentPairOutput]:

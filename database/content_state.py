@@ -7,7 +7,8 @@ from typing import LiteralString
 from neo4j import AsyncManagedTransaction
 
 from database.locking import lock_nodes
-from exceptions import DataConflictError, DataNotFoundError, DataValidationError
+from database.repository import fetch_record
+from exceptions import DataConflictError, DataValidationError
 
 
 @dataclass(frozen=True)
@@ -36,18 +37,17 @@ class ContentState:
 
 
 async def read_state(tx: AsyncManagedTransaction, edition_id: str) -> ContentState:
-    result = await tx.run(
+    record = await fetch_record(
+        tx,
         """
         MATCH (e:Edition {id: $id})-[:EDITION_OF]->(text:Text)
         RETURN e.id AS edition_id, text.id AS text_id, e.content_key AS object_key,
                e.content_length AS length, e.revision AS revision,
                EXISTS { (e)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'}) } AS is_excerpt
     """,
+        f"Edition with ID '{edition_id}' not found",
         id=edition_id,
     )
-    record = await result.single()
-    if record is None:
-        raise DataNotFoundError(f"Edition with ID '{edition_id}' not found")
     if None in (record["length"], record["revision"]) or (record["object_key"] is None) != record["is_excerpt"]:
         raise DataValidationError(f"Edition '{edition_id}' requires the content-state migration")
     return ContentState(**record)

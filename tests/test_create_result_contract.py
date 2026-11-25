@@ -11,6 +11,7 @@ import pytest
 from pydantic import MISSING
 
 import database.annotation.note_database as note_module
+import database.audio_database as audio_module
 import database.annotation.pagination_database as pagination_module
 import database.annotation.segmentation_database as segmentation_module
 import database.annotation.single_span as single_span_module
@@ -465,7 +466,7 @@ async def test_recording_create_strictly_returns_neo4j_id(monkeypatch):
 
 
 async def test_audio_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(AudioDatabase, "_validate_text_exists", AsyncMock())
+    monkeypatch.setattr(audio_module, "require_node", AsyncMock())
     monkeypatch.setattr(DatabaseValidator, "validate_contribution_references", AsyncMock())
     create_result = TrackingResult({"audio_id": "neo4j-audio-id"})
     tx = FakeTransaction({AudioDatabase.CREATE_QUERY: create_result})

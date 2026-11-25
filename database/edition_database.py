@@ -1,7 +1,7 @@
 import logging
 from typing import TYPE_CHECKING, LiteralString
 
-from exceptions import DataConflictError, DataNotFoundError, DataValidationError
+from exceptions import DataConflictError, DataValidationError
 from models.edition import EditionOutput
 from models.enums import EditionType
 from storage.keys import edition_key
@@ -18,7 +18,7 @@ from .excerpt_database import ExcerptDatabase
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
 from .recording_database import RecordingDatabase
-from .repository import SessionRepository
+from .repository import SessionRepository, fetch_all
 from .text_database import TextDatabase
 
 if TYPE_CHECKING:
@@ -111,17 +111,13 @@ class EditionDatabase(SessionRepository):
     """
 
     async def get(self, edition_id: str) -> EditionOutput:
-        async def read(tx: AsyncManagedTransaction) -> EditionOutput:
-            result = await tx.run(
-                EditionDatabase.GET_BY_ID_QUERY,
-                edition_id=edition_id,
-            )
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Edition '{edition_id}' not found")
-            return EditionOutput.model_validate(record["edition"])
-
-        return await self.execute_read(read)
+        return await self.query_one(
+            EditionDatabase.GET_BY_ID_QUERY,
+            EditionOutput,
+            f"Edition with ID '{edition_id}' not found",
+            field="edition",
+            edition_id=edition_id,
+        )
 
     async def get_all(self, text_id: str, edition_type: EditionType | None = None) -> list[EditionOutput]:
         return await self.execute_read(EditionDatabase.get_all_with_transaction, text_id, edition_type)
@@ -130,22 +126,20 @@ class EditionDatabase(SessionRepository):
     async def get_all_with_transaction(
         tx: AsyncManagedTransaction, text_id: str, edition_type: EditionType | None = None
     ) -> list[EditionOutput]:
-        result = await tx.run(
+        return await fetch_all(
+            tx,
             EditionDatabase.GET_BY_TEXT_ID_QUERY,
+            EditionOutput,
+            field="edition",
             text_id=text_id,
             edition_type=edition_type.value if edition_type else None,
         )
-        records = await result.data()
-        return [EditionOutput.model_validate(record["edition"]) for record in records]
 
     async def get_related(self, edition_id: str) -> list[EditionOutput]:
         """Find all editions related through alignment or text relationships."""
-
-        async def read(tx: AsyncManagedTransaction) -> list[EditionOutput]:
-            result = await tx.run(EditionDatabase.GET_RELATED_QUERY, edition_id=edition_id)
-            return [EditionOutput.model_validate(record["edition"]) for record in await result.data()]
-
-        return await self.execute_read(read)
+        return await self.query_all(
+            EditionDatabase.GET_RELATED_QUERY, EditionOutput, field="edition", edition_id=edition_id
+        )
 
     async def create(
         self,
@@ -224,13 +218,11 @@ class EditionDatabase(SessionRepository):
     ) -> str:
         await lock_nodes(tx, "Text", [text_id])
         await EditionDatabase._validate_create(tx, edition, text_id)
-
-        incipit_nomen_id = None
-        if edition.incipit_title:
-            alt_incipit_data = [alt.root for alt in edition.alt_incipit_titles] if edition.alt_incipit_titles else None
-            incipit_nomen_id = await NomenDatabase.create_with_transaction(
-                tx, edition.incipit_title.root, alt_incipit_data
-            )
+        incipit_nomen_id = await NomenDatabase.create_optional_with_transaction(
+            tx,
+            edition.incipit_title.root if edition.incipit_title else None,
+            [alt.root for alt in edition.alt_incipit_titles or []],
+        )
 
         result = await tx.run(
             EditionDatabase.CREATE_QUERY,
@@ -258,13 +250,6 @@ class EditionDatabase(SessionRepository):
         text_id: str,
     ) -> None:
         await DatabaseValidator.validate_text_exists(tx, text_id)
-
-        if edition.type == EditionType.CRITICAL:
-            await EditionDatabase._validate_no_critical_exists(tx, text_id)
-
-    @staticmethod
-    async def _validate_no_critical_exists(tx: AsyncManagedTransaction, text_id: str) -> None:
-        """Ensure only one critical edition exists for an text."""
-        editions = await EditionDatabase.get_all_with_transaction(tx, text_id, EditionType.CRITICAL)
-        if editions:
+        critical = EditionType.CRITICAL
+        if edition.type == critical and await EditionDatabase.get_all_with_transaction(tx, text_id, critical):
             raise DataValidationError("Critical edition already present for this text")

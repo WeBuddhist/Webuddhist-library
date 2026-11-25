@@ -1,14 +1,12 @@
 from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import touch_edition
-from database.excerpt_database import read_edition
+from database.excerpt_database import read_annotations
 from database.repository import SessionRepository
-from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.excerpt_database import ExcerptMap
 from models.annotation import FootnoteInput, NoteInput, NoteOutput, Span
 from models.enums import NoteType
 
@@ -73,28 +71,20 @@ class NoteDatabase(SessionRepository):
     """
 
     async def get(self, note_id: str, note_type: NoteType = NoteType.DURCHEN) -> NoteOutput:
-        async def read(tx: AsyncManagedTransaction) -> NoteOutput:
-            result = await tx.run(NoteDatabase.GET_BY_ID_QUERY, note_id=note_id, note_type=str(note_type))
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Note with ID '{note_id}' not found")
-            return NoteOutput.model_validate(record)
-
-        return await self.execute_read(read)
+        return await self.query_one(
+            NoteDatabase.GET_BY_ID_QUERY,
+            NoteOutput,
+            f"Note with ID '{note_id}' not found",
+            note_id=note_id,
+            note_type=str(note_type),
+        )
 
     async def get_all(self, edition_id: str, note_type: NoteType = NoteType.DURCHEN) -> list[NoteOutput]:
         """An excerpt edition gets the source's notes that lie wholly inside one of its spans."""
-
-        async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> list[NoteOutput]:
-            result = await tx.run(
-                NoteDatabase.GET_BY_EDITION_ID_QUERY,
-                edition_id=source_id,
-                note_type=str(note_type),
-            )
-            notes = [NoteOutput.model_validate(record) for record in await result.data()]
-            return excerpt.project_annotations(notes, whole=True) if excerpt else notes
-
-        return await self.execute_read(read_edition, edition_id, read)
+        query = NoteDatabase.GET_BY_EDITION_ID_QUERY
+        return await self.execute_read(
+            read_annotations, edition_id, query, NoteOutput, whole=True, note_type=str(note_type)
+        )
 
     async def add_durchen(self, edition_id: str, note: NoteInput) -> str:
         return (await self.add_durchens(edition_id, [note]))[0]

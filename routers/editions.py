@@ -178,8 +178,7 @@ async def post_pagination_annotation(
     db: DatabaseDep,
 ) -> IdResponse:
     """Add a pagination annotation to an edition."""
-    annotation_id = await db.annotation.pagination.add(edition_id, data)
-    return IdResponse(id=annotation_id)
+    return IdResponse(id=await db.annotation.pagination.add(edition_id, data))
 
 
 @router.get(
@@ -206,8 +205,7 @@ async def post_table_of_contents_annotation(
     data: TableOfContentsInput,
     db: DatabaseDep,
 ) -> IdResponse:
-    annotation_id = await db.annotation.table_of_contents.add(edition_id, data)
-    return IdResponse(id=annotation_id)
+    return IdResponse(id=await db.annotation.table_of_contents.add(edition_id, data))
 
 
 @router.get(
@@ -233,8 +231,7 @@ async def post_bibliographic_annotation(
     data: BibliographicMetadataInput,
     db: DatabaseDep,
 ) -> IdResponse:
-    annotation_id = await db.annotation.bibliographic.add(edition_id, data)
-    return IdResponse(id=annotation_id)
+    return IdResponse(id=await db.annotation.bibliographic.add(edition_id, data))
 
 
 @router.get(

@@ -1,10 +1,9 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Path, Query, status
 
-from catalog_search import CatalogSearchService
-from dependencies import DatabaseDep, get_catalog_search
+from dependencies import CatalogSearchDep, DatabaseDep
 from exceptions import ServiceUnavailableError
 from models.person import PersonInput, PersonOutput, PersonPatch
 from models.requests import PersonsQueryParams
@@ -37,22 +36,16 @@ async def get_person(
 async def get_all_persons(
     params: Annotated[PersonsQueryParams, Query()],
     db: DatabaseDep,
-    catalog_search: Annotated[CatalogSearchService | None, Depends(get_catalog_search)],
+    catalog_search: CatalogSearchDep,
 ) -> PaginatedResponse[PersonOutput]:
     """List all persons with optional filtering."""
-    if params.name:
-        if catalog_search is None:
-            raise ServiceUnavailableError("Catalog search is required for person name search")
-        persons = await catalog_search.search_persons(
-            db=db,
-            query=params.name,
-            filters=params,
-            offset=params.offset,
-            limit=params.limit + 1,
-        )
-        return PaginatedResponse.from_items(persons, offset=params.offset, limit=params.limit)
-
-    persons = await db.person.get_all(offset=params.offset, limit=params.limit + 1, filters=params)
+    page = {"filters": params, "offset": params.offset, "limit": params.limit + 1}
+    if not params.name:
+        persons = await db.person.get_all(**page)
+    elif catalog_search is None:
+        raise ServiceUnavailableError("Catalog search is required for person name search")
+    else:
+        persons = await catalog_search.search_persons(db=db, query=params.name, **page)
     return PaginatedResponse.from_items(persons, offset=params.offset, limit=params.limit)
 
 

@@ -74,6 +74,15 @@ class NomenDatabase:
         return primary_id
 
     @classmethod
+    async def create_optional_with_transaction(
+        cls,
+        tx: AsyncManagedTransaction,
+        primary_text: dict[str, str] | None,
+        alternative_texts: list[dict[str, str]] | None = None,
+    ) -> str | None:
+        return None if primary_text is None else await cls.create_with_transaction(tx, primary_text, alternative_texts)
+
+    @classmethod
     async def replace_with_transaction(
         cls,
         tx: AsyncManagedTransaction,

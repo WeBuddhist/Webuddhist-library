@@ -52,28 +52,8 @@ prod_neo4j=$(instance "$PROD_NEO4J_INSTANCE_ID")
 prod_volume=$(jq -r '.RootDeviceName as $r | .BlockDeviceMappings[] | select(.DeviceName == $r) | .Ebs.VolumeId' <<<"$prod_neo4j")
 [ -n "$prod_volume" ] || fail "could not find the root volume of $PROD_NEO4J_INSTANCE_ID"
 
-# --- run a script on an instance over SSM and wait for it (no 100 s waiter limit) ---
-ssm_run() { # <instance> <script file> [args...]
-  local instance=$1 file=$2 cmd status
-  shift 2
-  # Write the script to a file first: with `bash -s`, any child that reads stdin would eat the script.
-  cmd="f=\$(mktemp) && cat >\"\$f\" <<'ENV_SYNC_SCRIPT'"$'\n'"$(cat "$file")"$'\n'"ENV_SYNC_SCRIPT"$'\n'
-  cmd+="bash \"\$f\" $(printf '%q ' "$@"); rc=\$?; rm -f \"\$f\"; exit \$rc"
-  jq -n --arg c "$cmd" '{commands: [$c], executionTimeout: ["3600"]}' >/tmp/ssm_params.json
-  local id
-  id=$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
-    --parameters file:///tmp/ssm_params.json --query Command.CommandId --output text)
-  log "SSM $id on $instance: $(basename "$file") $*"
-  for _ in $(seq 1 400); do
-    sleep 10
-    status=$(aws ssm get-command-invocation --command-id "$id" --instance-id "$instance" \
-      --query Status --output text 2>/dev/null || echo Pending)
-    case "$status" in Pending | InProgress | Delayed) continue ;; *) break ;; esac
-  done
-  aws ssm get-command-invocation --command-id "$id" --instance-id "$instance" \
-    --query '[StandardOutputContent, StandardErrorContent]' --output text || true
-  [ "$status" = "Success" ] || fail "SSM command on $instance ended with status $status"
-}
+# shellcheck source=../ssm.sh
+source "$HERE/../ssm.sh"
 
 oneline() { # <instance> <command...> as a script
   local instance=$1 f

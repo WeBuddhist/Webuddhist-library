@@ -1,15 +1,11 @@
-import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Path, status
 
-from dependencies import DatabaseDep, RequiredAppHeader
-from exceptions import DataNotFoundError
+from dependencies import ApplicationDep, DatabaseDep
 from models.responses import IdResponse
 from models.tag import TagInput, TagOutput
 from search_updates import SearchUpdatesDep
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v2/tags", tags=["Tags"])
 
@@ -19,14 +15,8 @@ router = APIRouter(prefix="/v2/tags", tags=["Tags"])
     summary="List tags",
     description="Retrieve all tags for an application.",
 )
-async def get_tags(
-    db: DatabaseDep,
-    x_application: RequiredAppHeader,
-) -> list[TagOutput]:
+async def get_tags(db: DatabaseDep, x_application: ApplicationDep) -> list[TagOutput]:
     """List all tags for an application."""
-    if not await db.application.exists(x_application):
-        raise DataNotFoundError(f"Application '{x_application}' not found")
-
     return await db.tag.get_all(application=x_application)
 
 
@@ -36,17 +26,9 @@ async def get_tags(
     summary="Create tag",
     description="Create a new tag for an application.",
 )
-async def create_tag(
-    data: TagInput,
-    db: DatabaseDep,
-    x_application: RequiredAppHeader,
-) -> IdResponse:
+async def create_tag(data: TagInput, db: DatabaseDep, x_application: ApplicationDep) -> IdResponse:
     """Create a new tag."""
-    if not await db.application.exists(x_application):
-        raise DataNotFoundError(f"Application '{x_application}' not found")
-
-    tag_id = await db.tag.create(data, application=x_application)
-    return IdResponse(id=tag_id)
+    return IdResponse(id=await db.tag.create(data, application=x_application))
 
 
 @router.delete(
@@ -59,12 +41,8 @@ async def delete_tag(
     search: SearchUpdatesDep,
     tag_id: Annotated[str, Path(description="The ID of the tag")],
     db: DatabaseDep,
-    x_application: RequiredAppHeader,
+    x_application: ApplicationDep,
 ) -> None:
     """Delete a tag."""
-    if not await db.application.exists(x_application):
-        raise DataNotFoundError(f"Application '{x_application}' not found")
-
-    work_ids = await db.tag.delete(tag_id, application=x_application)
-    for work_id in work_ids:
+    for work_id in await db.tag.delete(tag_id, application=x_application):
         search.schedule("work", work_id)

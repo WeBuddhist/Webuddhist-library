@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import read_state, read_value
 from database.locking import lock_nodes
+from database.repository import fetch_all
 from database.span_database import SpanDatabase, adjust_annotation_span
 from exceptions import DataConflictError, DataValidationError
 from models.annotation import (
@@ -108,6 +109,24 @@ async def read_edition[T](tx: AsyncManagedTransaction, edition_id: str, read: Ed
         return await read_value(tx, slices[0].edition_id, lambda tx: read(tx, slices[0].edition_id, excerpt))
 
     return await read_value(tx, edition_id, through_source)
+
+
+async def read_annotations[T: (NoteOutput, MarkOutput, BibliographicMetadataOutput)](
+    tx: AsyncManagedTransaction,
+    edition_id: str,
+    query: LiteralString,
+    model: type[T],
+    *,
+    whole: bool = False,
+    **params: str,
+) -> list[T]:
+    """Single-span annotations of the edition; an excerpt edition gets its source's, projected by `whole`."""
+
+    async def read(tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None) -> list[T]:
+        annotations = await fetch_all(tx, query, model, edition_id=source_id, **params)
+        return excerpt.project_annotations(annotations, whole=whole) if excerpt else annotations
+
+    return await read_edition(tx, edition_id, read)
 
 
 class ExcerptDatabase:

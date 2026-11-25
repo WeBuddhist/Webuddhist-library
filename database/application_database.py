@@ -1,10 +1,6 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from neo4j.exceptions import ConstraintError
-
-from exceptions import DataConflictError, DataNotFoundError
-
-from .repository import SessionRepository
+from .repository import SessionRepository, fetch_record, on_constraint_violation, raise_if_blockers
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -27,12 +23,8 @@ class ApplicationDatabase(SessionRepository):
     """
 
     async def exists(self, application_id: str) -> bool:
-        async def read(tx: AsyncManagedTransaction) -> bool:
-            result = await tx.run(self.EXISTS_QUERY, application_id=application_id)
-            record = await result.single()
-            return bool(record and record["exists"])
-
-        return await self.execute_read(read)
+        [record] = await self.query(self.EXISTS_QUERY, application_id=application_id)
+        return record["exists"]
 
     async def create(self, application_id: str, name: str) -> str:
         async def write(tx: AsyncManagedTransaction) -> str:
@@ -40,28 +32,21 @@ class ApplicationDatabase(SessionRepository):
             record = await result.single(strict=True)
             return str(record["id"])
 
-        try:
+        with on_constraint_violation():
             return await self.execute_write(write)
-        except ConstraintError as e:
-            raise DataConflictError(str(e)) from e
 
     async def delete(self, application_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
-            result = await tx.run(self.DELETE_CHECK_QUERY, application_id=application_id)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Application '{application_id}' not found")
-
-            blockers = []
-            if record["tag_count"]:
-                blockers.append(f"{record['tag_count']} tag(s)")
-            if record["category_count"]:
-                blockers.append(f"{record['category_count']} category/categories")
-            if record["api_key_count"]:
-                blockers.append(f"{record['api_key_count']} API key(s)")
-            if blockers:
-                raise DataConflictError(f"Application '{application_id}' is still referenced by {', '.join(blockers)}")
-
+            not_found = f"Application '{application_id}' not found"
+            record = await fetch_record(tx, self.DELETE_CHECK_QUERY, not_found, application_id=application_id)
+            raise_if_blockers(
+                f"Application '{application_id}' is still referenced by",
+                {
+                    "tag(s)": record["tag_count"],
+                    "category/categories": record["category_count"],
+                    "API key(s)": record["api_key_count"],
+                },
+            )
             await tx.run(self.DELETE_QUERY, application_id=application_id)
 
         await self.execute_write(write)

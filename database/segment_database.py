@@ -1,9 +1,10 @@
 from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import read_at_revision, read_revisions, read_value
+from database.cypher import application_tag_ids, has_language, segment_lines
 from database.database_validator import DatabaseValidator
-from database.repository import SessionRepository
-from exceptions import DataConflictError, DataNotFoundError
+from database.repository import SessionRepository, fetch_all, fetch_one, fetch_record
+from exceptions import DataConflictError
 from models.annotation import SegmentWithContextOutput, Span
 from models.requests import RelatedSegmentsFilter
 
@@ -12,24 +13,17 @@ if TYPE_CHECKING:
 
 
 class SegmentDatabase(SessionRepository):
-    GET_QUERY: LiteralString = """
-    MATCH (seg:Segment {id: $segment_id})-[:SEGMENT_OF]->(segmentation:Segmentation)
+    GET_QUERY: LiteralString = f"""
+    MATCH (seg:Segment {{id: $segment_id}})-[:SEGMENT_OF]->(segmentation:Segmentation)
         <-[:HAS_SEGMENTATION]-(edition:Edition)-[:EDITION_OF]->(text:Text)
-    MATCH (span:Span)-[:SPAN_OF]->(seg)
-
-    WITH seg, segmentation, edition, text, span ORDER BY span.start, span.end
-    WITH seg, segmentation, edition, text,
-        collect({start: span.start, end: span.end}) AS lines,
-        [(seg)-[:HAS_TAG]->(t:Tag)
-            WHERE ($application IS NULL
-                OR (t)-[:BELONGS_TO]->(:Application {id: $application}))
-            | t.id] AS tag_ids
+    {segment_lines("seg")}
+    WITH * WHERE size(lines) > 0
     RETURN seg.id AS id, segmentation.id AS segmentation_id,
         edition.id AS edition_id, text.id AS text_id,
         seg.type AS type,
         seg.reference AS reference,
         lines,
-        CASE WHEN size(tag_ids) = 0 THEN null ELSE tag_ids END AS tag_ids
+        nullIf({application_tag_ids("(seg)")}, []) AS tag_ids
     """
 
     FIND_BY_SPANS_QUERY: LiteralString = """
@@ -54,32 +48,17 @@ class SegmentDatabase(SessionRepository):
     ORDER BY edition_id, segment_id
     """
 
-    RESOLVE_SEGMENT_PAGE_QUERY: LiteralString = """
+    RESOLVE_SEGMENT_PAGE_QUERY: LiteralString = f"""
     UNWIND $segment_ids AS segment_id
-    MATCH (seg:Segment {id: segment_id})-[:SEGMENT_OF]->(sgn:Segmentation)
+    MATCH (seg:Segment {{id: segment_id}})-[:SEGMENT_OF]->(sgn:Segmentation)
         <-[:HAS_SEGMENTATION]-(edition:Edition)-[:EDITION_OF]->(text:Text)
     WHERE ($text_id IS NULL OR text.id = $text_id)
       AND ($filter_edition_id IS NULL OR edition.id = $filter_edition_id)
-      AND ($language IS NULL OR EXISTS {
-          (text)-[lang_rel:HAS_LANGUAGE]->(lang:Language {code: $language_base})
-          WHERE NOT $language CONTAINS '-' OR toLower(coalesce(lang_rel.bcp47, lang.code)) = $language
-      })
-    CALL (seg) {
-        MATCH (span:Span)-[:SPAN_OF]->(seg)
-
-        WITH span ORDER BY span.start, span.end
-        RETURN collect({start: span.start, end: span.end}) AS lines,
-               min(span.start) AS min_start
-    }
+      AND {has_language("text")}
+    {segment_lines("seg")}
     WITH text, edition, sgn, seg, lines, min_start
     WHERE size(lines) > 0
-    WITH text, edition, sgn, seg, lines, min_start,
-        [(seg)-[:HAS_TAG]->(t:Tag)
-            WHERE ($application IS NULL
-                OR (t)-[:BELONGS_TO]->(:Application {id: $application}))
-            | t.id] AS tag_ids
-    WITH text, edition, sgn, seg, lines, min_start,
-         CASE WHEN size(tag_ids) = 0 THEN null ELSE tag_ids END AS tag_ids
+    WITH text, edition, sgn, seg, lines, min_start, nullIf({application_tag_ids("(seg)")}, []) AS tag_ids
     ORDER BY text.id, edition.id, sgn.id, min_start, lines[-1].end, seg.id
     SKIP $offset
     LIMIT $limit
@@ -89,6 +68,18 @@ class SegmentDatabase(SessionRepository):
            seg.reference AS reference, lines, tag_ids
     """
 
+    SEGMENT_REVISIONS_QUERY: LiteralString = """
+    UNWIND $ids AS id
+    MATCH (:Segment {id: id})-[:SEGMENT_OF]->(:Segmentation)<-[:HAS_SEGMENTATION]-(e:Edition)
+    RETURN DISTINCT e.id AS id, e.revision AS revision
+    """
+
+    SEGMENT_EXTENT_QUERY: LiteralString = """
+    MATCH (:Edition {id: $edition})-[:HAS_SEGMENTATION]->(:Segmentation)
+          <-[:SEGMENT_OF]-(:Segment {id: $segment})<-[:SPAN_OF]-(s:Span)
+    RETURN min(s.start) AS start, max(s.end) AS end
+    """
+
     async def get(self, segment_id: str, application: str | None = None) -> SegmentWithContextOutput:
         return await self.execute_read(self.get_with_transaction, segment_id, application)
 
@@ -96,26 +87,28 @@ class SegmentDatabase(SessionRepository):
     async def get_with_transaction(
         tx: AsyncManagedTransaction, segment_id: str, application: str | None = None
     ) -> SegmentWithContextOutput:
-        result = await tx.run(SegmentDatabase.GET_QUERY, segment_id=segment_id, application=application)
-        record = await result.single()
-        if record is None:
-            raise DataNotFoundError(f"Segment '{segment_id}' not found")
-        return SegmentWithContextOutput.model_validate(record)
+        return await fetch_one(
+            tx,
+            SegmentDatabase.GET_QUERY,
+            SegmentWithContextOutput,
+            f"Segment '{segment_id}' not found",
+            segment_id=segment_id,
+            application=application,
+        )
 
     async def get_content_location(
         self, tx: AsyncManagedTransaction, segment_id: str, application: str | None = None
     ) -> tuple[str, Span]:
         """Read the immutable object key and segment span at the same edition revision."""
-        result = await tx.run(
+        parent = await fetch_record(
+            tx,
             """
             MATCH (:Segment {id: $id})-[:SEGMENT_OF]->(:Segmentation)<-[:HAS_SEGMENTATION]-(e:Edition)
             RETURN e.id AS id
             """,
+            f"Segment '{segment_id}' not found",
             id=segment_id,
         )
-        parent = await result.single()
-        if parent is None:
-            raise DataNotFoundError(f"Segment '{segment_id}' not found")
         state, segment = await read_at_revision(
             tx, parent["id"], lambda read_tx: self.get_with_transaction(read_tx, segment_id, application)
         )
@@ -140,34 +133,17 @@ class SegmentDatabase(SessionRepository):
             revisions: dict[str, int] = {}
 
             async def capture_revisions(segment_ids: list[str]) -> None:
-                records = await (
-                    await tx.run(
-                        """
-                    UNWIND $ids AS id
-                    MATCH (:Segment {id: id})-[:SEGMENT_OF]->(:Segmentation)<-[:HAS_SEGMENTATION]-(e:Edition)
-                    RETURN DISTINCT e.id AS id, e.revision AS revision
-                """,
-                        ids=segment_ids,
-                    )
-                ).data()
-                for record in records:
+                result = await tx.run(SegmentDatabase.SEGMENT_REVISIONS_QUERY, ids=segment_ids)
+                async for record in result:
                     if revisions.setdefault(record["id"], record["revision"]) != record["revision"]:
                         raise DataConflictError("Alignment changed while reading; retry the request")
 
             language_code = await DatabaseValidator.validated_language_code(tx, filters.language)
             starting_spans = spans
             if starting_segment_id is not None:
-                record = await (
-                    await tx.run(
-                        """
-                    MATCH (:Edition {id: $edition})-[:HAS_SEGMENTATION]->(:Segmentation)
-                          <-[:SEGMENT_OF]-(:Segment {id: $segment})<-[:SPAN_OF]-(s:Span)
-                    RETURN min(s.start) AS start, max(s.end) AS end
-                """,
-                        edition=edition_id,
-                        segment=starting_segment_id,
-                    )
-                ).single(strict=True)
+                query = SegmentDatabase.SEGMENT_EXTENT_QUERY
+                result = await tx.run(query, edition=edition_id, segment=starting_segment_id)
+                record = await result.single(strict=True)
                 starting_spans = [(record["start"], record["end"])] if record["start"] is not None else []
             frontier = await self._find_by_spans(tx, edition_id, starting_spans)
             if not frontier:
@@ -223,20 +199,19 @@ class SegmentDatabase(SessionRepository):
         filters: RelatedSegmentsFilter,
         language_code: str | None,
     ) -> list[SegmentWithContextOutput]:
-        records = await (
-            await tx.run(
-                self.RESOLVE_SEGMENT_PAGE_QUERY,
-                segment_ids=segment_ids,
-                application=application,
-                offset=offset,
-                limit=limit,
-                text_id=filters.text_id,
-                filter_edition_id=filters.edition_id,
-                language=filters.language,
-                language_base=language_code,
-            )
-        ).data()
-        return [SegmentWithContextOutput.model_validate(record) for record in records if record["lines"]]
+        return await fetch_all(
+            tx,
+            self.RESOLVE_SEGMENT_PAGE_QUERY,
+            SegmentWithContextOutput,
+            segment_ids=segment_ids,
+            application=application,
+            offset=offset,
+            limit=limit,
+            text_id=filters.text_id,
+            filter_edition_id=filters.edition_id,
+            language=filters.language,
+            language_base=language_code,
+        )
 
     async def find_by_span(self, edition_id: str, start: int, end: int) -> list[str]:
         return await self.execute_read(self._find_by_spans, edition_id, [(start, end)])

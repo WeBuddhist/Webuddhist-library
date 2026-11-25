@@ -1,14 +1,12 @@
 from typing import TYPE_CHECKING, LiteralString
 
 from database.content_state import touch_annotation
-from database.excerpt_database import read_edition
+from database.excerpt_database import read_annotations
 from database.repository import SessionRepository
-from exceptions import DataNotFoundError
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
 
-    from database.excerpt_database import ExcerptMap
 from models.annotation import BibliographicMetadataInput, BibliographicMetadataOutput
 
 from .single_span import (
@@ -58,27 +56,16 @@ class BibliographicDatabase(SessionRepository):
     """
 
     async def get(self, bibliographic_id: str) -> BibliographicMetadataOutput:
-        async def read(tx: AsyncManagedTransaction) -> BibliographicMetadataOutput:
-            result = await tx.run(
-                BibliographicDatabase.GET_BY_ID_QUERY,
-                bibliographic_id=bibliographic_id,
-            )
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Bibliographic metadata with ID '{bibliographic_id}' not found")
-            return BibliographicMetadataOutput.model_validate(record)
-
-        return await self.execute_read(read)
+        return await self.query_one(
+            BibliographicDatabase.GET_BY_ID_QUERY,
+            BibliographicMetadataOutput,
+            f"Bibliographic metadata with ID '{bibliographic_id}' not found",
+            bibliographic_id=bibliographic_id,
+        )
 
     async def get_all(self, edition_id: str) -> list[BibliographicMetadataOutput]:
-        async def read(
-            tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None
-        ) -> list[BibliographicMetadataOutput]:
-            result = await tx.run(BibliographicDatabase.GET_BY_EDITION_ID_QUERY, edition_id=source_id)
-            metadata = [BibliographicMetadataOutput.model_validate(record) for record in await result.data()]
-            return excerpt.project_annotations(metadata) if excerpt else metadata
-
-        return await self.execute_read(read_edition, edition_id, read)
+        query = BibliographicDatabase.GET_BY_EDITION_ID_QUERY
+        return await self.execute_read(read_annotations, edition_id, query, BibliographicMetadataOutput)
 
     async def add(
         self,

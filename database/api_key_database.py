@@ -56,34 +56,19 @@ class ApiKeyDatabase(SessionRepository):
         ORDER BY k.created_at DESC
     """
 
-    def __init__(self, db: Database) -> None:
-        super().__init__(db.get_session)
-        self._db = db
+    _db: Database
 
     @staticmethod
     def _hash_key(raw_key: str) -> str:
-        """Hash an API key using SHA-256."""
         return hashlib.sha256(raw_key.encode()).hexdigest()
 
     @staticmethod
     def _generate_api_key() -> str:
-        """Generate a secure random API key (32 characters)."""
+        """32 URL-safe characters."""
         return secrets.token_urlsafe(24)
 
     async def create(self, key_id: str, name: str, email: str, application_id: str | None = None) -> tuple[str, str]:
-        """
-        Create a new API key, optionally bound to an application.
-
-        Args:
-            key_id: Unique identifier for the API key.
-            name: Human-readable name for the key.
-            email: Contact email for the key owner.
-            application_id: Optional application ID to bind the key to.
-
-        Returns:
-            Tuple of (key_id, raw_api_key).
-            The raw API key is only returned once and should be saved by the caller.
-        """
+        """Return the key ID and the raw key, which is not stored and so cannot be shown again."""
         if application_id is not None and not await self._db.application.exists(application_id):
             raise ValueError(f"Application '{application_id}' not found")
 
@@ -101,72 +86,24 @@ class ApiKeyDatabase(SessionRepository):
                 created_at=created_at,
                 application_id=application_id,
             )
-            record = await result.single(strict=True)
-            return record["id"]
+            return (await result.single(strict=True))["id"]
 
-        created_id = await self.execute_write(write)
-        return created_id, raw_key
+        return await self.execute_write(write), raw_key
 
     async def validate_key(self, raw_key: str) -> dict | None:
-        """
-        Validate an API key and return key info.
-
-        Returns:
-            Dict with 'id' and 'bound_application_id' (None if not bound),
-            or None if the key is invalid or inactive.
-        """
-        api_key_hash = self._hash_key(raw_key)
-
-        async def read(tx: AsyncManagedTransaction) -> dict | None:
-            result = await tx.run(self.VALIDATE_KEY_QUERY, api_key_hash=api_key_hash)
-            record = await result.single()
-            if record is None:
-                return None
-            return {"id": record["id"], "bound_application_id": record["bound_application_id"]}
-
-        return await self.execute_read(read)
+        """The active key's `id` and `bound_application_id`, or None for an unknown or revoked key."""
+        records = await self.query(self.VALIDATE_KEY_QUERY, api_key_hash=self._hash_key(raw_key))
+        return records[0].data() if records else None
 
     async def revoke(self, key_id: str) -> bool:
-        """
-        Revoke an API key by setting is_active to false.
-
-        Returns:
-            True if the key was found and revoked, False otherwise.
-        """
-
-        async def write(tx: AsyncManagedTransaction) -> bool:
-            result = await tx.run(self.REVOKE_QUERY, key_id=key_id)
-            return await result.single() is not None
-
-        return await self.execute_write(write)
+        """Return whether the key exists."""
+        return bool(await self.query(self.REVOKE_QUERY, write=True, key_id=key_id))
 
     async def rotate_key(self, key_id: str) -> str | None:
-        """
-        Generate a new API key value for an existing key.
-
-        Returns:
-            The new raw API key, or None if the key was not found.
-        """
+        """Replace the key's value and reactivate it; return the new raw key, or None for an unknown key."""
         raw_key = self._generate_api_key()
-        api_key_hash = self._hash_key(raw_key)
-
-        async def write(tx: AsyncManagedTransaction) -> bool:
-            result = await tx.run(self.ROTATE_KEY_QUERY, key_id=key_id, api_key_hash=api_key_hash)
-            return await result.single() is not None
-
-        found = await self.execute_write(write)
+        found = await self.query(self.ROTATE_KEY_QUERY, write=True, key_id=key_id, api_key_hash=self._hash_key(raw_key))
         return raw_key if found else None
 
     async def list_all(self) -> list[dict]:
-        """
-        List all API keys.
-
-        Returns:
-            List of key dictionaries with id, name, email, is_active, created_at, bound_application_id.
-        """
-
-        async def read(tx: AsyncManagedTransaction) -> list[dict]:
-            result = await tx.run(self.LIST_QUERY)
-            return await result.data()
-
-        return await self.execute_read(read)
+        return [record.data() for record in await self.query(self.LIST_QUERY)]

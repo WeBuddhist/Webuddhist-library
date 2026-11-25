@@ -577,7 +577,7 @@ curl -X POST "https://dev.library.webuddhist.com/api/v2/editions/ED123/table-of-
 ## Developer Notes
 
 - Collection routes live in `routers/editions.py`.
-- Direct-by-ID routes live in `routers/annotation/`.
+- Direct-by-ID routes live in `routers/annotations.py`.
 - Models live in `models/annotation.py`.
 - Content changes through `PATCH /v2/editions/{edition_id}/content` adjust affected spans automatically.
 - Neo4j deployment for Yigchung support must apply `database/neo4j_constraints.cypher` and reinstall triggers. Creation automatically merges the `yigchung` mark type.

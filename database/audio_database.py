@@ -2,15 +2,24 @@ from typing import TYPE_CHECKING, LiteralString
 
 from pydantic import MISSING
 
-from exceptions import DataConflictError, DataNotFoundError
+from exceptions import DataNotFoundError
 from identifier import generate_id
 from models.audio import AudioInput, AudioOutput, AudioPatch
 
 from .contribution_database import ContributionDatabase
+from .cypher import replace_language, replace_license
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
-from .repository import SessionRepository
+from .repository import (
+    SessionRepository,
+    fetch_all,
+    fetch_one,
+    fetch_record,
+    raise_if_blockers,
+    require_node,
+    set_properties,
+)
 from .text_database import TextDatabase
 
 if TYPE_CHECKING:
@@ -47,10 +56,6 @@ class AudioDatabase(SessionRepository):
     {_AUDIO_RETURN}
     """
 
-    TEXT_EXISTS_QUERY: LiteralString = """
-    MATCH (t:Text {id: $text_id}) RETURN t.id AS id
-    """
-
     # The Work comes from the recited Text, as a translation's does, so the two cannot disagree.
     CREATE_QUERY: LiteralString = """
     MATCH (t:Text {id: $text_id})-[:TEXT_OF]->(w:Work)
@@ -72,31 +77,9 @@ class AudioDatabase(SessionRepository):
     RETURN a.id AS audio_id
     """
 
-    UPDATE_PROPERTIES_QUERY: LiteralString = """
-    MATCH (a:Audio {id: $audio_id})
-    SET a += $properties
-    FINISH
-    """
+    UPDATE_LICENSE_QUERY: LiteralString = replace_license("Audio")
 
-    UPDATE_LICENSE_QUERY: LiteralString = """
-    MATCH (a:Audio {id: $audio_id})
-    OPTIONAL MATCH (a)-[existing:HAS_LICENSE]->()
-    DELETE existing
-    WITH a
-    MATCH (license:LicenseType {name: $license})
-    MERGE (a)-[:HAS_LICENSE]->(license)
-    FINISH
-    """
-
-    UPDATE_LANGUAGE_QUERY: LiteralString = """
-    MATCH (a:Audio {id: $audio_id})
-    OPTIONAL MATCH (a)-[existing:HAS_LANGUAGE]->()
-    DELETE existing
-    WITH a
-    MATCH (lang:Language {code: $language_code})
-    MERGE (a)-[:HAS_LANGUAGE {bcp47: $language}]->(lang)
-    FINISH
-    """
+    UPDATE_LANGUAGE_QUERY: LiteralString = replace_language("Audio")
 
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (a:Audio {id: $audio_id})
@@ -116,25 +99,21 @@ class AudioDatabase(SessionRepository):
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, audio_id: str) -> AudioOutput:
-        result = await tx.run(AudioDatabase.GET_BY_ID_QUERY, audio_id=audio_id)
-        record = await result.single()
-        if record is None:
-            raise DataNotFoundError(f"Audio with ID '{audio_id}' not found")
-        return AudioOutput.model_validate(record["audio"])
+        return await fetch_one(
+            tx,
+            AudioDatabase.GET_BY_ID_QUERY,
+            AudioOutput,
+            f"Audio with ID '{audio_id}' not found",
+            field="audio",
+            audio_id=audio_id,
+        )
 
     async def get_all(self, text_id: str) -> list[AudioOutput]:
         async def read(tx: AsyncManagedTransaction) -> list[AudioOutput]:
-            await AudioDatabase._validate_text_exists(tx, text_id)
-            result = await tx.run(AudioDatabase.GET_BY_TEXT_ID_QUERY, text_id=text_id)
-            return [AudioOutput.model_validate(record["audio"]) for record in await result.data()]
+            await require_node(tx, "Text", text_id, DataNotFoundError(f"Text with ID '{text_id}' not found"))
+            return await fetch_all(tx, AudioDatabase.GET_BY_TEXT_ID_QUERY, AudioOutput, field="audio", text_id=text_id)
 
         return await self.execute_read(read)
-
-    @staticmethod
-    async def _validate_text_exists(tx: AsyncManagedTransaction, text_id: str) -> None:
-        result = await tx.run(AudioDatabase.TEXT_EXISTS_QUERY, text_id=text_id)
-        if await result.single() is None:
-            raise DataNotFoundError(f"Text with ID '{text_id}' not found")
 
     async def create(self, text_id: str, audio: AudioInput) -> str:
         # Generated outside the transaction function, so a retried transaction reuses the same ID.
@@ -146,13 +125,11 @@ class AudioDatabase(SessionRepository):
         tx: AsyncManagedTransaction, text_id: str, audio: AudioInput, audio_id: str
     ) -> str:
         await TextDatabase.lock_with_work(tx, text_id)
-        await AudioDatabase._validate_text_exists(tx, text_id)
+        await require_node(tx, "Text", text_id, DataNotFoundError(f"Text with ID '{text_id}' not found"))
         await DatabaseValidator.validate_contribution_references(tx, audio.contributions)
 
-        title_nomen_id = None
-        if audio.title:
-            title_nomen_id = await NomenDatabase.create_with_transaction(tx, audio.title.root)
-
+        title = audio.title.root if audio.title else None
+        title_nomen_id = await NomenDatabase.create_optional_with_transaction(tx, title)
         language_code = await DatabaseValidator.validated_language_code(tx, audio.language)
         result = await tx.run(
             AudioDatabase.CREATE_QUERY,
@@ -174,23 +151,16 @@ class AudioDatabase(SessionRepository):
     async def update(self, audio_id: str, patch: AudioPatch) -> AudioOutput:
         async def write(tx: AsyncManagedTransaction) -> AudioOutput:
             await lock_nodes(tx, "Audio", [audio_id])
-            result = await tx.run("MATCH (a:Audio {id: $id}) RETURN a.id AS id", id=audio_id)
-            if await result.single() is None:
-                raise DataNotFoundError(f"Audio '{audio_id}' not found")
-            properties = patch.model_dump(include={"date"})
-            if properties:
-                await tx.run(AudioDatabase.UPDATE_PROPERTIES_QUERY, audio_id=audio_id, properties=properties)
+            await require_node(tx, "Audio", audio_id, DataNotFoundError(f"Audio with ID '{audio_id}' not found"))
+            await set_properties(tx, AUDIO_LABEL, audio_id, patch.model_dump(include={"date"}))
 
             if patch.license is not MISSING:
-                await tx.run(AudioDatabase.UPDATE_LICENSE_QUERY, audio_id=audio_id, license=patch.license.value)
+                await tx.run(AudioDatabase.UPDATE_LICENSE_QUERY, id=audio_id, license=patch.license.value)
 
             if patch.language is not MISSING:
                 language_code = await DatabaseValidator.validated_language_code(tx, patch.language)
                 await tx.run(
-                    AudioDatabase.UPDATE_LANGUAGE_QUERY,
-                    audio_id=audio_id,
-                    language=patch.language,
-                    language_code=language_code,
+                    AudioDatabase.UPDATE_LANGUAGE_QUERY, id=audio_id, bcp47=patch.language, language_code=language_code
                 )
 
             if patch.title is not MISSING:
@@ -205,14 +175,11 @@ class AudioDatabase(SessionRepository):
     async def delete(self, audio_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
             await lock_nodes(tx, "Audio", [audio_id])
-            result = await tx.run(AudioDatabase.DELETE_CHECK_QUERY, audio_id=audio_id)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Audio '{audio_id}' not found")
-            if record["recording_count"]:
-                raise DataConflictError(
-                    f"Audio '{audio_id}' cannot be deleted because it has {record['recording_count']} recording(s)"
-                )
+            not_found = f"Audio with ID '{audio_id}' not found"
+            record = await fetch_record(tx, AudioDatabase.DELETE_CHECK_QUERY, not_found, audio_id=audio_id)
+            raise_if_blockers(
+                f"Audio '{audio_id}' cannot be deleted because it has", {"recording(s)": record["recording_count"]}
+            )
             await tx.run(AudioDatabase.DELETE_QUERY, audio_id=audio_id)
 
         await self.execute_write(write)

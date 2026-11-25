@@ -22,6 +22,24 @@ SYSTEM_DATABASE_NAME = "system"
 # plus target-type enforcement for optional typed relationships.
 
 
+def _trigger(name: str, description: str, query: str, audit: str) -> dict:
+    return {"name": name, "description": description, "phase": "before", "query": query, "audit": audit}
+
+
+def _reject(name: str, message: str, node: str = "node", value: str | None = None) -> str:
+    """Fail the transaction, listing every offending value, when any row reaches this point."""
+    value = value or f"coalesce({node}.id, elementId({node}))"
+    return f"""
+        WITH collect(DISTINCT {value}) AS ids
+        WHERE size(ids) > 0
+        CALL apoc.util.validate(true, '{name}: {message}. IDs: %s', [string.join(ids, ', ')])
+        RETURN null"""
+
+
+def _audit(node: str, value: str | None = None) -> str:
+    return f"RETURN DISTINCT {value or f'coalesce({node}.id, elementId({node}))'} AS violating_id"
+
+
 def _affected_sources(
     source_label: str,
     rel_type: str,
@@ -59,92 +77,82 @@ def _required_rel_trigger(
     cardinality: str = "one",
 ) -> list[dict]:
     """Require a matching target and, for cardinality 'one', reject a second match."""
-    existence = {
-        "name": name,
-        "description": description,
-        "phase": "before",
-        "query": f"""
+    missing = f"NOT (node)-[:{rel_type}]->(:{target_label})"
+    existence = _trigger(
+        name,
+        description,
+        f"""
         {_affected_sources(source_label, rel_type, "$deletedRelationships")}
         WHERE NOT (node IN $deletedNodes)
-          AND NOT (node)-[:{rel_type}]->(:{target_label})
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            '{name}: {source_label} must have {rel_type}->{target_label}. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
+          AND {missing}
+        {_reject(name, f"{source_label} must have {rel_type}->{target_label}")}
         """,
-        "audit": f"""
-        MATCH (n:{source_label})
-        WHERE NOT (n)-[:{rel_type}]->(:{target_label})
-        RETURN coalesce(n.id, elementId(n)) AS violating_id
-        """,
-    }
+        f"MATCH (node:{source_label}) WHERE {missing} {_audit('node')}",
+    )
     if cardinality == "one":
         return [existence, _max_one_trigger(f"{name}_max_one", source_label, rel_type, target_label)]
     return [existence]
 
 
-def _rel_target_type_trigger(
-    name: str,
-    description: str,
-    rel_type: str,
-    target_label: str,
-) -> dict:
-    """Generate a trigger + audit pair that enforces a relationship's target node type."""
-    return {
-        "name": name,
-        "description": description,
-        "phase": "before",
-        "query": f"""
-            UNWIND changedRelationships AS rel
-            WITH rel
-            WHERE type(rel) = '{rel_type}'
-            WITH rel, startNode(rel) AS source, endNode(rel) AS target
-            WHERE NOT target:{target_label}
-            WITH collect(coalesce(source.id, elementId(source))) AS ids
-            WHERE size(ids) > 0
-            CALL apoc.util.validate(
-                true,
-                '{name}: {rel_type} must point to {target_label}. IDs: %s',
-                [string.join(ids, ', ')]
-            )
-            RETURN null
-        """,
-        "audit": f"""
-            MATCH (n)-[:{rel_type}]->(target)
-            WHERE NOT target:{target_label}
-            RETURN coalesce(n.id, elementId(n)) AS violating_id
-        """,
-    }
-
-
-def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: str) -> dict:
-    """Generate a trigger and audit limiting a relationship to at most one matching target."""
-    return {
-        "name": name,
-        "description": f"{source_label} must have at most one {rel_type}->{target_label}",
-        "phase": "before",
-        "query": f"""
+def _max_one_trigger(name: str, source_label: str, rel_type: str, target_label: str | None = None) -> dict:
+    """Limit a relationship to at most one target, of the given label when there is one."""
+    target = f"->{target_label}" if target_label else ""
+    return _trigger(
+        name,
+        f"{source_label} must have at most one {rel_type}{target}",
+        f"""
         {_affected_sources(source_label, rel_type)}
         {_multiple_outgoing("node", rel_type, target_label)}
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            '{name}: {source_label} must have at most one {rel_type}. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
+        {_reject(name, f"{source_label} must have at most one {rel_type}")}
         """,
-        "audit": f"""
-        MATCH (n:{source_label})
-        {_multiple_outgoing("n", rel_type, target_label)}
-        RETURN coalesce(n.id, elementId(n)) AS violating_id
+        f"MATCH (node:{source_label}) {_multiple_outgoing('node', rel_type, target_label)} {_audit('node')}",
+    )
+
+
+def _rel_rule(name: str, description: str, rel_type: str, message: str, invalid: str) -> dict:
+    """Reject relationships of the type whose `source` and `target` make `invalid` true."""
+    return _trigger(
+        name,
+        description,
+        f"""
+        UNWIND changedRelationships AS rel
+        WITH rel WHERE type(rel) = '{rel_type}'
+        WITH startNode(rel) AS source, endNode(rel) AS target
+        WHERE {invalid}
+        {_reject(name, message, "source")}
         """,
-    }
+        f"MATCH (source)-[:{rel_type}]->(target) WHERE {invalid} {_audit('source')}",
+    )
+
+
+def _rel_target_type_trigger(name: str, description: str, rel_type: str, target_label: str) -> dict:
+    return _rel_rule(
+        name, description, rel_type, f"{rel_type} must point to {target_label}", f"NOT target:{target_label}"
+    )
+
+
+def _no_self_ref_trigger(rel_type: str, description: str | None = None) -> dict:
+    return _rel_rule(
+        f"enforce_no_self_{rel_type.lower()}",
+        description or f"{rel_type} must not point to self",
+        rel_type,
+        f"{rel_type} must not be self-referential",
+        "source = target",
+    )
+
+
+def _node_rule(name: str, description: str, label: str, message: str, invalid: str) -> dict:
+    """Reject nodes of the label for which `invalid`, written over `node`, is true."""
+    return _trigger(
+        name,
+        description,
+        f"""
+        UNWIND changedNodes AS node
+        WITH node WHERE node:{label} AND ({invalid})
+        {_reject(name, message)}
+        """,
+        f"MATCH (node:{label}) WHERE {invalid} {_audit('node')}",
+    )
 
 
 TRIGGERS: list[dict] = []
@@ -210,38 +218,20 @@ TRIGGERS.append(
     )
 )
 TRIGGERS.append(
-    {
-        "name": "enforce_edition_has_segmentation_max_one",
-        "description": "Edition must have at most one HAS_SEGMENTATION relationship",
-        "phase": "before",
-        "query": f"""
-        {_affected_sources("Edition", "HAS_SEGMENTATION")}
-        {_multiple_outgoing("node", "HAS_SEGMENTATION", "Segmentation")}
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_edition_has_segmentation_max_one: Edition must have at most one segmentation. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-        """,
-        "audit": f"""
-        MATCH (e:Edition)
-        {_multiple_outgoing("e", "HAS_SEGMENTATION", "Segmentation")}
-        RETURN coalesce(e.id, elementId(e)) AS violating_id
-        """,
-    }
+    _max_one_trigger("enforce_edition_has_segmentation_max_one", "Edition", "HAS_SEGMENTATION", "Segmentation")
 )
 
 # --- Diplomatic Edition must have exactly one Pagination ------------------
+_DIPLOMATIC_PAGINATION_INVALID = """
+    (node)-[:HAS_TYPE]->(:EditionType {name: 'diplomatic'})
+    AND count { (node)<-[:PAGINATION_OF]-(:Pagination) } <> 1
+"""
 TRIGGERS.append(
-    {
-        "name": "enforce_diplomatic_edition_has_pagination",
-        "description": "A diplomatic Edition must have exactly one Pagination",
-        "phase": "before",
-        "query": """
-        CALL (*) {
+    _trigger(
+        "enforce_diplomatic_edition_has_pagination",
+        "A diplomatic Edition must have exactly one Pagination",
+        f"""
+        CALL (*) {{
             UNWIND changedNodes AS n
             WITH n WHERE n:Edition
             RETURN n AS node
@@ -251,174 +241,85 @@ TRIGGERS.append(
             WITH endNode(rel) AS n
             WHERE n:Edition
             RETURN n AS node
-        }
+        }}
         WITH DISTINCT node
-        WHERE NOT (node IN $deletedNodes)
-          AND (node)-[:HAS_TYPE]->(:EditionType {name: 'diplomatic'})
-        WITH node, count { (node)<-[:PAGINATION_OF]-(:Pagination) } AS cnt
-        WHERE cnt <> 1
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_diplomatic_edition_has_pagination: must have exactly one Pagination. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (e:Edition)-[:HAS_TYPE]->(:EditionType {name: 'diplomatic'})
-        WITH e, count { (e)<-[:PAGINATION_OF]-(:Pagination) } AS cnt
-        WHERE cnt <> 1
-        RETURN coalesce(e.id, elementId(e)) AS violating_id
-    """,
-    }
+        WHERE NOT (node IN $deletedNodes) AND {_DIPLOMATIC_PAGINATION_INVALID}
+        {_reject("enforce_diplomatic_edition_has_pagination", "must have exactly one Pagination")}
+        """,
+        f"MATCH (node:Edition) WHERE {_DIPLOMATIC_PAGINATION_INVALID} {_audit('node')}",
+    )
 )
 
 # --- Excerpt editions: content comes only from spans of one stored edition -------
-_EXCERPT_EDITION_INVALID = """
-    CASE WHEN EXISTS { (e)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'}) } THEN
-        e.content_key IS NOT NULL
-        OR count { (e)-[:EXCERPT_OF]->(:Edition) } <> 1
-        OR NOT EXISTS { (:Span)-[:SPAN_OF]->(e) }
-        OR EXISTS { (e)-[:EXCERPT_OF]->(source:Edition) WHERE source.content_key IS NULL }
-        OR EXISTS { (e)-[:HAS_SEGMENTATION]->() }
-        OR EXISTS { (e)<-[:PAGINATION_OF|TOC_OF|NOTE_OF|MARK_OF|BIBLIOGRAPHY_OF|ATTRIBUTE_OF]-() }
-    ELSE EXISTS { (e)-[:EXCERPT_OF]->() } OR EXISTS { (:Span)-[:SPAN_OF]->(e) }
-    END
-"""
 TRIGGERS.append(
-    {
-        "name": "enforce_excerpt_edition",
-        "description": (
-            "An excerpt edition has spans and EXCERPT_OF one stored edition, no content_key and no annotations of "
-            "its own; other editions have neither EXCERPT_OF nor spans"
-        ),
-        "phase": "before",
-        "query": f"""
-        UNWIND changedNodes AS e
-        WITH e WHERE e:Edition AND {_EXCERPT_EDITION_INVALID}
-        WITH collect(coalesce(e.id, elementId(e))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_excerpt_edition: Invalid excerpt edition content source. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": f"""
-        MATCH (e:Edition) WHERE {_EXCERPT_EDITION_INVALID}
-        RETURN coalesce(e.id, elementId(e)) AS violating_id
-    """,
-    }
+    _node_rule(
+        "enforce_excerpt_edition",
+        "An excerpt edition has spans and EXCERPT_OF one stored edition, no content_key and no annotations of "
+        "its own; other editions have neither EXCERPT_OF nor spans",
+        "Edition",
+        "Invalid excerpt edition content source",
+        """
+        CASE WHEN EXISTS { (node)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'}) } THEN
+            node.content_key IS NOT NULL
+            OR count { (node)-[:EXCERPT_OF]->(:Edition) } <> 1
+            OR NOT EXISTS { (:Span)-[:SPAN_OF]->(node) }
+            OR EXISTS { (node)-[:EXCERPT_OF]->(source:Edition) WHERE source.content_key IS NULL }
+            OR EXISTS { (node)-[:HAS_SEGMENTATION]->() }
+            OR EXISTS { (node)<-[:PAGINATION_OF|TOC_OF|NOTE_OF|MARK_OF|BIBLIOGRAPHY_OF|ATTRIBUTE_OF]-() }
+        ELSE EXISTS { (node)-[:EXCERPT_OF]->() } OR EXISTS { (:Span)-[:SPAN_OF]->(node) }
+        END
+        """,
+    )
+)
+_SEGMENT_REFERENCE_DUPLICATE = _reject(
+    "enforce_segment_reference_unique_per_segmentation", "Duplicate segment references", value="node.reference"
 )
 TRIGGERS.append(
-    {
-        "name": "enforce_segment_reference_unique_per_segmentation",
-        "description": "Non-null Segment.reference values must be unique within a segmentation",
-        "phase": "before",
-        "query": """
-        CALL (*) {
-            UNWIND changedNodes AS node
-            WITH node WHERE node:Segment
-            RETURN node
-          UNION ALL
-            UNWIND changedRelationships AS rel
-            WITH rel WHERE type(rel) = 'SEGMENT_OF'
-            WITH startNode(rel) AS node
-            WHERE node:Segment
-            RETURN node
-        }
-        WITH DISTINCT node
+    _trigger(
+        "enforce_segment_reference_unique_per_segmentation",
+        "Non-null Segment.reference values must be unique within a segmentation",
+        f"""
+        {_affected_sources("Segment", "SEGMENT_OF")}
         WHERE node.reference IS NOT NULL
         MATCH (node)-[:SEGMENT_OF]->(segmentation:Segmentation)<-[:SEGMENT_OF]-(other:Segment)
         WHERE other <> node AND other.reference = node.reference
-        WITH collect(DISTINCT node.reference) AS refs
-        WHERE size(refs) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_segment_reference_unique_per_segmentation: Duplicate segment references: %s',
-            [string.join(refs, ', ')]
-        )
-        RETURN null
+        {_SEGMENT_REFERENCE_DUPLICATE}
         """,
-        "audit": """
+        """
         MATCH (segmentation:Segmentation)<-[:SEGMENT_OF]-(segment:Segment)
         WHERE segment.reference IS NOT NULL
         WITH segmentation, segment.reference AS reference, count(segment) AS cnt
         WHERE cnt > 1
         RETURN segmentation.id + ':' + reference AS violating_id
         """,
-    }
+    )
 )
 
-TRIGGERS.append(
-    {
-        "name": "enforce_span_span_of",
-        "description": (
-            "Every Span must have SPAN_OF to one of: Segment, BibliographicMetadata, Note, Mark, Attribute, Page, "
-            "TableOfContentsSection, Cue, Edition"
-        ),
-        "phase": "before",
-        "query": f"""
-        {_affected_sources("Span", "SPAN_OF", "$deletedRelationships")}
-        WHERE NOT (node IN $deletedNodes)
-          AND NOT (node)-[:SPAN_OF]->(
-            :Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition
-        )
-        WITH collect(coalesce(toString(node.start), 'unknown')) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_span_span_of: Span must have SPAN_OF. Count: %s',
-            [toString(size(ids))]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (s:Span)
-        WHERE NOT (s)-[:SPAN_OF]->(
-            :Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition
-        )
-        RETURN elementId(s) AS violating_id
-    """,
-    }
+TRIGGERS.extend(
+    _required_rel_trigger(
+        "enforce_span_span_of",
+        "Every Span must have SPAN_OF to one of: Segment, BibliographicMetadata, Note, Mark, Attribute, Page, "
+        "TableOfContentsSection, Cue, Edition",
+        "Span",
+        "SPAN_OF",
+        "Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition",
+        cardinality="many",
+    )
 )
-TRIGGERS.append(
-    {
-        "name": "enforce_span_span_of_max_one",
-        "description": "Span must have at most one SPAN_OF relationship",
-        "phase": "before",
-        "query": f"""
-        {_affected_sources("Span", "SPAN_OF")}
-        {_multiple_outgoing("node", "SPAN_OF")}
-        WITH collect(coalesce(toString(node.start) + '-' + toString(node.end), 'unknown')) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_span_span_of_max_one: Span must have at most one SPAN_OF. Count: %s',
-            [toString(size(ids))]
-        )
-        RETURN null
-    """,
-        "audit": f"""
-        MATCH (s:Span)
-        {_multiple_outgoing("s", "SPAN_OF")}
-        RETURN elementId(s) AS violating_id
-    """,
-    }
-)
+TRIGGERS.append(_max_one_trigger("enforce_span_span_of_max_one", "Span", "SPAN_OF"))
 
 
 _AUDIO_ROLE_LIST = "[" + ", ".join(f"'{role}'" for role in AUDIO_ROLES) + "]"
+_AUDIO_ROLE_INVALID = f"""EXISTS {{
+    (node)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(rt:RoleType)
+    WHERE NOT coalesce(rt.name, '') IN {_AUDIO_ROLE_LIST}
+}}"""
 
 TRIGGERS.append(
-    {
-        "name": "enforce_audio_contribution_role",
-        "description": "Every Contribution on an Audio must have a performer role (narrator, singer or musician)",
-        "phase": "before",
-        "query": f"""
+    _trigger(
+        "enforce_audio_contribution_role",
+        "Every Contribution on an Audio must have a performer role (narrator, singer or musician)",
+        f"""
         CALL (*) {{
             UNWIND changedNodes AS n
             WITH n WHERE n:Audio
@@ -435,36 +336,22 @@ TRIGGERS.append(
             RETURN node
         }}
         WITH DISTINCT node
-        WHERE NOT (node IN $deletedNodes)
-          AND EXISTS {{
-            (node)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(rt:RoleType)
-            WHERE NOT coalesce(rt.name, '') IN {_AUDIO_ROLE_LIST}
-          }}
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_audio_contribution_role: Audio contributions must have role narrator, singer or musician. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": f"""
-        MATCH (a:Audio)-[:HAS_CONTRIBUTION]->(:Contribution)-[:WITH_ROLE]->(rt:RoleType)
-        WHERE NOT coalesce(rt.name, '') IN {_AUDIO_ROLE_LIST}
-        RETURN DISTINCT coalesce(a.id, elementId(a)) AS violating_id
-    """,
-    }
+        WHERE NOT (node IN $deletedNodes) AND {_AUDIO_ROLE_INVALID}
+        {_reject("enforce_audio_contribution_role", "Audio contributions must have role narrator, singer or musician")}
+        """,
+        f"MATCH (node:Audio) WHERE {_AUDIO_ROLE_INVALID} {_audit('node')}",
+    )
 )
 
 # --- Audio: the recited Text belongs to the Audio's Work --------------------
+_RECITATION_OUTSIDE_WORK = """(node)-[:RECITATION_OF]->(text:Text), (node)-[:AUDIO_OF]->(work:Work)
+    WHERE NOT (text)-[:TEXT_OF]->(work)"""
 TRIGGERS.append(
-    {
-        "name": "enforce_audio_recitation_in_work",
-        "description": "The Text an Audio recites must have TEXT_OF to the Audio's AUDIO_OF Work",
-        "phase": "before",
-        "query": """
-        CALL (*) {
+    _trigger(
+        "enforce_audio_recitation_in_work",
+        "The Text an Audio recites must have TEXT_OF to the Audio's AUDIO_OF Work",
+        f"""
+        CALL (*) {{
             UNWIND changedNodes AS n
             WITH n WHERE n:Audio
             RETURN n AS node
@@ -478,37 +365,19 @@ TRIGGERS.append(
             WITH n WHERE n:Work
             MATCH (node:Audio)-[:AUDIO_OF]->(n)
             RETURN node
-        }
+        }}
         WITH DISTINCT node
         WHERE NOT (node IN $deletedNodes)
-        MATCH (node)-[:RECITATION_OF]->(text:Text), (node)-[:AUDIO_OF]->(work:Work)
-        WITH node, text, work
-        WHERE NOT (text)-[:TEXT_OF]->(work)
-        WITH collect(DISTINCT coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_audio_recitation_in_work: Audio must recite a Text of its own Work. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (a:Audio)-[:RECITATION_OF]->(text:Text), (a)-[:AUDIO_OF]->(work:Work)
-        WHERE NOT (text)-[:TEXT_OF]->(work)
-        RETURN DISTINCT coalesce(a.id, elementId(a)) AS violating_id
-    """,
-    }
+        MATCH {_RECITATION_OUTSIDE_WORK}
+        {_reject("enforce_audio_recitation_in_work", "Audio must recite a Text of its own Work")}
+        """,
+        f"MATCH {_RECITATION_OUTSIDE_WORK} {_audit('node')}",
+    )
 )
 
 # --- Recording: at most one FOLLOWS, and only to an edition of the recited Text --
 TRIGGERS.append(
-    _rel_target_type_trigger(
-        "enforce_follows_target",
-        "FOLLOWS must point to an Edition node",
-        "FOLLOWS",
-        "Edition",
-    )
+    _rel_target_type_trigger("enforce_follows_target", "FOLLOWS must point to an Edition node", "FOLLOWS", "Edition")
 )
 for name, source, relationship, target in [
     ("enforce_recording_follows_max_one", "Recording", "FOLLOWS", "Edition"),
@@ -516,13 +385,15 @@ for name, source, relationship, target in [
     ("enforce_recording_has_title_max_one", "Recording", "HAS_TITLE", "Nomen"),
 ]:
     TRIGGERS.append(_max_one_trigger(name, source, relationship, target))
+
+_FOLLOWS_OTHER_TEXT = """(node)-[:FOLLOWS]->(edition:Edition)
+    WHERE NOT EXISTS { (edition)-[:EDITION_OF]->(:Text)<-[:RECITATION_OF]-(:Audio)<-[:RENDITION_OF]-(node) }"""
 TRIGGERS.append(
-    {
-        "name": "enforce_recording_follows_recited_text",
-        "description": "The Edition a Recording follows must be an edition of the Text its Audio recites",
-        "phase": "before",
-        "query": """
-        CALL (*) {
+    _trigger(
+        "enforce_recording_follows_recited_text",
+        "The Edition a Recording follows must be an edition of the Text its Audio recites",
+        f"""
+        CALL (*) {{
             UNWIND changedNodes AS n
             WITH n WHERE n:Recording
             RETURN n AS node
@@ -536,41 +407,23 @@ TRIGGERS.append(
             WITH n WHERE n:Audio
             MATCH (node:Recording)-[:RENDITION_OF]->(n)
             RETURN node
-        }
+        }}
         WITH DISTINCT node
         WHERE NOT (node IN $deletedNodes)
-        MATCH (node)-[:FOLLOWS]->(edition:Edition)
-        WITH node, edition
-        WHERE NOT EXISTS {
-            (edition)-[:EDITION_OF]->(:Text)<-[:RECITATION_OF]-(:Audio)<-[:RENDITION_OF]-(node)
-        }
-        WITH collect(DISTINCT coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_recording_follows_recited_text: Recording must follow an edition of the recited Text. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (r:Recording)-[:FOLLOWS]->(edition:Edition)
-        WHERE NOT EXISTS {
-            (edition)-[:EDITION_OF]->(:Text)<-[:RECITATION_OF]-(:Audio)<-[:RENDITION_OF]-(r)
-        }
-        RETURN DISTINCT coalesce(r.id, elementId(r)) AS violating_id
-    """,
-    }
+        MATCH {_FOLLOWS_OTHER_TEXT}
+        {_reject("enforce_recording_follows_recited_text", "Recording must follow an edition of the recited Text")}
+        """,
+        f"MATCH {_FOLLOWS_OTHER_TEXT} {_audit('node')}",
+    )
 )
 
 # --- Cue: only on a Recording that follows an Edition, and never across a FOLLOWS change --
 TRIGGERS.append(
-    {
-        "name": "enforce_cue_requires_follows",
-        "description": "Cues require FOLLOWS; removing or replacing FOLLOWS requires deleting the cues",
-        "phase": "before",
-        "query": """
-        CALL (*) {
+    _trigger(
+        "enforce_cue_requires_follows",
+        "Cues require FOLLOWS; removing or replacing FOLLOWS requires deleting the cues",
+        f"""
+        CALL (*) {{
             UNWIND changedNodes AS n
             WITH n WHERE n:Recording
             RETURN n AS node, false AS unfollowed
@@ -585,288 +438,109 @@ TRIGGERS.append(
             WITH startNode(rel) AS node
             WHERE node:Recording
             RETURN node, true AS unfollowed
-        }
+        }}
         WITH node, any(flag IN collect(unfollowed) WHERE flag) AS unfollowed
         WHERE NOT (node IN $deletedNodes)
-          AND EXISTS { (:Cue)-[:CUE_OF]->(node) }
+          AND EXISTS {{ (:Cue)-[:CUE_OF]->(node) }}
           AND (unfollowed OR NOT (node)-[:FOLLOWS]->(:Edition))
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_cue_requires_follows: Cues need FOLLOWS and must be deleted when FOLLOWS changes. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (r:Recording)
-        WHERE EXISTS { (:Cue)-[:CUE_OF]->(r) } AND NOT (r)-[:FOLLOWS]->(:Edition)
-        RETURN coalesce(r.id, elementId(r)) AS violating_id
-    """,
-    }
+        {_reject("enforce_cue_requires_follows", "Cues need FOLLOWS and must be deleted when FOLLOWS changes")}
+        """,
+        f"""
+        MATCH (node:Recording)
+        WHERE EXISTS {{ (:Cue)-[:CUE_OF]->(node) }} AND NOT (node)-[:FOLLOWS]->(:Edition)
+        {_audit("node")}
+        """,
+    )
+)
+
+TRIGGERS.extend(
+    _required_rel_trigger("enforce_cue_cue_of", "Every Cue must have CUE_OF->Recording", "Cue", "CUE_OF", "Recording")
+)
+TRIGGERS.append(
+    _node_rule(
+        "enforce_cue_start_ms_lt_end_ms",
+        "Cue.start_ms must be less than Cue.end_ms",
+        "Cue",
+        "Cue.start_ms must be < Cue.end_ms",
+        "node.start_ms >= node.end_ms",
+    )
 )
 
 TRIGGERS.extend(
     _required_rel_trigger(
-        "enforce_cue_cue_of",
-        "Every Cue must have CUE_OF->Recording",
-        "Cue",
-        "CUE_OF",
-        "Recording",
+        "enforce_contribution_by",
+        "Every Contribution must have BY->Person or BY->AI",
+        "Contribution",
+        "BY",
+        "Person|AI",
+        cardinality="many",
     )
 )
-TRIGGERS.append(
-    {
-        "name": "enforce_cue_start_ms_lt_end_ms",
-        "description": "Cue.start_ms must be less than Cue.end_ms",
-        "phase": "before",
-        "query": """
-        UNWIND changedNodes AS node
-        WITH node
-        WHERE node:Cue
-        WITH node
-        WHERE node.start_ms >= node.end_ms
-        WITH collect(toString(node.start_ms) + '-' + toString(node.end_ms)) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_cue_start_ms_lt_end_ms: Cue.start_ms must be < Cue.end_ms. Cues: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (t:Cue)
-        WHERE t.start_ms >= t.end_ms
-        RETURN toString(t.start_ms) + '-' + toString(t.end_ms) AS violating_id
-    """,
-    }
-)
+TRIGGERS.append(_max_one_trigger("enforce_contribution_by_max_one", "Contribution", "BY"))
 
 TRIGGERS.append(
-    {
-        "name": "enforce_contribution_by",
-        "description": "Every Contribution must have BY->Person or BY->AI",
-        "phase": "before",
-        "query": f"""
-        {_affected_sources("Contribution", "BY", "$deletedRelationships")}
-        WHERE NOT (node IN $deletedNodes)
-          AND NOT (node)-[:BY]->(:Person|AI)
-        WITH collect(elementId(node)) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_contribution_by: Contribution must have BY->Person|AI. Count: %s',
-            [toString(size(ids))]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (c:Contribution)
-        WHERE NOT (c)-[:BY]->(:Person|AI)
-        RETURN elementId(c) AS violating_id
-    """,
-    }
+    _node_rule(
+        "enforce_text_translation_commentary_exclusive",
+        "A Text must not have both TRANSLATION_OF and COMMENTARY_OF",
+        "Text",
+        "Text has both TRANSLATION_OF and COMMENTARY_OF",
+        "(node)-[:TRANSLATION_OF]->() AND (node)-[:COMMENTARY_OF]->()",
+    )
 )
-TRIGGERS.append(
-    {
-        "name": "enforce_contribution_by_max_one",
-        "description": "Contribution must have at most one BY relationship",
-        "phase": "before",
-        "query": f"""
-        {_affected_sources("Contribution", "BY")}
-        {_multiple_outgoing("node", "BY")}
-        WITH collect(elementId(node)) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_contribution_by_max_one: Contribution must have at most one BY. Count: %s',
-            [toString(size(ids))]
-        )
-        RETURN null
-    """,
-        "audit": f"""
-        MATCH (c:Contribution)
-        {_multiple_outgoing("c", "BY")}
-        RETURN elementId(c) AS violating_id
-    """,
-    }
-)
-
-
-# --- Text: TRANSLATION_OF and COMMENTARY_OF are mutually exclusive ----------
-TRIGGERS.append(
-    {
-        "name": "enforce_text_translation_commentary_exclusive",
-        "description": "A Text must not have both TRANSLATION_OF and COMMENTARY_OF",
-        "phase": "before",
-        "query": """
-        UNWIND changedNodes AS node
-        WITH node
-        WHERE node:Text
-        WITH node
-        WHERE (node)-[:TRANSLATION_OF]->() AND (node)-[:COMMENTARY_OF]->()
-        WITH collect(coalesce(node.id, elementId(node))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_text_translation_commentary_exclusive: Text has both TRANSLATION_OF and COMMENTARY_OF. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (t:Text)
-        WHERE (t)-[:TRANSLATION_OF]->() AND (t)-[:COMMENTARY_OF]->()
-        RETURN coalesce(t.id, elementId(t)) AS violating_id
-    """,
-    }
-)
-
-# --- Self-referential prevention -------------------------------------------
-# A relationship must not point back to the same node it originates from.
-
-
-def _no_self_ref_trigger(rel_type: str, description: str | None = None) -> dict:
-    """Generate a trigger + audit pair preventing a relationship from pointing to itself."""
-    name = f"enforce_no_self_{rel_type.lower()}"
-    return {
-        "name": name,
-        "description": description or f"{rel_type} must not point to self",
-        "phase": "before",
-        "query": f"""
-            UNWIND changedRelationships AS rel
-            WITH rel
-            WHERE type(rel) = '{rel_type}'
-            WITH rel, startNode(rel) AS source, endNode(rel) AS target
-            WHERE source = target
-            WITH collect(coalesce(source.id, elementId(source))) AS ids
-            WHERE size(ids) > 0
-            CALL apoc.util.validate(
-                true,
-                '{name}: {rel_type} must not be self-referential. IDs: %s',
-                [string.join(ids, ', ')]
-            )
-            RETURN null
-        """,
-        "audit": f"""
-            MATCH (n)-[:{rel_type}]->(n)
-            RETURN coalesce(n.id, elementId(n)) AS violating_id
-        """,
-    }
-
 
 TRIGGERS.extend(
     _no_self_ref_trigger(relationship)
     for relationship in ("TRANSLATION_OF", "COMMENTARY_OF", "PART_OF", "ALTERNATIVE_OF", "HAS_PARENT", "ALIGNED_TO")
 )
 
-# --- Span: start must not be greater than end ------------------------------
 TRIGGERS.append(
-    {
-        "name": "enforce_span_start_lte_end",
-        "description": "Span.start must not be greater than Span.end",
-        "phase": "before",
-        "query": """
-        UNWIND changedNodes AS node
-        WITH node
-        WHERE node:Span
-        WITH node
-        WHERE node.start IS NULL OR node.end IS NULL OR node.start < 0 OR node.start > node.end
-        WITH collect(elementId(node)) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_span_start_lte_end: Span.start must be <= Span.end. Spans: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (s:Span)
-        WHERE s.start IS NULL OR s.end IS NULL OR s.start < 0 OR s.start > s.end
-        RETURN elementId(s) AS violating_id
-    """,
-    }
+    _node_rule(
+        "enforce_span_start_lte_end",
+        "Span.start must not be greater than Span.end",
+        "Span",
+        "Span.start must be <= Span.end",
+        "node.start IS NULL OR node.end IS NULL OR node.start < 0 OR node.start > node.end",
+    )
 )
 
-# --- Nomen: ALTERNATIVE_OF must not form chains ----------------------------
-# If Nomen A -[:ALTERNATIVE_OF]-> Nomen B, then B must NOT itself have
-# an outgoing ALTERNATIVE_OF. Only one level of indirection is allowed.
+# Only one level of indirection: an alternative Nomen is never itself the target of ALTERNATIVE_OF.
 TRIGGERS.append(
-    {
-        "name": "enforce_nomen_no_alternative_chain",
-        "description": "A Nomen that is ALTERNATIVE_OF another must not itself be the target of ALTERNATIVE_OF",
-        "phase": "before",
-        "query": """
-        UNWIND changedRelationships AS rel
-        WITH rel
-        WHERE type(rel) = 'ALTERNATIVE_OF'
-        WITH startNode(rel) AS child, endNode(rel) AS parent
-        WHERE (child)<-[:ALTERNATIVE_OF]-() OR (parent)-[:ALTERNATIVE_OF]->()
-        WITH collect(coalesce(child.id, elementId(child))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_nomen_no_alternative_chain: ALTERNATIVE_OF must not form chains. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": """
-        MATCH (a:Nomen)-[:ALTERNATIVE_OF]->(b:Nomen)-[:ALTERNATIVE_OF]->(c:Nomen)
-        RETURN coalesce(b.id, elementId(b)) AS violating_id
-    """,
-    }
+    _rel_rule(
+        "enforce_nomen_no_alternative_chain",
+        "A Nomen that is ALTERNATIVE_OF another must not itself be the target of ALTERNATIVE_OF",
+        "ALTERNATIVE_OF",
+        "ALTERNATIVE_OF must not form chains",
+        "(source)<-[:ALTERNATIVE_OF]-() OR (target)-[:ALTERNATIVE_OF]->()",
+    )
 )
 
-
-# --- Work: at most one original Text --------------------------------------
-# A Work can only have one Text with TEXT_OF {original: true}
+_ORIGINAL_TEXT_COUNT = "count { (work)<-[:TEXT_OF {original: true}]-(:Text) }"
 TRIGGERS.append(
-    {
-        "name": "enforce_work_one_original_text",
-        "description": "A Work can have at most one original Text (TEXT_OF with original:true)",
-        "phase": "before",
-        "query": """
+    _trigger(
+        "enforce_work_one_original_text",
+        "A Work can have at most one original Text (TEXT_OF with original:true)",
+        f"""
         UNWIND changedRelationships AS rel
         WITH rel
         WHERE type(rel) = 'TEXT_OF' AND rel.original = true
         WITH endNode(rel) AS work
-        WHERE work:Work
-        WITH work, count { (work)<-[:TEXT_OF {original: true}]-(:Text) } AS cnt
-        WHERE cnt > 1
-        WITH collect(coalesce(work.id, elementId(work))) AS ids
-        WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_work_one_original_text: Work already has an original text. IDs: %s',
-            [string.join(ids, ', ')]
-        )
-        RETURN null
+        WHERE work:Work AND {_ORIGINAL_TEXT_COUNT} > 1
+        {_reject("enforce_work_one_original_text", "Work already has an original text", "work")}
         """,
-        "audit": """
-        MATCH (w:Work)<-[:TEXT_OF {original: true}]-(:Text)
-        WITH w, count(*) AS cnt
-        WHERE cnt > 1
-        RETURN coalesce(w.id, elementId(w)) AS violating_id
-        """,
-    }
+        f"MATCH (work:Work) WHERE {_ORIGINAL_TEXT_COUNT} > 1 {_audit('work')}",
+    )
 )
 
-# --- Text: title + language must be unique --------------------------------
 TRIGGERS.append(
-    {
-        "name": "enforce_text_title_unique",
-        "description": "Text title + language combination must be unique among texts written in that language",
-        "phase": "before",
-        "query": """
+    _trigger(
+        "enforce_text_title_unique",
+        "Text title + language combination must be unique among texts written in that language",
+        f"""
         UNWIND changedNodes AS candidate
         WITH DISTINCT candidate WHERE NOT candidate IN $deletedNodes
         MATCH (candidate)-[:HAS_TITLE|HAS_LOCALIZATION*0..2]->(node:LocalizedText)
         MATCH (node)-[:HAS_LANGUAGE]->(language:Language)
-        WHERE EXISTS { (language)<-[:HAS_LANGUAGE]-(:Text)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(node) }
+        WHERE EXISTS {{ (language)<-[:HAS_LANGUAGE]-(:Text)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(node) }}
         WITH DISTINCT node, language ORDER BY language.code
         WITH collect(DISTINCT node) AS titles, collect(DISTINCT language) AS languages
         // Serialize title checks on existing language nodes before reading competing titles.
@@ -874,28 +548,21 @@ TRIGGERS.append(
         UNWIND titles AS node
         MATCH (node)-[rel:HAS_LANGUAGE]->(lang:Language)
         WITH node, toLower(coalesce(rel.bcp47, lang.code)) AS title_lang
-        MATCH (other:LocalizedText {text: node.text})-[other_rel:HAS_LANGUAGE]->(other_lang:Language)
+        MATCH (other:LocalizedText {{text: node.text}})-[other_rel:HAS_LANGUAGE]->(other_lang:Language)
         MATCH (other_lang)<-[:HAS_LANGUAGE]-(other_text:Text)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(other)
         WHERE toLower(coalesce(other_rel.bcp47, other_lang.code)) = title_lang
         WITH node.text AS text, title_lang AS lang, count(DISTINCT other_text) AS text_count
         WHERE text_count > 1
-        WITH collect(DISTINCT text + ':' + lang) AS combos
-        WHERE size(combos) > 0
-        CALL apoc.util.validate(
-            true,
-            'enforce_text_title_unique: Duplicate title+language exists. Combos: %s',
-            [string.join(combos, ', ')]
-        )
-        RETURN null
+        {_reject("enforce_text_title_unique", "Duplicate title+language exists", value="text + ':' + lang")}
         """,
-        "audit": """
+        """
         MATCH (l:Language)<-[:HAS_LANGUAGE]-(t:Text)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
               -[rel:HAS_LANGUAGE]->(l)
         WITH lt.text AS text, toLower(coalesce(rel.bcp47, l.code)) AS lang, count(DISTINCT t) AS cnt
         WHERE cnt > 1
         RETURN text + ':' + lang AS violating_id
         """,
-    }
+    )
 )
 
 
@@ -929,11 +596,10 @@ _TOC_INVALID = """
     }
 """
 TRIGGERS.append(
-    {
-        "name": "enforce_toc_hierarchy",
-        "description": "TOC parents form a contained tree within one TOC",
-        "phase": "before",
-        "query": f"""
+    _trigger(
+        "enforce_toc_hierarchy",
+        "TOC parents form a contained tree within one TOC",
+        f"""
         UNWIND changedNodes AS n
         CALL (n) {{
             WITH n WHERE n:TableOfContentsSection RETURN n AS section
@@ -942,15 +608,10 @@ TRIGGERS.append(
         WITH section WHERE NOT section IN $deletedNodes
         UNWIND [section] + [(child:TableOfContentsSection)-[:SUBSECTION_OF]->(section) | child] AS s
         WITH DISTINCT s WHERE {_TOC_INVALID}
-        WITH collect(coalesce(s.id, elementId(s))) AS ids WHERE size(ids) > 0
-        CALL apoc.util.validate(
-            true, 'enforce_toc_hierarchy: Invalid section hierarchy. IDs: %s', [string.join(ids, ', ')]
-        )
-        RETURN null
-    """,
-        "audit": f"""MATCH (s:TableOfContentsSection) WHERE {_TOC_INVALID}
-            RETURN coalesce(s.id, elementId(s)) AS violating_id""",
-    }
+        {_reject("enforce_toc_hierarchy", "Invalid section hierarchy", "s")}
+        """,
+        f"MATCH (s:TableOfContentsSection) WHERE {_TOC_INVALID} {_audit('s')}",
+    )
 )
 
 # APOC supplies changed properties and labels separately from created elements. Bind the surviving
@@ -1026,12 +687,14 @@ async def wait_for_triggers(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_seconds
     while True:
-        async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
-            result = await session.run("CALL apoc.trigger.show($database) YIELD name, query", database=database)
-            expected = {record["name"]: record["query"] async for record in result}
-        async with driver.session(database=database) as session:
-            result = await session.run("CALL apoc.trigger.list() YIELD name, query RETURN name, query")
-            live = {record["name"]: record["query"] async for record in result}
+        installed, _, _ = await driver.execute_query(
+            "CALL apoc.trigger.show($database) YIELD name, query", database=database, database_=SYSTEM_DATABASE_NAME
+        )
+        running, _, _ = await driver.execute_query(
+            "CALL apoc.trigger.list() YIELD name, query RETURN name, query", database_=database
+        )
+        expected = {record["name"]: record["query"] for record in installed}
+        live = {record["name"]: record["query"] for record in running}
         if live == expected and set(expected) == names:
             return
         if loop.time() >= deadline:

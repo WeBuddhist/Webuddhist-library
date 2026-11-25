@@ -7,7 +7,7 @@ from fastapi.security import APIKeyHeader
 from catalog_search import CatalogSearchService
 from content_search import ContentSearchService
 from database import Database
-from exceptions import ForbiddenError, ServiceUnavailableError, UnauthorizedError
+from exceptions import DataNotFoundError, ForbiddenError, ServiceUnavailableError, UnauthorizedError
 from storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,16 @@ DatabaseDep = Annotated[Database, Depends(get_db)]
 StorageDep = Annotated[Storage, Depends(get_storage)]
 
 
+async def get_application(db: DatabaseDep, x_application: RequiredAppHeader) -> str:
+    """The X-Application header, once the application it names is known to exist."""
+    if not await db.application.exists(x_application):
+        raise DataNotFoundError(f"Application '{x_application}' not found")
+    return x_application
+
+
+ApplicationDep = Annotated[str, Depends(get_application)]
+
+
 def get_content_search(request: Request) -> ContentSearchService:
     """Dependency that provides the content search service from app.state."""
     service = getattr(request.app.state, "content_search", None)
@@ -62,6 +72,9 @@ def get_content_search(request: Request) -> ContentSearchService:
 def get_catalog_search(request: Request) -> CatalogSearchService | None:
     """Dependency that provides the catalog search service from app.state."""
     return getattr(request.app.state, "catalog_search", None)
+
+
+CatalogSearchDep = Annotated[CatalogSearchService | None, Depends(get_catalog_search)]
 
 
 async def get_api_key(

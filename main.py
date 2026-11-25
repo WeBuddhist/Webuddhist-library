@@ -19,12 +19,7 @@ from dependencies import get_api_key
 from exceptions import InvalidRequestError, OpenPechaError
 from observability import setup_telemetry
 from routers.alignments import router as alignments_router
-from routers.annotation.bibliographic import router as bibliographic_router
-from routers.annotation.durchens import router as durchens_router
-from routers.annotation.footnotes import router as footnotes_router
-from routers.annotation.paginations import router as paginations_router
-from routers.annotation.table_of_contents import router as table_of_contents_router
-from routers.annotation.yigchungs import router as yigchungs_router
+from routers.annotations import router as annotations_router
 from routers.applications import router as applications_router
 from routers.audios import router as audios_router
 from routers.categories import router as categories_router
@@ -141,11 +136,6 @@ def create_app(*, testing: bool = False) -> FastAPI:
         """Handle OpenPecha custom exceptions."""
         return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
 
-    @app.exception_handler(NotImplementedError)
-    async def not_implemented_handler(_request: Request, exc: NotImplementedError) -> JSONResponse:
-        """Handle not implemented errors."""
-        return JSONResponse(status_code=501, content={"error": str(exc)})
-
     @app.exception_handler(Neo4jClientError)
     async def neo4j_client_error_handler(_request: Request, exc: Neo4jClientError) -> JSONResponse:
         """Handle Neo4j client errors with concise messages."""
@@ -191,12 +181,7 @@ def create_app(*, testing: bool = False) -> FastAPI:
         tags_router,
         languages_router,
         alignments_router,
-        paginations_router,
-        table_of_contents_router,
-        bibliographic_router,
-        durchens_router,
-        footnotes_router,
-        yigchungs_router,
+        annotations_router,
         applications_router,
         content_search_router,
         segments_router,

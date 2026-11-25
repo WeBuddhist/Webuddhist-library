@@ -5,7 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import LiteralString, cast
 
-from neo4j import AsyncDriver, AsyncManagedTransaction, AsyncSession
+from neo4j import AsyncDriver, AsyncManagedTransaction, RoutingControl
 
 from database.neo4j_triggers import audit_triggers, install_triggers
 from identifier import generate_id
@@ -122,28 +122,27 @@ UPGRADE_RECORDING_QUERY: LiteralString = """
 """
 
 
+async def _ids(driver: AsyncDriver, database: str, query: LiteralString, **params: object) -> list[str]:
+    """The first column of every row."""
+    records, _, _ = await driver.execute_query(query, params, database_=database, routing_=RoutingControl.READ)
+    return [record[0] for record in records]
+
+
 async def legacy_recording_ids(driver: AsyncDriver, database: str) -> list[str]:
     """Recordings still attached to an edition, waiting for `migrate`."""
-    async with driver.session(database=database) as session:
-        result = await session.run(LEGACY_RECORDINGS_QUERY)
-        return await result.value()
+    return await _ids(driver, database, LEGACY_RECORDINGS_QUERY)
 
 
 async def unconvertible_recording_ids(driver: AsyncDriver, database: str) -> list[str]:
-    async with driver.session(database=database) as session:
-        result = await session.run(UNCONVERTIBLE_RECORDINGS_QUERY, roles=list(AUDIO_ROLES))
-        return await result.value()
+    return await _ids(driver, database, UNCONVERTIBLE_RECORDINGS_QUERY, roles=list(AUDIO_ROLES))
 
 
 async def audit_schema(driver: AsyncDriver, database: str) -> dict[str, list[str]]:
     """Report invariant violations. Legacy recordings are pending conversion, unless they cannot be converted."""
     violations = await audit_triggers(driver, database)
-    async with driver.session(database=database) as session:
-        for name, query in AUDITS.items():
-            result = await session.run(query)
-            ids = [record["violating_id"] async for record in result]
-            if ids:
-                violations[name] = ids
+    for name, query in AUDITS.items():
+        if ids := await _ids(driver, database, query):
+            violations[name] = ids
     legacy = set(await legacy_recording_ids(driver, database))
     if legacy:
         violations = {name: kept for name, ids in violations.items() if (kept := [i for i in ids if i not in legacy])}
@@ -173,38 +172,37 @@ async def upgrade_recordings(driver: AsyncDriver, database: str) -> int:
     return converted
 
 
-async def install_constraints(session: AsyncSession) -> None:
+async def install_constraints(driver: AsyncDriver, database: str) -> None:
     """Apply the checked-in constraints and indexes in file order."""
     constraints = Path(__file__).with_name("neo4j_constraints.cypher").read_text()
     for statement in constraints.split(";"):
         if statement.strip():
-            await (await session.run(cast(LiteralString, statement))).consume()
+            await driver.execute_query(cast(LiteralString, statement), database_=database)
 
 
 async def migrate(driver: AsyncDriver, database: str) -> None:
     """Audit and apply every idempotent step on each explicit invocation."""
-    async with driver.session(database="system") as system:
-        await (await system.run("ALTER DATABASE $database SET DEFAULT LANGUAGE CYPHER 25", database=database)).consume()
+    await driver.execute_query(
+        "ALTER DATABASE $database SET DEFAULT LANGUAGE CYPHER 25", database=database, database_="system"
+    )
 
     violations = await audit_schema(driver, database)
     if violations:
         for name, ids in violations.items():
             logger.error("%s: %s", name, ids[:20])
         raise RuntimeError("Schema audit failed; repair reported records before applying migrations")
-    async with driver.session(database=database) as session:
-        await install_constraints(session)
-        lookups: dict[LiteralString, type[StrEnum]] = {
-            "RoleType": ContributorRole,
-            "EditionType": EditionType,
-            "LicenseType": LicenseType,
-            "NoteType": NoteType,
-            "MarkType": MarkType,
-            "BibliographyType": BibliographyType,
-            "AttributeType": AttributeType,
-        }
-        for label, enum in lookups.items():
-            await (
-                await session.run(f"UNWIND $names AS name MERGE (:{label} {{name: name}})", names=list(enum))
-            ).consume()
+    await install_constraints(driver, database)
+    lookups: dict[LiteralString, type[StrEnum]] = {
+        "RoleType": ContributorRole,
+        "EditionType": EditionType,
+        "LicenseType": LicenseType,
+        "NoteType": NoteType,
+        "MarkType": MarkType,
+        "BibliographyType": BibliographyType,
+        "AttributeType": AttributeType,
+    }
+    for label, enum in lookups.items():
+        query = f"UNWIND $names AS name MERGE (:{label} {{name: name}})"
+        await driver.execute_query(query, names=list(enum), database_=database)
     await install_triggers(driver, database)
     await upgrade_recordings(driver, database)

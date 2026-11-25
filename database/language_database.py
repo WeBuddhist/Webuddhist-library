@@ -1,11 +1,9 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from neo4j.exceptions import ConstraintError
-
-from exceptions import DataConflictError, DataNotFoundError, DataValidationError
+from exceptions import DataValidationError
 from models.responses import LanguageResponse
 
-from .repository import SessionRepository
+from .repository import SessionRepository, fetch_record, on_constraint_violation, raise_if_blockers
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -16,11 +14,6 @@ class LanguageDatabase(SessionRepository):
     MATCH (l:Language)
     RETURN l.code AS code, l.name AS name
     ORDER BY l.code
-    """
-
-    GET_QUERY: LiteralString = """
-    MATCH (l:Language {code: $code})
-    RETURN l.code AS code, l.name AS name
     """
 
     CREATE_QUERY: LiteralString = """
@@ -40,11 +33,7 @@ class LanguageDatabase(SessionRepository):
     """
 
     async def get_all(self) -> list[LanguageResponse]:
-        async def read(tx: AsyncManagedTransaction) -> list[LanguageResponse]:
-            result = await tx.run(LanguageDatabase.GET_ALL_QUERY)
-            return [LanguageResponse(code=r["code"], name=r["name"]) for r in await result.data()]
-
-        return await self.execute_read(read)
+        return await self.query_all(LanguageDatabase.GET_ALL_QUERY, LanguageResponse)
 
     async def create(self, code: str, name: str) -> str:
         async def write(tx: AsyncManagedTransaction) -> str:
@@ -52,21 +41,16 @@ class LanguageDatabase(SessionRepository):
             record = await result.single(strict=True)
             return str(record["code"])
 
-        try:
+        with on_constraint_violation(DataValidationError, f"Language with code '{code}' already exists"):
             return await self.execute_write(write)
-        except ConstraintError as err:
-            raise DataValidationError(f"Language with code '{code}' already exists") from err
 
     async def delete(self, code: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
-            result = await tx.run(LanguageDatabase.DELETE_CHECK_QUERY, code=code)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Language with code '{code}' not found")
-            if record["reference_count"] > 0:
-                raise DataConflictError(
-                    f"Language '{code}' is referenced by {record['reference_count']} HAS_LANGUAGE relationship(s)"
-                )
+            not_found = f"Language with code '{code}' not found"
+            record = await fetch_record(tx, LanguageDatabase.DELETE_CHECK_QUERY, not_found, code=code)
+            raise_if_blockers(
+                f"Language '{code}' is referenced by", {"HAS_LANGUAGE relationship(s)": record["reference_count"]}
+            )
 
             await tx.run(LanguageDatabase.DELETE_QUERY, code=code)
 

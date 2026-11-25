@@ -1,14 +1,19 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from neo4j.exceptions import ConstraintError
-
-from exceptions import DataConflictError, DataNotFoundError
 from identifier import generate_id
 from models.person import PersonBase, PersonOutput
 
+from .cypher import match_in_id_order
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
-from .repository import SessionRepository
+from .repository import (
+    SessionRepository,
+    fetch_one,
+    fetch_record,
+    on_constraint_violation,
+    raise_if_blockers,
+    set_properties,
+)
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -34,10 +39,7 @@ class PersonDatabase(SessionRepository):
     """
 
     GET_BY_IDS_QUERY: LiteralString = f"""
-    UNWIND range(0, size($ids) - 1) AS idx
-    MATCH (p:Person {{id: $ids[idx]}})
-    WITH p, idx
-    ORDER BY idx
+    {match_in_id_order("p", "Person")}
     RETURN {_PERSON_RETURN} AS person
     """
 
@@ -60,12 +62,6 @@ class PersonDatabase(SessionRepository):
     RETURN p.id as person_id
     """
 
-    UPDATE_PROPERTIES_QUERY: LiteralString = """
-    MATCH (p:Person {id: $id})
-    SET p += $properties
-    RETURN p.id as person_id
-    """
-
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (p:Person {id: $person_id})
     RETURN count { (:Contribution)-[:BY]->(p) } AS contribution_count
@@ -85,22 +81,19 @@ class PersonDatabase(SessionRepository):
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, person_id: str) -> PersonOutput:
-        result = await tx.run(PersonDatabase.GET_QUERY, id=person_id)
-        record = await result.single()
-        if record is None:
-            raise DataNotFoundError(f"Person with ID '{person_id}' not found")
-        return PersonOutput.model_validate(record["person"])
+        return await fetch_one(
+            tx,
+            PersonDatabase.GET_QUERY,
+            PersonOutput,
+            f"Person with ID '{person_id}' not found",
+            field="person",
+            id=person_id,
+        )
 
     async def get_by_ids(self, person_ids: list[str]) -> list[PersonOutput]:
         if not person_ids:
             return []
-
-        async def read(tx: AsyncManagedTransaction) -> list[PersonOutput]:
-            result = await tx.run(PersonDatabase.GET_BY_IDS_QUERY, ids=person_ids)
-            records = await result.data()
-            return [PersonOutput.model_validate(record["person"]) for record in records]
-
-        return await self.execute_read(read)
+        return await self.query_all(PersonDatabase.GET_BY_IDS_QUERY, PersonOutput, field="person", ids=person_ids)
 
     async def get_all(
         self,
@@ -108,18 +101,15 @@ class PersonDatabase(SessionRepository):
         limit: int = 20,
         filters: PersonFilter | None = None,
     ) -> list[PersonOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[PersonOutput]:
-            result = await tx.run(
-                PersonDatabase.GET_ALL_QUERY,
-                offset=offset,
-                limit=limit,
-                bdrc=filters.bdrc if filters else None,
-                wiki=filters.wiki if filters else None,
-            )
-            records = await result.data()
-            return [PersonOutput.model_validate(record["person"]) for record in records]
-
-        return await self.execute_read(read)
+        return await self.query_all(
+            PersonDatabase.GET_ALL_QUERY,
+            PersonOutput,
+            field="person",
+            offset=offset,
+            limit=limit,
+            bdrc=filters.bdrc if filters else None,
+            wiki=filters.wiki if filters else None,
+        )
 
     async def create(self, person: PersonInput) -> str:
         async def create_transaction(tx: AsyncManagedTransaction) -> str:
@@ -137,23 +127,16 @@ class PersonDatabase(SessionRepository):
             record = await result.single(strict=True)
             return str(record["person_id"])
 
-        async with self.session as session:
-            try:
-                return str(await session.execute_write(create_transaction))
-            except ConstraintError as e:
-                raise DataConflictError(str(e)) from e
+        with on_constraint_violation():
+            return await self.execute_write(create_transaction)
 
     async def update(self, person_id: str, patch: PersonPatch) -> PersonOutput:
         async def update_transaction(tx: AsyncManagedTransaction) -> PersonOutput:
             await lock_nodes(tx, "Person", [person_id])
-            result = await tx.run(PersonDatabase.GET_QUERY, id=person_id)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Person with ID '{person_id}' not found")
+            not_found = f"Person with ID '{person_id}' not found"
+            record = await fetch_record(tx, PersonDatabase.GET_QUERY, not_found, id=person_id)
 
-            properties = patch.model_dump(include={"bdrc", "wiki"})
-            if properties:
-                await tx.run(PersonDatabase.UPDATE_PROPERTIES_QUERY, id=person_id, properties=properties)
+            await set_properties(tx, "Person", person_id, patch.model_dump(include={"bdrc", "wiki"}))
 
             if patch.model_fields_set & {"name", "alt_names"}:
                 updated = PersonBase.model_validate(record["person"] | patch.model_dump(), extra="ignore")
@@ -163,22 +146,17 @@ class PersonDatabase(SessionRepository):
                 )
             return await self.get_with_transaction(tx, person_id)
 
-        async with self.session as session:
-            try:
-                return await session.execute_write(update_transaction)
-            except ConstraintError as e:
-                raise DataConflictError(str(e)) from e
+        with on_constraint_violation():
+            return await self.execute_write(update_transaction)
 
     async def delete(self, person_id: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
-            result = await tx.run(PersonDatabase.DELETE_CHECK_QUERY, person_id=person_id)
-            record = await result.single()
-            if not record:
-                raise DataNotFoundError(f"Person with ID '{person_id}' not found")
-            if record["contribution_count"] > 0:
-                raise DataConflictError(
-                    f"Person '{person_id}' has {record['contribution_count']} contribution(s) and cannot be deleted"
-                )
+            not_found = f"Person with ID '{person_id}' not found"
+            record = await fetch_record(tx, PersonDatabase.DELETE_CHECK_QUERY, not_found, person_id=person_id)
+            raise_if_blockers(
+                f"Person '{person_id}' cannot be deleted because it has",
+                {"contribution(s)": record["contribution_count"]},
+            )
 
             await tx.run(PersonDatabase.DELETE_QUERY, person_id=person_id)
 

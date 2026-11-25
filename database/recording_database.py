@@ -10,7 +10,7 @@ from .content_state import ContentState, advance_revision, read_state, read_valu
 from .database_validator import DatabaseValidator
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
-from .repository import SessionRepository
+from .repository import SessionRepository, fetch_all, fetch_one, fetch_record, require_node, set_properties
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -49,10 +49,6 @@ class RecordingDatabase(SessionRepository):
     {_RECORDING_RETURN}
     """
 
-    AUDIO_EXISTS_QUERY: LiteralString = """
-    MATCH (a:Audio {id: $audio_id}) RETURN a.id AS id
-    """
-
     # Rule: a recording may only follow an edition of the text its Audio recites.
     FOLLOWS_TARGET_QUERY: LiteralString = """
     MATCH (a:Audio {id: $audio_id})-[:RECITATION_OF]->(recited:Text)
@@ -81,12 +77,6 @@ class RecordingDatabase(SessionRepository):
         }
     }
     RETURN r.id AS recording_id
-    """
-
-    UPDATE_PROPERTIES_QUERY: LiteralString = """
-    MATCH (r:Recording {id: $recording_id})
-    SET r += $properties
-    FINISH
     """
 
     SET_FOLLOWS_QUERY: LiteralString = """
@@ -158,17 +148,21 @@ class RecordingDatabase(SessionRepository):
 
     @staticmethod
     async def get_with_transaction(tx: AsyncManagedTransaction, recording_id: str) -> RecordingOutput:
-        result = await tx.run(RecordingDatabase.GET_BY_ID_QUERY, recording_id=recording_id)
-        record = await result.single()
-        if record is None:
-            raise DataNotFoundError(f"Recording with ID '{recording_id}' not found")
-        return RecordingOutput.model_validate(record["recording"])
+        return await fetch_one(
+            tx,
+            RecordingDatabase.GET_BY_ID_QUERY,
+            RecordingOutput,
+            f"Recording with ID '{recording_id}' not found",
+            field="recording",
+            recording_id=recording_id,
+        )
 
     async def get_all_by_audio(self, audio_id: str) -> list[RecordingOutput]:
         async def read(tx: AsyncManagedTransaction) -> list[RecordingOutput]:
             await RecordingDatabase._validate_audio_exists(tx, audio_id)
-            result = await tx.run(RecordingDatabase.GET_BY_AUDIO_ID_QUERY, audio_id=audio_id)
-            return [RecordingOutput.model_validate(record["recording"]) for record in await result.data()]
+            return await fetch_all(
+                tx, RecordingDatabase.GET_BY_AUDIO_ID_QUERY, RecordingOutput, field="recording", audio_id=audio_id
+            )
 
         return await self.execute_read(read)
 
@@ -177,28 +171,21 @@ class RecordingDatabase(SessionRepository):
 
         async def read(tx: AsyncManagedTransaction) -> list[RecordingOutput]:
             await DatabaseValidator.validate_edition_exists(tx, edition_id)
-            result = await tx.run(RecordingDatabase.GET_BY_EDITION_ID_QUERY, edition_id=edition_id)
-            return [RecordingOutput.model_validate(record["recording"]) for record in await result.data()]
+            return await fetch_all(
+                tx, RecordingDatabase.GET_BY_EDITION_ID_QUERY, RecordingOutput, field="recording", edition_id=edition_id
+            )
 
         return await self.execute_read(read)
 
     async def get_storage_location(self, recording_id: str) -> str:
         """Return the immutable audio-object key stored with the recording."""
-
-        async def read(tx: AsyncManagedTransaction) -> str:
-            result = await tx.run(RecordingDatabase.GET_STORAGE_KEY_QUERY, recording_id=recording_id)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Recording with ID '{recording_id}' not found")
-            return record["key"]
-
-        return await self.execute_read(read)
+        not_found = f"Recording with ID '{recording_id}' not found"
+        record = await self.query_record(RecordingDatabase.GET_STORAGE_KEY_QUERY, not_found, recording_id=recording_id)
+        return record["key"]
 
     @staticmethod
     async def _validate_audio_exists(tx: AsyncManagedTransaction, audio_id: str) -> None:
-        result = await tx.run(RecordingDatabase.AUDIO_EXISTS_QUERY, audio_id=audio_id)
-        if await result.single() is None:
-            raise DataNotFoundError(f"Audio with ID '{audio_id}' not found")
+        await require_node(tx, "Audio", audio_id, DataNotFoundError(f"Audio with ID '{audio_id}' not found"))
 
     @staticmethod
     async def validate_target_with_transaction(
@@ -222,10 +209,8 @@ class RecordingDatabase(SessionRepository):
 
     @staticmethod
     async def _get_links(tx: AsyncManagedTransaction, recording_id: str) -> tuple[str, str | None]:
-        result = await tx.run(RecordingDatabase.LINKS_QUERY, recording_id=recording_id)
-        record = await result.single()
-        if record is None:
-            raise DataNotFoundError(f"Recording with ID '{recording_id}' not found")
+        not_found = f"Recording with ID '{recording_id}' not found"
+        record = await fetch_record(tx, RecordingDatabase.LINKS_QUERY, not_found, recording_id=recording_id)
         return record["audio_id"], record["edition_id"]
 
     @staticmethod
@@ -250,8 +235,7 @@ class RecordingDatabase(SessionRepository):
 
     async def get_cues(self, recording_id: str) -> list[RecordingCue]:
         async def cues(tx: AsyncManagedTransaction) -> list[RecordingCue]:
-            result = await tx.run(RecordingDatabase.GET_CUES_QUERY, recording_id=recording_id)
-            return [RecordingCue.model_validate(record) for record in await result.data()]
+            return await fetch_all(tx, RecordingDatabase.GET_CUES_QUERY, RecordingCue, recording_id=recording_id)
 
         async def read(tx: AsyncManagedTransaction) -> list[RecordingCue]:
             _, edition_id = await RecordingDatabase._get_links(tx, recording_id)
@@ -354,9 +338,8 @@ class RecordingDatabase(SessionRepository):
         await lock_nodes(tx, "Audio", [audio_id])
         await RecordingDatabase.validate_target_with_transaction(tx, audio_id, recording.edition_id)
 
-        title_nomen_id = None
-        if recording.title:
-            title_nomen_id = await NomenDatabase.create_with_transaction(tx, recording.title.root)
+        title = recording.title.root if recording.title else None
+        title_nomen_id = await NomenDatabase.create_optional_with_transaction(tx, title)
 
         result = await tx.run(
             RecordingDatabase.CREATE_QUERY,
@@ -376,16 +359,9 @@ class RecordingDatabase(SessionRepository):
     async def update(self, recording_id: str, patch: RecordingPatch) -> RecordingOutput:
         async def write(tx: AsyncManagedTransaction) -> RecordingOutput:
             await lock_nodes(tx, "Recording", [recording_id])
-            result = await tx.run("MATCH (r:Recording {id: $id}) RETURN r.id AS id", id=recording_id)
-            if await result.single() is None:
-                raise DataNotFoundError(f"Recording '{recording_id}' not found")
-            properties = patch.model_dump(include={"duration_ms"})
-            if properties:
-                await tx.run(
-                    RecordingDatabase.UPDATE_PROPERTIES_QUERY,
-                    recording_id=recording_id,
-                    properties=properties,
-                )
+            not_found = DataNotFoundError(f"Recording with ID '{recording_id}' not found")
+            await require_node(tx, "Recording", recording_id, not_found)
+            await set_properties(tx, "Recording", recording_id, patch.model_dump(include={"duration_ms"}))
 
             if patch.title is not MISSING:
                 await NomenDatabase.replace_with_transaction(tx, "Recording", recording_id, patch.title.root)

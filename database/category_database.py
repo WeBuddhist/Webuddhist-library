@@ -2,13 +2,14 @@ from typing import TYPE_CHECKING, LiteralString
 
 from pydantic import MISSING
 
-from exceptions import DataConflictError, DataNotFoundError, DataValidationError
+from exceptions import DataNotFoundError
 from identifier import generate_id
 from models.category import CategoryOutput
 
 from .locking import lock_nodes
 from .nomen_database import NomenDatabase
-from .repository import SessionRepository
+from .repository import SessionRepository, fetch_one, fetch_record, raise_if_blockers, require
+from .tag_database import find_existing_title_query, validate_unique_title
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -70,26 +71,14 @@ class CategoryDatabase(SessionRepository):
     RETURN {_CATEGORY_RETURN}
     """
 
-    FIND_EXISTING_QUERY: LiteralString = """
-        MATCH (app:Application {id: $application})
-        UNWIND $titles AS title
-        MATCH (c:Category)-[:BELONGS_TO]->(:Application {id: $application})
-        WHERE (($parent_id IS NULL AND NOT EXISTS { (c)-[:HAS_PARENT]->(:Category) })
-           OR (c)-[:HAS_PARENT]->(:Category {id: $parent_id}))
-          AND ($category_id IS NULL OR c.id <> $category_id)
-        MATCH (c)-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(lt:LocalizedText)
-            -[r:HAS_LANGUAGE]->(lang:Language)
-        WHERE toLower(coalesce(r.bcp47, lang.code)) = toLower(title.language)
-          AND toLower(lt.text) = toLower(title.text)
-        RETURN title.language AS language, title.text AS title_text, c.id AS category_id
-        LIMIT 1
-    """
-
-    PARENT_EXISTS_QUERY: LiteralString = """
-        RETURN EXISTS {
-            (:Category {id: $parent_id})-[:BELONGS_TO]->(:Application {id: $application})
-        } AS exists
-    """
+    FIND_EXISTING_QUERY: LiteralString = find_existing_title_query(
+        "Category",
+        """
+        WHERE (($parent_id IS NULL AND NOT EXISTS { (n)-[:HAS_PARENT]->(:Category) })
+           OR (n)-[:HAS_PARENT]->(:Category {id: $parent_id}))
+          AND ($category_id IS NULL OR n.id <> $category_id)
+        """,
+    )
 
     DELETE_CHECK_QUERY: LiteralString = """
     MATCH (root:Category {id: $category_id})-[:BELONGS_TO]->(app:Application {id: $application})
@@ -115,26 +104,26 @@ class CategoryDatabase(SessionRepository):
     RETURN deleted_count
     """
 
-    async def get_by_id(self, category_id: str, application: str) -> CategoryOutput | None:
+    async def get_by_id(self, category_id: str, application: str) -> CategoryOutput:
         return await self.execute_read(self.get_with_transaction, category_id, application)
 
     @staticmethod
-    async def get_with_transaction(
-        tx: AsyncManagedTransaction, category_id: str, application: str
-    ) -> CategoryOutput | None:
-        result = await tx.run(CategoryDatabase.GET_BY_ID_QUERY, category_id=category_id, application=application)
-        record = await result.single()
-        if record is None:
-            return None
-        return CategoryOutput.model_validate(record["category"])
+    async def get_with_transaction(tx: AsyncManagedTransaction, category_id: str, application: str) -> CategoryOutput:
+        return await fetch_one(
+            tx,
+            CategoryDatabase.GET_BY_ID_QUERY,
+            CategoryOutput,
+            f"Category '{category_id}' not found in application '{application}'",
+            field="category",
+            category_id=category_id,
+            application=application,
+        )
 
     async def get_all(self, application: str, parent_id: str | None = None) -> list[CategoryOutput]:
-        async def read(tx: AsyncManagedTransaction) -> list[CategoryOutput]:
-            query = CategoryDatabase.GET_CHILDREN_QUERY if parent_id else CategoryDatabase.GET_ROOTS_QUERY
-            result = await tx.run(query, application=application, parent_id=parent_id)
-            return [CategoryOutput.model_validate(record["category"]) for record in await result.data()]
-
-        return await self.execute_read(read)
+        query = CategoryDatabase.GET_CHILDREN_QUERY if parent_id else CategoryDatabase.GET_ROOTS_QUERY
+        return await self.query_all(
+            query, CategoryOutput, field="category", application=application, parent_id=parent_id
+        )
 
     async def create(self, category: CategoryInput, application: str) -> str:
         async def create_transaction(tx: AsyncManagedTransaction) -> str:
@@ -144,9 +133,8 @@ class CategoryDatabase(SessionRepository):
 
             category_id = generate_id()
             nomen_id = await NomenDatabase.create_with_transaction(tx, category.title.root, None)
-            description_nomen_id = None
-            if category.description is not None:
-                description_nomen_id = await NomenDatabase.create_with_transaction(tx, category.description.root, None)
+            description = category.description.root if category.description else None
+            description_nomen_id = await NomenDatabase.create_optional_with_transaction(tx, description)
 
             result = await tx.run(
                 CategoryDatabase.CREATE_QUERY,
@@ -165,8 +153,6 @@ class CategoryDatabase(SessionRepository):
         async def update_transaction(tx: AsyncManagedTransaction) -> CategoryOutput:
             await lock_nodes(tx, "Category", [category_id])
             existing = await self.get_with_transaction(tx, category_id, application)
-            if existing is None:
-                raise DataNotFoundError(f"Category '{category_id}' not found in application '{application}'")
 
             if patch.title is not MISSING:
                 await self._validate_not_exists_tx(
@@ -182,22 +168,18 @@ class CategoryDatabase(SessionRepository):
                     tx, "Category", category_id, description, relationship="HAS_DESCRIPTION"
                 )
 
-            updated = await self.get_with_transaction(tx, category_id, application)
-            if updated is None:
-                raise RuntimeError(f"Category '{category_id}' disappeared during update")
-            return updated
+            return await self.get_with_transaction(tx, category_id, application)
 
         return await self.execute_write(update_transaction)
 
     async def _validate_parent_exists_tx(self, tx: AsyncManagedTransaction, application: str, parent_id: str) -> None:
-        result = await tx.run(
-            CategoryDatabase.PARENT_EXISTS_QUERY,
+        await require(
+            tx,
+            "(:Category {id: $parent_id})-[:BELONGS_TO]->(:Application {id: $application})",
+            DataNotFoundError(f"Parent category '{parent_id}' not found in application '{application}'"),
             application=application,
             parent_id=parent_id,
         )
-        record = await result.single()
-        if not record or not record["exists"]:
-            raise DataNotFoundError(f"Parent category '{parent_id}' not found in application '{application}'")
 
     async def _validate_not_exists_tx(
         self,
@@ -207,36 +189,25 @@ class CategoryDatabase(SessionRepository):
         parent_id: str | None,
         category_id: str | None = None,
     ) -> None:
-        await lock_nodes(tx, "Application", [application])
-        result = await tx.run(
+        await validate_unique_title(
+            tx,
+            "Category",
             CategoryDatabase.FIND_EXISTING_QUERY,
-            application=application,
+            application,
+            title,
             parent_id=parent_id,
             category_id=category_id,
-            titles=[{"language": language, "text": title_text} for language, title_text in title.items()],
         )
-        record = await result.single()
-        if record:
-            raise DataValidationError(
-                f"Category with title '{record['title_text']}' in language '{record['language']}' "
-                f"already exists for application '{application}'"
-            )
 
     async def delete(self, category_id: str, application: str) -> None:
         async def write(tx: AsyncManagedTransaction) -> None:
-            check = await tx.run(CategoryDatabase.DELETE_CHECK_QUERY, category_id=category_id, application=application)
-            check_record = await check.single()
-            if check_record is None:
-                raise DataNotFoundError(f"Category '{category_id}' not found in application '{application}'")
-            if check_record["work_count"]:
-                raise DataConflictError(
-                    f"Category '{category_id}' cannot be deleted because it or its subcategories "
-                    f"are referenced by {check_record['work_count']} work(s)"
-                )
-
-            result = await tx.run(CategoryDatabase.DELETE_QUERY, category_id=category_id, application=application)
-            record = await result.single()
-            if record is None:
-                raise DataNotFoundError(f"Category '{category_id}' not found in application '{application}'")
+            params = {"category_id": category_id, "application": application}
+            not_found = f"Category '{category_id}' not found in application '{application}'"
+            check = await fetch_record(tx, CategoryDatabase.DELETE_CHECK_QUERY, not_found, **params)
+            raise_if_blockers(
+                f"Category '{category_id}' cannot be deleted because it or its subcategories are referenced by",
+                {"work(s)": check["work_count"]},
+            )
+            await tx.run(CategoryDatabase.DELETE_QUERY, params)
 
         await self.execute_write(write)
