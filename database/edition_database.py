@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, LiteralString
 from exceptions import DataConflictError, DataNotFoundError, DataValidationError
 from models.edition import EditionOutput
 from models.enums import EditionType
+from storage.keys import edition_key
 
 from .annotation.bibliographic_database import BibliographicDatabase
 from .annotation.mark_database import MarkDatabase
@@ -252,7 +253,7 @@ class EditionDatabase(SessionRepository):
             content_length=content_length,
             content_key=None
             if edition.type is EditionType.EXCERPT
-            else content_key or f"base_texts/{text_id}/{edition_id}.txt",
+            else content_key or edition_key(text_id, edition_id),
         )
 
         record = await result.single(strict=True)

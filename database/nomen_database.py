@@ -37,7 +37,7 @@ class NomenDatabase:
         await DatabaseValidator.validate_language_codes_exist(tx, sorted(set(base_codes.values())))
         rows = [{"id": name_id, "translations": list(texts.items())} for name_id, texts in nomens.items()]
         result = await tx.run(NomenDatabase.CREATE_MANY_QUERY, nomens=rows, base_codes=base_codes)
-        if {record["id"] for record in await result.data()} != set(nomens):
+        if set(await result.value("id")) != set(nomens):
             raise RuntimeError("Incomplete nomen creation")
 
     @staticmethod

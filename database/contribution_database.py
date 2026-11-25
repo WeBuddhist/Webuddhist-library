@@ -1,7 +1,10 @@
-from typing import TYPE_CHECKING, Any, LiteralString
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, LiteralString
 
 from exceptions import DataNotFoundError
-from models.contribution import AIContribution, PersonContributionBase
+from models.contribution import ContributionInputItem, PersonContributionBase
+
+from .database_validator import DatabaseValidator
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -69,41 +72,45 @@ class ContributionDatabase:
         RETURN elementId(c) AS contribution_element_id
         """
 
-    @staticmethod
-    def delete_all_query(label: LiteralString) -> LiteralString:
-        return f"""
-        MATCH (:{label} {{id: $source_id}})-[:HAS_CONTRIBUTION]->(c:Contribution)
-        DETACH DELETE c
-        FINISH
-        """
-
-    @staticmethod
-    async def create_with_transaction(
+    @classmethod
+    async def create_all_with_transaction(
+        cls,
         tx: AsyncManagedTransaction,
         source_label: LiteralString,
         source_id: str,
-        contribution: PersonContributionBase | AIContribution,
+        contributions: Sequence[ContributionInputItem],
     ) -> None:
-        params: dict[str, Any] = {"source_id": source_id, "role_name": contribution.role.value}
+        for contribution in contributions:
+            if isinstance(contribution, PersonContributionBase):
+                query = cls.create_person_query(source_label)
+                params = {"person_id": contribution.id, "person_bdrc_id": contribution.bdrc_id}
+                not_found = (
+                    f"Person or Role not found. Person: id={contribution.id}, "
+                    f"bdrc_id={contribution.bdrc_id}; Role: {contribution.role.value}"
+                )
+            else:
+                query = cls.create_ai_query(source_label)
+                params = {"ai_id": contribution.id}
+                not_found = f"AI contribution creation failed. AI: {contribution.id}; Role: {contribution.role.value}"
+            result = await tx.run(query, params, source_id=source_id, role_name=contribution.role.value)
+            if not await result.single():
+                raise DataNotFoundError(not_found)
 
-        if isinstance(contribution, PersonContributionBase):
-            query = ContributionDatabase.create_person_query(source_label)
-            params |= {"person_id": contribution.id, "person_bdrc_id": contribution.bdrc_id}
-            not_found = (
-                f"Person or Role not found. Person: id={contribution.id}, "
-                f"bdrc_id={contribution.bdrc_id}; Role: {contribution.role.value}"
-            )
-        else:
-            query = ContributionDatabase.create_ai_query(source_label)
-            params |= {"ai_id": contribution.id}
-            not_found = f"AI contribution creation failed. AI: {contribution.id}; Role: {contribution.role.value}"
-
-        result = await tx.run(query, params)
-        if not await result.single():
-            raise DataNotFoundError(not_found)
-
-    @staticmethod
-    async def delete_all_with_transaction(
-        tx: AsyncManagedTransaction, source_label: LiteralString, source_id: str
+    @classmethod
+    async def replace_with_transaction(
+        cls,
+        tx: AsyncManagedTransaction,
+        source_label: LiteralString,
+        source_id: str,
+        contributions: Sequence[ContributionInputItem],
     ) -> None:
-        await tx.run(ContributionDatabase.delete_all_query(source_label), source_id=source_id)
+        await DatabaseValidator.validate_contribution_references(tx, contributions)
+        await tx.run(
+            f"""
+            MATCH (:{source_label} {{id: $source_id}})-[:HAS_CONTRIBUTION]->(c:Contribution)
+            DETACH DELETE c
+            FINISH
+            """,
+            source_id=source_id,
+        )
+        await cls.create_all_with_transaction(tx, source_label, source_id, contributions)

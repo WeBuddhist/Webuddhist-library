@@ -11,6 +11,7 @@ from identifier import generate_id
 from models.content_operation import ContentOperation, DeleteOperation, InsertOperation
 from models.enums import AudioFormat
 from storage import PRESIGNED_URL_TTL_SECONDS, Storage
+from storage.keys import edition_key, recording_key
 
 if TYPE_CHECKING:
     from fastapi import UploadFile
@@ -27,9 +28,8 @@ async def create_edition(db: Database, storage: Storage, text_id: str, data: Edi
         length = sum(span.end - span.start for span in data.excerpt_of.spans) if data.excerpt_of else 0
         return await db.edition.create(data.metadata, edition_id, text_id, length, excerpt_of=data.excerpt_of)
 
-    key = f"objects/{edition_id}"
+    key = edition_key(text_id, edition_id)
     await storage.put_immutable(key, data.content.encode(), "text/plain; charset=utf-8")
-
     return await db.edition.create(
         data.metadata,
         edition_id,
@@ -87,9 +87,9 @@ async def edit_content(db: Database, storage: Storage, edition_id: str, data: Co
     content = await storage.read_text(state.stored_key)
     if len(content) != state.length:
         raise DataValidationError("Stored content length differs from edition metadata")
-    key = f"objects/{generate_id()}"
     updated = content[:start] + replacement + content[end:]
     text_changed = updated != content
+    key = edition_key(state.text_id, edition_id, generate_id())
     await storage.put_immutable(key, updated.encode(), "text/plain; charset=utf-8")
 
     async def write(tx: AsyncManagedTransaction) -> None:
@@ -128,7 +128,7 @@ async def create_recording(
     await db.recording.validate_target(audio_id, metadata.edition_id)
     await file.seek(0)
     recording_id = generate_id()
-    key = f"objects/{recording_id}"
+    key = recording_key(recording_id, audio_format)
     await storage.put_immutable(key, file.file, audio_format.content_type)
     return await db.recording.add(
         audio_id, metadata, recording_id, audio_key=key, audio_format=audio_format, size_bytes=size

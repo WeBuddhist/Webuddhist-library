@@ -3,6 +3,9 @@
 from typing import TYPE_CHECKING
 
 from exceptions import DataValidationError
+from storage.keys import edition_key
+
+from .repository import iter_id_batches
 
 if TYPE_CHECKING:
     from database import Database
@@ -12,26 +15,15 @@ if TYPE_CHECKING:
 async def migrate_content(db: Database, storage: Storage, *, apply: bool = False) -> int:
     """Backfill only missing fields; existing objects can remain at their legacy keys."""
     count = 0
-    after = ""
-    while True:
-        async with db.get_session() as session:
-            result = await session.run(
-                """
-                MATCH (e:Edition)-[:EDITION_OF]->(t:Text)
-                WHERE e.id > $after AND NOT (e)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'})
-                RETURN e.id AS id, t.id AS text_id, e.content_key AS key, e.content_length AS length,
-                       e.revision AS revision
-                ORDER BY e.id LIMIT 100
-            """,
-                after=after,
-            )
-            editions = await result.data()
-        if not editions:
-            break
+    query = """
+        MATCH (e:Edition)-[:EDITION_OF]->(t:Text)
+        WHERE e.id > $after AND NOT (e)-[:HAS_TYPE]->(:EditionType {name: 'excerpt'})
+        RETURN e.id AS id, t.id AS text_id, e.content_key AS key, e.content_length AS length, e.revision AS revision
+    """
+    async for editions in iter_id_batches(db, query):
         for edition in editions:
-            key = edition["key"] or f"base_texts/{edition['text_id']}/{edition['id']}.txt"
-            content = await storage.read_text(key)
-            length = len(content)
+            key = edition["key"] or edition_key(edition["text_id"], edition["id"])
+            length = len(await storage.read_text(key))
             if not length or edition["length"] not in (None, length):
                 raise DataValidationError(f"Edition {edition['id']} has empty content or a length mismatch")
             async with db.get_session() as session:
@@ -73,5 +65,4 @@ async def migrate_content(db: Database, storage: Storage, *, apply: bool = False
                         )
                     ).consume()
             count += 1
-        after = editions[-1]["id"]
     return count

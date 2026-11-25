@@ -391,8 +391,7 @@ class TextDatabase(SessionRepository):
                 tx, work_id, None, text.category_id, application=application, expected=None
             )
 
-        for contribution in text.contributions:
-            await ContributionDatabase.create_with_transaction(tx, TEXT_LABEL, created_text_id, contribution)
+        await ContributionDatabase.create_all_with_transaction(tx, TEXT_LABEL, created_text_id, text.contributions)
 
         if text.tag_ids:
             await TagDatabase.set_work_tags(tx, work_id, text.tag_ids, application=application)
@@ -460,10 +459,7 @@ class TextDatabase(SessionRepository):
                 )
 
             if patch.contributions is not MISSING:
-                await DatabaseValidator.validate_contribution_references(tx, patch.contributions)
-                await ContributionDatabase.delete_all_with_transaction(tx, TEXT_LABEL, text_id)
-                for contribution in patch.contributions:
-                    await ContributionDatabase.create_with_transaction(tx, TEXT_LABEL, text_id, contribution)
+                await ContributionDatabase.replace_with_transaction(tx, TEXT_LABEL, text_id, patch.contributions)
 
             if patch.tag_ids is not MISSING:
                 await TagDatabase.set_work_tags(

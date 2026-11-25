@@ -5,7 +5,7 @@ from contextlib import aclosing
 from itertools import batched
 from typing import TYPE_CHECKING
 
-from database.content_state import read_at_revision
+from database.content_state import read_at_revision, read_revisions
 from exceptions import DataNotFoundError, DataValidationError
 from models.content_search import ContentSearchResult, ContentSearchSpan
 from search_client import SearchIndex, term_filters
@@ -241,11 +241,7 @@ async def _join_segments(db: Database, candidates: Sequence[dict]) -> list[Conte
         matches = await result.data()
         if not matches:
             return []
-        result = await tx.run(
-            "MATCH (e:Edition) WHERE e.id IN $ids RETURN e.id AS id, e.revision AS revision",
-            ids=list({match["edition"] for match in matches}),
-        )
-        revisions = {r["id"]: r["revision"] for r in await result.data()}
+        revisions = await read_revisions(tx, {match["edition"] for match in matches})
         return [
             candidates[match["i"]]["result"].model_copy(update={"segment_ids": match["segments"]})
             for match in matches

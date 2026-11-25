@@ -11,6 +11,7 @@ from catalog_search import CatalogSearchService, catalog_index_body
 from config import check_environment, settings
 from content_search import ContentSearchService, content_index_body
 from database import Database
+from database.repository import iter_id_batches
 from search_client import create_search_client
 from storage import Storage
 
@@ -68,26 +69,16 @@ async def _populate(
     counts = {catalog_alias: 0, content_alias: 0}
     labels: dict[str, LiteralString] = {"person": "Person", "text": "Text", "edition": "Edition"}
     for kind, label in labels.items():
-        after = ""
-        while True:
-            async with db.get_session() as session:
-                result = await session.run(
-                    f"MATCH (n:{label}) WHERE n.id > $after RETURN n.id AS id ORDER BY id LIMIT 100",
-                    after=after,
-                )
-                ids = await result.value("id")
-            if not ids:
-                break
+        async for rows in iter_id_batches(db, f"MATCH (n:{label}) WHERE n.id > $after RETURN n.id AS id"):
             if kind == "edition":
-                for edition_id in ids:
-                    chunks = await content.prepare_documents(edition_id, db, storage)
+                for row in rows:
+                    chunks = await content.prepare_documents(row["id"], db, storage)
                     counts[content_alias] += await content.index.bulk_index(chunks, refresh=False)
             else:
-                documents = [await catalog.prepare_document(kind, entity_id, db) for entity_id in ids]
+                documents = [await catalog.prepare_document(kind, row["id"], db) for row in rows]
                 counts[catalog_alias] += await catalog.index.bulk_index(
                     (doc for doc in documents if not doc.get("deleted")), refresh=False
                 )
-            after = ids[-1]
     return counts
 
 

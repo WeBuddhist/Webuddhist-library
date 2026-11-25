@@ -143,7 +143,7 @@ class TestRecordingsEndpoints(RecordingHelpers):
             "format": "mp3",
             "size_bytes": len(AUDIO_BYTES),
         }
-        key = f"objects/{recording_id}"
+        key = f"recordings/{recording_id}.mp3"
         assert await test_database.recording.get_storage_location(recording_id) == key
         assert mock_storage._storage[key] == AUDIO_BYTES
 
@@ -238,7 +238,7 @@ class TestRecordingsEndpoints(RecordingHelpers):
         response = await client.get(f"/v2/recordings/{recording_id}/audio", follow_redirects=False)
 
         assert response.status_code == 307
-        assert f"objects/{recording_id}" in response.headers["location"]
+        assert f"recordings/{recording_id}.mp3" in response.headers["location"]
 
     async def test_get_audio_for_missing_recording(self, client):
         response = await client.get(f"/v2/recordings/{generate_id()}/audio", follow_redirects=False)
@@ -254,7 +254,7 @@ class TestRecordingsEndpoints(RecordingHelpers):
         assert response.status_code == 200
         body = response.json()
         assert body == {"url": body["url"], "expires_in": 3600}
-        assert f"objects/{recording_id}" in body["url"]
+        assert f"recordings/{recording_id}.mp3" in body["url"]
         assert "expires_in=3600" in body["url"]
 
     async def test_get_audio_url_for_missing_recording(self, client):
@@ -288,7 +288,7 @@ class TestRecordingsEndpoints(RecordingHelpers):
 
         assert (await client.get(f"/v2/recordings/{recording_id}")).status_code == 404
         assert (await client.get(f"/v2/audios/{audio_id}")).json()["recordings"] == []
-        assert f"objects/{recording_id}" in mock_storage._storage
+        assert f"recordings/{recording_id}.mp3" in mock_storage._storage
 
     async def test_delete_missing_recording(self, client):
         assert (await client.delete(f"/v2/recordings/{generate_id()}")).status_code == 404

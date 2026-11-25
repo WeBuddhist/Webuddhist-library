@@ -134,6 +134,10 @@ git tag v2.16.0 <tested main commit> && git push origin v2.16.0
 The tag must be on `main`, or the deploy stops. To roll back, run the deploy workflow on the
 previous tag. `/__/health` and Swagger show the deployed version (`APP_VERSION`).
 
+Deploy checks out the release and installs its Python dependencies. It installs Neo4j constraints
+and indexes followed by triggers, restarts the API, and checks `/__/health`. For releases that
+need a data migration or search rebuild, follow the [maintenance runbook](docs/design/cutover.md).
+
 Each GitHub environment sets `EC2_INSTANCE_ID`, `APP_DIR`, `SERVICE_NAME`, the Neo4j, S3 and
 OpenSearch values, `ENVIRONMENT`, and optionally `ROOT_PATH` (for example `/api`, once nginx
 forwards that prefix). Testing shares the prod OpenSearch domain, so with `ENVIRONMENT=testing`
@@ -141,12 +145,21 @@ the API refuses to start unless both index names start with `testing-`.
 
 ### Refresh testing (or dev) from prod
 
-Run **Actions → Sync environment from prod** (`.github/workflows/sync-from-prod.yml`) and pick
-the target. It snapshots the prod Neo4j disk (prod keeps running), loads that copy into the
-target Neo4j, copies the prod S3 files, installs constraints and triggers, and rebuilds the
-target's search indexes. The target's own Neo4j password and settings stay. Pending data
-migrations (`python -m scripts.migrate --apply`) are not run; rehearse them on testing after a
-sync.
+Run **Actions → Sync environment from prod** and select `testing` or `dev`. Prod stays online.
+
+1. The workflow snapshots the prod Neo4j disk, then copies three S3 prefixes to the target
+   bucket by default. Edition text lives under `base_texts/` and audio under `recordings/`.
+   Sync also copies `objects/` so a source awaiting the [storage migration](docs/design/cutover.md#retire-the-objects-prefix) can be restored.
+2. It saves the target's API keys, stops the target API, and loads the snapshot's `neo4j`
+   database. The target keeps its own Neo4j credentials and service settings.
+3. It restores the target's saved API keys, then runs `python -m scripts.migrate --apply --content`
+   from the target's deployed code. That command audits the graph, installs constraints, indexes and
+   triggers, converts legacy recordings, and verifies edition content and backfills missing metadata.
+4. After migration succeeds, it runs `python -m scripts.reindex --writes-paused`, starts the target
+   API and checks `/__/health`.
+
+On failure, the workflow's cleanup attempts to restart the target API. If the database swap succeeded
+but key restoration failed, the target database can still contain production API keys.
 
 ### Environment Configuration
 

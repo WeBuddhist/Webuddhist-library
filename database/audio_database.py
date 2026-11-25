@@ -171,8 +171,7 @@ class AudioDatabase(SessionRepository):
 
         record = await result.single(strict=True)
         created_audio_id = str(record["audio_id"])
-        for contribution in audio.contributions:
-            await ContributionDatabase.create_with_transaction(tx, AUDIO_LABEL, created_audio_id, contribution)
+        await ContributionDatabase.create_all_with_transaction(tx, AUDIO_LABEL, created_audio_id, audio.contributions)
 
         return created_audio_id
 
@@ -202,10 +201,7 @@ class AudioDatabase(SessionRepository):
                 await NomenDatabase.replace_with_transaction(tx, AUDIO_LABEL, audio_id, patch.title.root)
 
             if patch.contributions is not MISSING:
-                await DatabaseValidator.validate_contribution_references(tx, patch.contributions)
-                await ContributionDatabase.delete_all_with_transaction(tx, AUDIO_LABEL, audio_id)
-                for contribution in patch.contributions:
-                    await ContributionDatabase.create_with_transaction(tx, AUDIO_LABEL, audio_id, contribution)
+                await ContributionDatabase.replace_with_transaction(tx, AUDIO_LABEL, audio_id, patch.contributions)
             return await self.get_with_transaction(tx, audio_id)
 
         return await self.execute_write(write)

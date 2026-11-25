@@ -189,7 +189,7 @@ class ExcerptDatabase:
     @staticmethod
     async def excerpt_editions_of_with_transaction(tx: AsyncManagedTransaction, edition_id: str) -> list[str]:
         result = await tx.run(ExcerptDatabase.EXCERPT_EDITIONS_OF_QUERY, edition_id=edition_id)
-        return [record["id"] for record in await result.data()]
+        return await result.value("id")
 
     @staticmethod
     async def propagate_edit_with_transaction(

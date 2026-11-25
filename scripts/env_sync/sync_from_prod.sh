@@ -1,16 +1,8 @@
 #!/bin/bash
 # Copy prod data into the testing (or dev) environment. Prod never stops.
 #
-# Runs on the GitHub runner (workflow sync-from-prod.yml) with the AWS CLI and jq, using a role
-# that can read prod but write only to the target. Steps:
-#   1. Snapshot the prod Neo4j root disk.
-#   2. Copy prod S3 files to the target bucket.
-#   3. Make a volume from the snapshot and attach it to the target Neo4j host.
-#   4. Save the target's own API keys and stop the target API (api_before_sync.sh), then load the
-#      prod database into the target Neo4j (neo4j_load_snapshot.sh).
-#   5. Detach and delete the volume and the snapshot.
-#   6. Install constraints and triggers, swap prod's API keys for the saved ones, run pending
-#      upgrades, rebuild the target's search indexes, start the API (api_after_sync.sh).
+# Run by sync-from-prod.yml with the AWS CLI, jq and a role that reads prod and writes to the target.
+# See "Refresh testing (or dev) from prod" in README.md for the restore sequence.
 #
 # Required environment:
 #   TARGET                    testing | dev
@@ -20,10 +12,6 @@
 #   TARGET_NEO4J_INSTANCE_ID  must carry the tag env=$TARGET
 #   TARGET_API_INSTANCE_ID    must carry the tag env=$TARGET
 #   TARGET_S3_BUCKET
-# Optional:
-#   APP_DIR (/opt/openpecha-backend), SERVICE_NAME (openpecha-api), NEO4J_CONTAINER (neo4j),
-#   PROD_NEO4J_DATA_PATH (/var/lib/docker/volumes/neo4j_data/_data),
-#   S3_SYNC_PREFIXES ("base_texts recordings"), KEEP_SNAPSHOT (false)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -31,7 +19,7 @@ APP_DIR=${APP_DIR:-/opt/openpecha-backend}
 SERVICE_NAME=${SERVICE_NAME:-openpecha-api}
 NEO4J_CONTAINER=${NEO4J_CONTAINER:-neo4j}
 PROD_NEO4J_DATA_PATH=${PROD_NEO4J_DATA_PATH:-/var/lib/docker/volumes/neo4j_data/_data}
-S3_SYNC_PREFIXES=${S3_SYNC_PREFIXES:-base_texts recordings}
+S3_SYNC_PREFIXES=${S3_SYNC_PREFIXES:-base_texts recordings objects}
 KEEP_SNAPSHOT=${KEEP_SNAPSHOT:-false}
 export AWS_DEFAULT_REGION=$AWS_REGION AWS_PAGER=""
 
@@ -153,7 +141,7 @@ ssm_run "$TARGET_API_INSTANCE_ID" "$HERE/api_before_sync.sh" "$APP_DIR" "$SERVIC
   "$(base64 <"$HERE/api_keys.py" | tr -d '\n')"
 ssm_run "$TARGET_NEO4J_INSTANCE_ID" "$HERE/neo4j_load_snapshot.sh" "$volume" "$PROD_NEO4J_DATA_PATH" "$NEO4J_CONTAINER"
 
-# --- 5. volume and snapshot go away now (cleanup also does this after a failure) ---
+# --- 5. release the temporary volume ---
 aws ec2 detach-volume --volume-id "$volume" >/dev/null
 aws ec2 wait volume-available --volume-ids "$volume"
 aws ec2 delete-volume --volume-id "$volume"

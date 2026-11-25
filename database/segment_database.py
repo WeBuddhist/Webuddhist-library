@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from database.content_state import read_at_revision, read_value
+from database.content_state import read_at_revision, read_revisions, read_value
 from database.database_validator import DatabaseValidator
 from database.repository import SessionRepository
 from exceptions import DataConflictError, DataNotFoundError
@@ -32,7 +32,7 @@ class SegmentDatabase(SessionRepository):
         CASE WHEN size(tag_ids) = 0 THEN null ELSE tag_ids END AS tag_ids
     """
 
-    FIND_START_SEGMENTS_QUERY: LiteralString = """
+    FIND_BY_SPANS_QUERY: LiteralString = """
     MATCH (:Edition {id: $edition_id})
         -[:HAS_SEGMENTATION]->(:Segmentation)
         <-[:SEGMENT_OF]-(seg:Segment)
@@ -87,19 +87,6 @@ class SegmentDatabase(SessionRepository):
            edition.id AS edition_id, text.id AS text_id,
            seg.type AS type,
            seg.reference AS reference, lines, tag_ids
-    """
-
-    FIND_BY_SPAN_QUERY: LiteralString = """
-    MATCH (:Edition {id: $edition_id})
-        -[:HAS_SEGMENTATION]->(:Segmentation)
-        <-[:SEGMENT_OF]-(seg:Segment)
-        <-[:SPAN_OF]-(span:Span)
-    WHERE (span.start < $span_end AND span.end > $span_start)
-       OR (span.start = span.end AND $span_start <= span.start AND span.start < $span_end)
-       OR ($span_start = $span_end AND span.start <= $span_start AND
-           ($span_start < span.end OR (span.start = span.end AND span.start = $span_start)))
-    RETURN DISTINCT seg.id as segment_id
-    ORDER BY segment_id
     """
 
     async def get(self, segment_id: str, application: str | None = None) -> SegmentWithContextOutput:
@@ -182,20 +169,12 @@ class SegmentDatabase(SessionRepository):
                     )
                 ).single(strict=True)
                 starting_spans = [(record["start"], record["end"])] if record["start"] is not None else []
-            start_records = await (
-                await tx.run(
-                    self.FIND_START_SEGMENTS_QUERY,
-                    edition_id=edition_id,
-                    spans=starting_spans,
-                )
-            ).data()
-            start_segment_ids = {record["segment_id"] for record in start_records}
-            if not start_segment_ids:
+            frontier = await self._find_by_spans(tx, edition_id, starting_spans)
+            if not frontier:
                 return []
 
             related_segment_ids: set[str] = set()
             visited_editions = {edition_id}
-            frontier = sorted(start_segment_ids)
 
             for _ in range(max_depth):
                 await capture_revisions(frontier)
@@ -216,23 +195,18 @@ class SegmentDatabase(SessionRepository):
             if not related_segment_ids:
                 return []
 
-            await capture_revisions(sorted(related_segment_ids))
+            segment_ids = sorted(related_segment_ids)
+            await capture_revisions(segment_ids)
             result = await self._resolve_segment_page(
                 tx,
-                segment_ids=sorted(related_segment_ids),
+                segment_ids=segment_ids,
                 application=application,
                 offset=offset,
                 limit=limit,
                 filters=filters,
                 language_code=language_code,
             )
-            current = await (
-                await tx.run(
-                    "MATCH (e:Edition) WHERE e.id IN $ids RETURN e.id AS id, e.revision AS revision",
-                    ids=list(revisions),
-                )
-            ).data()
-            if {r["id"]: r["revision"] for r in current} != revisions:
+            if await read_revisions(tx, revisions.keys()) != revisions:
                 raise DataConflictError("Alignment changed while reading; retry the request")
             return result
 
@@ -265,8 +239,9 @@ class SegmentDatabase(SessionRepository):
         return [SegmentWithContextOutput.model_validate(record) for record in records if record["lines"]]
 
     async def find_by_span(self, edition_id: str, start: int, end: int) -> list[str]:
-        async def _read(tx: AsyncManagedTransaction) -> list[str]:
-            result = await tx.run(self.FIND_BY_SPAN_QUERY, edition_id=edition_id, span_start=start, span_end=end)
-            return [r["segment_id"] for r in await result.data()]
+        return await self.execute_read(self._find_by_spans, edition_id, [(start, end)])
 
-        return await self.execute_read(_read)
+    @staticmethod
+    async def _find_by_spans(tx: AsyncManagedTransaction, edition_id: str, spans: list[tuple[int, int]]) -> list[str]:
+        result = await tx.run(SegmentDatabase.FIND_BY_SPANS_QUERY, edition_id=edition_id, spans=spans)
+        return await result.value("segment_id")

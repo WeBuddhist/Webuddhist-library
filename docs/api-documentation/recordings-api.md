@@ -68,7 +68,7 @@ Validation rules:
 - `format` and `size_bytes` are derived from the upload and cannot be set by the caller.
 - `duration_ms` is not derived from the file; supply it if you want it recorded.
 
-The audio and the edition are checked before the upload, so a rejected request stores no file. The audio is then uploaded to a fresh key, `objects/{recording_id}`, before metadata is committed. A failed request after that point can leave an unused storage object, but cannot publish recording metadata for an unsuccessful upload.
+The audio and any supplied edition are checked before upload. The file is uploaded to a fresh key, `recordings/{recording_id}.{format}`, before metadata is committed. A failed metadata write can leave an unused file.
 
 Error responses:
 
@@ -139,7 +139,7 @@ Returns a presigned storage URL for the recording's audio and how many seconds i
 
 ```json
 {
-  "url": "https://….s3.ap-southeast-1.amazonaws.com/objects/REC123?X-Amz-Signature=…",
+  "url": "https://….s3.ap-southeast-1.amazonaws.com/recordings/REC123.mp3?X-Amz-Signature=…",
   "expires_in": 3600
 }
 ```
@@ -279,7 +279,7 @@ Cue spans follow `PATCH /v2/editions/{edition_id}/content` on the followed editi
 - Routers: `routers/recordings.py`; the audio-scoped list and create routes live in `routers/audios.py`, and the edition-scoped list in `routers/editions.py`.
 - Models: `models/recording.py`.
 - Database: `database/recording_database.py`.
-- Storage: new audio is stored at `objects/{recording_id}`, the same pattern editions use for content. The key is saved on the recording as `audio_key`. Recordings created before the audio change keep their original key, `recordings/{edition_id}/{recording_id}.{format}`. Audio is never replaced under the same key.
+- The recording stores its S3 key in `audio_key`, so changing the edition it follows leaves the audio file in place. Older recordings can still use `recordings/{edition_id}/{recording_id}.{format}`.
 - Graph: `(:Recording)-[:RENDITION_OF]->(:Audio)`, with an optional `(:Recording)-[:FOLLOWS]->(:Edition)`. Triggers require the followed edition to be an edition of the text the audio recites, and allow cues only while `FOLLOWS` exists.
 - Cues are stored as `(:Span)-[:SPAN_OF]->(:Cue {start_ms, end_ms})-[:CUE_OF]->(:Recording)`. `Cue` has no `id`, because cues are only written and read in bulk.
 - `database/span_database.py` adjusts cue spans with the annotation rules, and deletes a `Cue` once its span is deleted.

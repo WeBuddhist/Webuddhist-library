@@ -74,7 +74,7 @@ Returns a short-lived presigned URL for downloading the complete base text direc
 
 ```json
 {
-  "url": "https://bucket.s3.example/objects/OBJ123?...",
+  "url": "https://bucket.s3.example/base_texts/TEXT123/ED123.txt?...",
   "expires_at": "2026-10-13T15:00:00Z"
 }
 ```

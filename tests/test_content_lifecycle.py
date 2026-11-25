@@ -55,7 +55,7 @@ def insert(text="XYZ"):
 
 async def test_each_edit_uses_fresh_storage_and_preserves_the_previous_content(test_database):
     db = test_database
-    storage, _, _, edition = await fixture(db)
+    storage, text, _, edition = await fixture(db)
     original = await state(db, edition)
     await edit_content(db, storage, edition, insert())
     first = await state(db, edition)
@@ -63,6 +63,9 @@ async def test_each_edit_uses_fresh_storage_and_preserves_the_previous_content(t
     current = await state(db, edition)
     assert current.revision == original.revision + 2
     assert len({original.object_key, first.object_key, current.object_key}) == 3
+    assert original.stored_key == f"base_texts/{text}/{edition}.txt"
+    for edited in (first, current):
+        assert edited.stored_key.startswith(f"base_texts/{text}/{edition}/") and edited.stored_key.endswith(".txt")
     assert await storage.read_text(original.object_key) == "abcdef"
     assert await storage.read_text(first.object_key) == "abcXYZdef"
     assert await storage.read_text(current.object_key) == "abcXYZXYZdef"

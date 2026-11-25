@@ -4,6 +4,9 @@ Status: final design, implemented on branch `feat/audio-expression-proposal`. De
 
 ## Idea
 
+The original design below shows the storage layout at implementation time. New uploads now use
+`base_texts/` for editions and `recordings/` for audio. See the [storage migration](../design/cutover.md#retire-the-objects-prefix).
+
 - One performance of a text (one artist, one take) is an **Audio**. It is an Expression, at the same level as a Text.
 - The Audio follows the **translation** pattern. It belongs to the same Work as the text it recites, and it names that text. It does not follow the commentary pattern (a new Work), because a recitation adds no new content.
 - Each file of that performance (with music, without music) is a **Recording**. It is the Manifestation, like an Edition is of a Text.

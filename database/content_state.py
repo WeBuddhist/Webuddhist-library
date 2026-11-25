@@ -1,6 +1,6 @@
 """Edition revisions and consistent reads shared by content and annotation writers."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from typing import LiteralString
 
@@ -51,6 +51,13 @@ async def read_state(tx: AsyncManagedTransaction, edition_id: str) -> ContentSta
     if None in (record["length"], record["revision"]) or (record["object_key"] is None) != record["is_excerpt"]:
         raise DataValidationError(f"Edition '{edition_id}' requires the content-state migration")
     return ContentState(**record)
+
+
+async def read_revisions(tx: AsyncManagedTransaction, edition_ids: Collection[str]) -> dict[str, int]:
+    result = await tx.run(
+        "MATCH (e:Edition) WHERE e.id IN $ids RETURN e.id AS id, e.revision AS revision", ids=list(edition_ids)
+    )
+    return {record["id"]: record["revision"] async for record in result}
 
 
 async def advance_revision(tx: AsyncManagedTransaction, edition_id: str) -> None:
@@ -111,7 +118,7 @@ async def lock_connected_editions(tx: AsyncManagedTransaction, edition_id: str) 
         """,
             id=edition_id,
         )
-        return {edition_id, *(r["id"] for r in await result.data())}
+        return {edition_id, *await result.value("id")}
 
     ids = await connected()
     await lock_nodes(tx, "Edition", sorted(ids))

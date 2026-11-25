@@ -343,7 +343,7 @@ async def test_table_of_contents_create_strictly_returns_neo4j_id(
 async def test_nomen_create_verifies_persisted_ids(monkeypatch, returned_ids):
     monkeypatch.setattr(DatabaseValidator, "validate_language_codes_exist", AsyncMock())
     monkeypatch.setattr(nomen_module, "generate_id", lambda: "submitted-nomen-id")
-    create_result = SimpleNamespace(data=AsyncMock(return_value=[{"id": value} for value in returned_ids]))
+    create_result = SimpleNamespace(value=AsyncMock(return_value=returned_ids))
     tx = FakeTransaction({NomenDatabase.CREATE_MANY_QUERY: create_result})
 
     if returned_ids == ["submitted-nomen-id"]:

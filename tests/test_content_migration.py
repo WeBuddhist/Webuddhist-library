@@ -2,12 +2,20 @@ import pytest
 
 from database.content_migration import migrate_content
 from database.content_state import read_state
+from database.repository import iter_id_batches
 from exceptions import DataNotFoundError, DataValidationError
 from identifier import generate_id
 from models.edition import EditionInput
 from models.text import TextInput
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+
+async def test_maintenance_batches_visit_every_id_once(test_database):
+    query = "UNWIND range(0, 204) AS i WITH toString(i) AS id WHERE id > $after RETURN id"
+    batches = [rows async for rows in iter_id_batches(test_database, query)]
+    assert [len(rows) for rows in batches] == [100, 100, 5]
+    assert [row["id"] for rows in batches for row in rows] == sorted(str(i) for i in range(205))
 
 
 async def legacy(db, storage, content="legacy བོད་"):

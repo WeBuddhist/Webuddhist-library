@@ -1,7 +1,7 @@
-from collections.abc import Awaitable, Callable
-from typing import Concatenate, Protocol, runtime_checkable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Concatenate, LiteralString, Protocol, runtime_checkable
 
-from neo4j import AsyncManagedTransaction, AsyncSession
+from neo4j import AsyncManagedTransaction, AsyncSession, Record
 
 
 @runtime_checkable
@@ -11,6 +11,19 @@ class _SessionProvider(Protocol):
 
 type SessionSource = Callable[[], AsyncSession] | _SessionProvider
 type TransactionWork[R, **P] = Callable[Concatenate[AsyncManagedTransaction, P], Awaitable[R]]
+
+
+async def iter_id_batches(db: _SessionProvider, query: LiteralString) -> AsyncIterator[list[Record]]:
+    """The query selects IDs greater than $after and returns one row per ID, aliased as id."""
+    after = ""
+    while True:
+        async with db.get_session() as session:
+            result = await session.run(query + "\nORDER BY id LIMIT 100", after=after)
+            rows = [record async for record in result]
+        if not rows:
+            return
+        after = rows[-1]["id"]
+        yield rows
 
 
 class SessionRepository:

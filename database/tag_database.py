@@ -141,7 +141,7 @@ class TagDatabase(SessionRepository):
         async def write(tx: AsyncManagedTransaction) -> list[str]:
             async def work_ids() -> set[str]:
                 result = await tx.run("MATCH (:Tag {id: $id})<-[:HAS_TAG]-(w:Work) RETURN w.id AS id", id=tag_id)
-                return {record["id"] for record in await result.data()}
+                return set(await result.value("id"))
 
             works = await work_ids()
             # Match tag writers' Work -> Tag order, then reject newly attached Works.

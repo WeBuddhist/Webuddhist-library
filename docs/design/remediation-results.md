@@ -10,10 +10,10 @@ Existing editing-client request and response bodies are preserved. Edition revis
 | Annotations | Metadata round-trips, zero-width markers remain visible, segmentation is contiguous without overlaps/gaps, and replacement text belongs to one segment/page. Pages must contain text; edits that empty a page are rejected. Page order uses offsets without a stored ordinal. TOC and imported Attribute deletion is complete. |
 | Schema | Title-language uniqueness through the existing trigger with Language-node locks, update-aware triggers, TOC hierarchy enforcement, and explicit, repeatable audited upgrades. No migration tracking or duplicated title-language property. |
 | Content | Upload to a fresh S3 key, then commit the key, spans, length, and revision in one database transaction. Conflicting concurrent edits and edits removing all content are rejected. |
-| Audio | Upload the spooled file before publishing metadata, without an extra full-file buffer. New audio is stored at `objects/{recording_id}` and the key is saved on the recording as `audio_key`. Recordings created before audio became its own Expression keep their old key; the one-time conversion copies it into `audio_key`. |
-| Storage retention | Failed uploads and unreferenced objects remain in S3. Database deletion does not delete stored content/audio. |
+| Audio | Upload the spooled file before publishing metadata. New audio is stored at `recordings/{recording_id}.{format}` and the recording stores its key in `audio_key`. |
+| Storage retention | The API retains stored files after a failed graph write or a record deletion. The one-time storage migration clears all current keys under `objects/` after relocating referenced files. |
 | Search | Small overlapping content chunks, literal Unicode matching across boundaries, current graph segment joins, bounded search work, and canonical catalog hydration. HTTP mutations request best-effort background updates. |
-| Deployment | Update and restart only the API; check liveness. Migration and reindexing are explicit maintenance commands. |
+| Deployment | Install dependencies, Neo4j constraints and indexes, then triggers. Restart the API and check liveness. The environment sync runs the data migration and search rebuild on the restored target. |
 
 Removed upload tracking, durable search jobs, worker status, the worker process/service, publication versions, stored deletion markers, automatic object cleanup, and their dedicated tests. Content migration now reuses existing S3 files rather than copying them. Manual reindexing reads canonical records directly.
 
