@@ -4,6 +4,7 @@ import pytest
 from database import edition as edition_database
 from database import person as person_database
 from database import text as text_database
+from database.repository import iter_id_batches
 from database.span import adjust_annotation_span
 from errors import DataNotFoundError, DataValidationError
 from identifier import generate_id
@@ -14,6 +15,14 @@ from models.edition import EditionInput, EditionType
 from models.enums import ContributorRole
 from models.person import PersonInput
 from models.text import TextInput
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_maintenance_batches_visit_every_id_once(test_database):
+    query = "UNWIND range(0, 204) AS i WITH toString(i) AS id WHERE id > $after RETURN id"
+    batches = [rows async for rows in iter_id_batches(test_database, query)]
+    assert [len(rows) for rows in batches] == [100, 100, 5]
+    assert [row["id"] for rows in batches for row in rows] == sorted(str(i) for i in range(205))
 
 
 @pytest.mark.asyncio(loop_scope="session")

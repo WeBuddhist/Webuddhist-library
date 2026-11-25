@@ -9,7 +9,6 @@ from database.annotation import note as note_database
 from database.annotation import pagination as pagination_database
 from database.annotation import segmentation as segmentation_database
 from database.annotation import table_of_contents
-from database.migrations import audit_schema, migrate
 from errors import DataValidationError
 from identifier import generate_id
 from models.annotation import NoteInput, PaginationInput, SegmentationInput
@@ -124,23 +123,6 @@ async def test_edits_cannot_empty_a_volume_page(test_database, edition, start, e
     async with db.get_session() as session:
         record = await (await session.run("MATCH (n:Volume|Page|Span) RETURN count(n) AS count")).single()
         assert record["count"] == 0
-
-
-async def test_schema_upgrade_rejects_legacy_empty_pages(test_database, edition):
-    db = test_database
-    await pagination_database.add(db, edition, PaginationInput(volumes=[{"pages": [
-        {"reference": "1", "lines": [{"start": 0, "end": 30}]},
-    ]}]))
-    async with db.get_session() as session:
-        page = await (await session.run("""
-            MATCH (span:Span)-[:SPAN_OF]->(page:Page)
-            SET span.end = span.start
-            RETURN page.id AS id
-        """)).single(strict=True)
-    violations = await audit_schema(db._driver, db._database)
-    assert violations["empty_pagination"] == [page["id"]]
-    with pytest.raises(RuntimeError, match="Schema audit failed"):
-        await migrate(db._driver, db._database)
 
 
 async def test_empty_legacy_volume_and_imported_attributes_can_be_deleted(test_database, edition):

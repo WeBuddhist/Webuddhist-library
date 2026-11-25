@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import pytest
 from neo4j.exceptions import ClientError
 
-from database.neo4j_triggers import SYSTEM_DATABASE_NAME, TRIGGERS, install_triggers
+from database.neo4j_triggers import SYSTEM_DATABASE_NAME, TRIGGERS, install_triggers, wait_for_triggers
 from tests.conftest import NEO4J_TRIGGER_REFRESH_SECONDS
 from tests.schema_contract import EXPECTED_TRIGGERS
 
@@ -342,13 +342,18 @@ async def test_install_triggers_replaces_stale_triggers(test_database) -> None:
         )
         await result.consume()
 
-    await install_triggers(driver, database)
+    try:
+        with pytest.raises(TimeoutError, match="stale_trigger"):
+            await wait_for_triggers(driver, database, wait_seconds=0.3, interval=0.1)
+    finally:
+        await install_triggers(driver, database)
     await asyncio.sleep(NEO4J_TRIGGER_REFRESH_SECONDS)
 
     async with driver.session(database=SYSTEM_DATABASE_NAME) as session:
-        result = await session.run("CALL apoc.trigger.show($database) YIELD name, query", database=database)
-        stored = {record["name"]: record["query"] async for record in result}
+        result = await session.run("CALL apoc.trigger.show($database) YIELD name, query, selector, paused", database=database)
+        stored = {record["name"]: record async for record in result}
 
-    assert set(stored) == {trigger.name for trigger in TRIGGERS}
-    assert all(query.startswith("CYPHER 25 ") for query in stored.values())
+    assert set(stored) == EXPECTED_TRIGGERS
+    assert all(rule["query"].startswith("CYPHER 25 ") for rule in stored.values())
+    assert all(rule["selector"]["phase"] == "before" and not rule["paused"] for rule in stored.values())
 

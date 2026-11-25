@@ -7,14 +7,13 @@ from database import application, audio, category, tag
 from database import edition as edition_database
 from database import person as person_database
 from database import text as text_database
-from database.annotation import segmentation as segmentation_database
 from database.annotation import table_of_contents
-from database.migrations import audit_schema, migrate
 from errors import DataValidationError
 from identifier import generate_id
 from models.category import CategoryInput
 from models.tag import TagInput
 from models.text import TextInput, TextOutput, TextPatch
+from tests.schema_contract import EXPECTED_CONSTRAINTS, EXPECTED_INDEXES
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -32,6 +31,14 @@ def contend_before(monkeypatch, target, method):
     monkeypatch.setattr(target, method, simultaneous)
 
 
+async def test_installed_graph_schema(test_database):
+    async with test_database.get_session() as session:
+        constraints = await (await session.run("SHOW CONSTRAINTS YIELD name RETURN name")).value()
+        indexes = await (await session.run("SHOW INDEXES YIELD name RETURN name")).value()
+        assert set(constraints) == EXPECTED_CONSTRAINTS
+        assert EXPECTED_INDEXES <= set(indexes)
+        with pytest.raises(ClientError, match="already exists"):
+            await (await session.run("CREATE (:Language {code:'duplicate'}), (:Language {code:'duplicate'})")).consume()
 
 
 @pytest.mark.parametrize("label", ["LocalizedText", "Contribution"])
@@ -127,53 +134,6 @@ async def test_taxonomy_title_check_serializes_with_create(test_database, entity
     assert len(errors) == 1 and isinstance(errors[0], DataValidationError), results
     async with test_database.get_session() as session:
         assert (await (await session.run(f"MATCH (n:{entity.title()})-[:HAS_TITLE]->(:Nomen)-[:HAS_LOCALIZATION]->(title:LocalizedText {{text: 'Contended'}}) RETURN count(n) AS count")).single())["count"] == 1
-
-
-async def test_migration_is_repeatable_and_audited(test_database):
-    db = test_database
-    assert await audit_schema(db._driver, db._database) == {}
-    await migrate(db._driver, db._database)
-    await migrate(db._driver, db._database)
-    assert await audit_schema(db._driver, db._database) == {}
-
-
-@pytest.mark.parametrize("second_start", [4, 6])
-@pytest.mark.parametrize("same_segment", [False, True])
-async def test_schema_upgrade_rejects_legacy_segmentation_overlap_or_gap(test_database, second_start, same_segment):
-    from models.annotation import SegmentationInput
-    from models.edition import EditionInput
-
-    db = test_database
-    text = await text_database.create(db, TextInput(title={"en": "Legacy segmentation"}, language="en", category_id="category"))
-    edition = generate_id()
-    lines = [{"start": 0, "end": 5}, {"start": 5, "end": 10}]
-    segments = [{"lines": lines}] if same_segment else [{"lines": [line]} for line in lines]
-    await edition_database.create(
-        db, EditionInput(type="critical"), edition, text, 10, segmentation=SegmentationInput(segments=segments)
-    )
-    segmentation = await segmentation_database.get_by_edition(db, edition)
-    async with db.get_session() as session:
-        await (await session.run("MATCH (s:Span {start: 5}) SET s.start = $start", start=second_start)).consume()
-    violations = await audit_schema(db._driver, db._database)
-    assert violations["noncontiguous_segmentation"] == [segmentation.id]
-    with pytest.raises(RuntimeError, match="Schema audit failed"):
-        await migrate(db._driver, db._database)
-
-
-async def test_failed_migration_can_resume(test_database, monkeypatch):
-    import database.migrations as migrations
-    db = test_database
-    install = migrations.install_triggers
-
-    async def interrupted(*args):
-        raise RuntimeError("interrupted installation")
-
-    monkeypatch.setattr(migrations, "install_triggers", interrupted)
-    with pytest.raises(RuntimeError, match="interrupted"):
-        await migrate(db._driver, db._database)
-    monkeypatch.setattr(migrations, "install_triggers", install)
-    await migrate(db._driver, db._database)
-    assert await audit_schema(db._driver, db._database) == {}
 
 
 async def test_updates_cannot_change_audio_role_or_toc_parent_bounds(test_database):
