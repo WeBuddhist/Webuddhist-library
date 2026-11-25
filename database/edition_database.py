@@ -218,10 +218,12 @@ class EditionDatabase(SessionRepository):
     ) -> str:
         await lock_nodes(tx, "Text", [text_id])
         await EditionDatabase._validate_create(tx, edition, text_id)
-        incipit_nomen_id = await NomenDatabase.create_optional_with_transaction(
-            tx,
-            edition.incipit_title.root if edition.incipit_title else None,
-            [alt.root for alt in edition.alt_incipit_titles or []],
+        incipit_nomen_id = (
+            await NomenDatabase.create_with_transaction(
+                tx, edition.incipit_title.root, [alt.root for alt in edition.alt_incipit_titles or []]
+            )
+            if edition.incipit_title
+            else None
         )
 
         result = await tx.run(

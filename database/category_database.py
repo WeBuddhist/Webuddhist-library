@@ -85,7 +85,7 @@ class CategoryDatabase(SessionRepository):
     OPTIONAL MATCH (c:Category)-[:HAS_PARENT*0..]->(root)
     WHERE (c)-[:BELONGS_TO]->(app)
     OPTIONAL MATCH (w:Work)-[:HAS_CATEGORY]->(c)
-    RETURN count(DISTINCT w) AS work_count
+    RETURN root.id AS id, count(DISTINCT w) AS work_count
     """
 
     DELETE_QUERY: LiteralString = """
