@@ -1,10 +1,14 @@
 from .base import LocalizedString, NonEmptyStr, OpenPechaModel
 
 
-class TagInput(OpenPechaModel):
+class TagBase(OpenPechaModel):
     title: LocalizedString
     description: LocalizedString | None = None
 
 
-class TagOutput(TagInput):
+class TagInput(TagBase):
+    pass
+
+
+class TagOutput(TagBase):
     id: NonEmptyStr

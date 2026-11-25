@@ -224,39 +224,49 @@ class TableOfContentsOutput(OpenPechaModel):
     metadata: AnnotationMetadata | None = None
 
 
-class BibliographicMetadataInput(SingleSpanAnnotation):
+class BibliographicMetadataBase(SingleSpanAnnotation):
     type: BibliographyType
 
 
-class BibliographicMetadataOutput(BibliographicMetadataInput):
+class BibliographicMetadataInput(BibliographicMetadataBase):
+    pass
+
+
+class BibliographicMetadataOutput(BibliographicMetadataBase):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
 
 
-class NoteInput(SingleSpanAnnotation):
+class NoteBase(SingleSpanAnnotation):
     text: NonEmptyStr
 
 
-class NoteOutput(NoteInput):
+class NoteInput(NoteBase):
+    pass
+
+
+class NoteOutput(NoteBase):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
 
 
-class FootnoteInput(OpenPechaModel):
+class FootnoteBase(OpenPechaModel):
+    position: int = Field(..., ge=0, description="Gap index where the marker sits (0 to content length, inclusive)")
+    text: NonEmptyStr
+    metadata: AnnotationMetadata | None = None
+
+
+class FootnoteInput(FootnoteBase):
     """A footnote anchored to a point in the content rather than a range, rendered as a marker.
 
     `position` is a gap index: the marker sits before the character at `position`, so 0 is before the
     first character and the content length is after the last one.
     """
 
-    position: int = Field(..., ge=0, description="Gap index where the marker sits (0 to content length, inclusive)")
-    text: NonEmptyStr
-    metadata: AnnotationMetadata | None = None
 
-
-class FootnoteOutput(FootnoteInput):
+class FootnoteOutput(FootnoteBase):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
@@ -278,7 +288,7 @@ class MarkInput(SingleSpanAnnotation):
     pass
 
 
-class MarkOutput(MarkInput):
+class MarkOutput(SingleSpanAnnotation):
     id: NonEmptyStr
     edition_id: NonEmptyStr
     text_id: NonEmptyStr
