@@ -1,7 +1,10 @@
+import sys
 from collections.abc import AsyncGenerator, Iterable
+from contextlib import aclosing
 from typing import TYPE_CHECKING, cast
 
 import botocore.session
+from aioitertools.itertools import batched
 from opensearchpy import AsyncHttpConnection, AsyncOpenSearch, AWSV4SignerAsyncAuth
 from opensearchpy.exceptions import RequestError
 from opensearchpy.helpers import async_bulk, async_scan
@@ -31,7 +34,7 @@ def create_search_client(config: Settings, *, request_timeout: int = 120, max_re
         credentials = botocore.session.get_session().get_credentials()
         if credentials is None:
             raise InvalidRequestError("AWS credentials are required for OpenSearch SigV4 auth")
-        http_auth = _AWSV4SignerAsyncAuth(credentials, config.aws_region, "es")
+        http_auth = AWSV4SignerAsyncAuth(credentials, config.aws_region, "es")
 
     return AsyncOpenSearch(
         hosts=[endpoint.rstrip("/")],
@@ -43,14 +46,6 @@ def create_search_client(config: Settings, *, request_timeout: int = 120, max_re
         max_retries=max_retries,
         retry_on_timeout=True,
     )
-
-
-class _AWSV4SignerAsyncAuth(AWSV4SignerAsyncAuth):
-    """Leaves the hop-by-hop Connection header unsigned; proxies in front of AWS may rewrite it."""
-
-    def __call__(self, method: str, url: str, body: str | bytes | None = None, headers: dict | None = None) -> dict:
-        headers = {k: v for k, v in (headers or {}).items() if k.lower() != "connection"}
-        return super().__call__(method, url, body, headers)
 
 
 class SearchIndex:
@@ -128,26 +123,16 @@ class SearchIndex:
     async def pages(self, body: dict) -> AsyncGenerator[list[dict]]:
         """Yield each ordered scroll page. `async_scan` releases the snapshot."""
         size = int(body.get("size") or 100)
-        batch: list[dict] = []
-        hits = cast(
-            AsyncGenerator[dict],
-            async_scan(
-                self._client,
-                query=body,
-                index=self.index_name,
-                scroll="1m",
-                preserve_order=True,
-                size=size,
-                clear_scroll=True,
-            ),
+        scan = async_scan(
+            self._client,
+            query=body,
+            index=self.index_name,
+            scroll="1m",
+            preserve_order=True,
+            size=size,
+            clear_scroll=True,
         )
-        try:
-            async for hit in hits:
-                batch.append(hit)
-                if len(batch) == size:
-                    yield batch
-                    batch = []
-            if batch:
-                yield batch
-        finally:
-            await hits.aclose()
+        async with aclosing(cast(AsyncGenerator[dict], scan)) as hits:
+            # OpenSearch validates the requested size. Nonpositive sizes never split a page locally.
+            async for batch in batched(hits, size if size > 0 else sys.maxsize):
+                yield list(batch)

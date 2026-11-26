@@ -142,13 +142,13 @@ async def test_failure_after_pointer_update_rolls_back_both_aligned_editions(tes
     }]))
     original = [await state(db, item) for item in (edition, neighbor)]
     segments = await get_all_segments_by_edition(db, edition)
-    advance_revision = content_service.advance_revision
+    advance_revision = edition_database.advance_revision
 
     async def fail_after_neighbor_revision(tx, edition_id):
         await advance_revision(tx, edition_id)
         raise failure("after pointer and revisions")
 
-    monkeypatch.setattr(content_service, "advance_revision", fail_after_neighbor_revision)
+    monkeypatch.setattr(edition_database, "advance_revision", fail_after_neighbor_revision)
     with pytest.raises(failure, match="after pointer and revisions"):
         await edit_content(db, storage, edition, insert())
     assert [await state(db, item) for item in (edition, neighbor)] == original

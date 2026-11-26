@@ -3,11 +3,11 @@
 Lookup indexes are listed here explicitly; they are not derived from the YAML.
 """
 
-import re
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic.alias_generators import to_snake
 
 NODES: dict[str, dict[str, Any]] = yaml.safe_load(Path(__file__).with_name("neo4j_schema.yaml").read_text())["nodes"]
 
@@ -22,7 +22,7 @@ def schema_statements() -> list[str]:
     """Unique constraints plus the explicit lookup indexes, in install order."""
     statements = []
     for label, node in NODES.items():
-        prefix = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", label).lower()
+        prefix = to_snake(label)
         for prop, spec in node.get("properties", {}).items():
             if spec.get("unique"):
                 name = f"{prefix}_{prop}_unique"

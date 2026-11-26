@@ -1,13 +1,12 @@
-from typing import TYPE_CHECKING, LiteralString
+from typing import TYPE_CHECKING, Literal, LiteralString
 
-from database.repository import create_id, writing
 from errors import DataConflictError, DataNotFoundError, DataValidationError, ForbiddenError
 from identifier import generate_id
 from models.tag import TagOutput
 
 from . import nomen
 from .locking import lock_nodes
-from .repository import SessionSource, fetch_record, query_all, require_node
+from .repository import SessionSource, create_id, fetch_record, query_all, require_node, writing
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -82,13 +81,6 @@ DELETE_QUERY: LiteralString = f"""
     DETACH DELETE t
     RETURN deleted_tag_id
 """
-TAG_WORK_QUERY: LiteralString = """
-    MATCH (w:Work {id: $work_id})
-    MATCH (t:Tag {id: $tag_id})
-    WHERE $application IS NULL OR (t)-[:BELONGS_TO]->(:Application {id: $application})
-    MERGE (w)-[:HAS_TAG]->(t)
-    RETURN w.id AS work_id
-"""
 SET_WORK_TAGS_QUERY: LiteralString = """
     MATCH (w:Work {id: $work_id})
     OPTIONAL MATCH (w)-[old:HAS_TAG]->(tag:Tag)
@@ -99,26 +91,6 @@ SET_WORK_TAGS_QUERY: LiteralString = """
     UNWIND $tag_ids AS tag_id
     MATCH (tag:Tag {id: tag_id})
     MERGE (w)-[:HAS_TAG]->(tag)
-"""
-UNTAG_WORK_QUERY: LiteralString = """
-    MATCH (w:Work {id: $work_id})
-    MATCH (w)-[r:HAS_TAG]->(t:Tag {id: $tag_id})
-    WHERE $application IS NULL OR (t)-[:BELONGS_TO]->(:Application {id: $application})
-    DELETE r
-    RETURN w.id AS work_id
-"""
-TAG_SEGMENT_QUERY: LiteralString = """
-    MATCH (s:Segment {id: $segment_id})
-    MATCH (t:Tag {id: $tag_id})
-    WHERE $application IS NULL OR (t)-[:BELONGS_TO]->(:Application {id: $application})
-    MERGE (s)-[:HAS_TAG]->(t)
-    RETURN s.id AS segment_id
-"""
-UNTAG_SEGMENT_QUERY: LiteralString = """
-    MATCH (s:Segment {id: $segment_id})-[r:HAS_TAG]->(t:Tag {id: $tag_id})
-    WHERE $application IS NULL OR (t)-[:BELONGS_TO]->(:Application {id: $application})
-    DELETE r
-    RETURN s.id AS segment_id
 """
 
 
@@ -198,45 +170,58 @@ async def delete(tx: AsyncManagedTransaction, tag_id: str, application: str) -> 
     return sorted(works)
 
 
+async def _set_tag(
+    tx: AsyncManagedTransaction,
+    owner: Literal["Work", "Segment"],
+    owner_id: str,
+    tag_id: str,
+    application: str | None,
+    *,
+    attach: bool,
+) -> None:
+    await lock_nodes(tx, owner, [owner_id])
+    await lock_nodes(tx, "Tag", [tag_id])
+    mutation = "MERGE (owner)-[:HAS_TAG]->(tag)" if attach else "MATCH (owner)-[rel:HAS_TAG]->(tag) DELETE rel"
+    result = await tx.run(
+        f"""
+        MATCH (owner:{owner} {{id: $owner_id}})
+        MATCH (tag:Tag {{id: $tag_id}})
+        WHERE $application IS NULL OR (tag)-[:BELONGS_TO]->(:Application {{id: $application}})
+        {mutation}
+        RETURN owner.id
+        """,
+        owner_id=owner_id,
+        tag_id=tag_id,
+        application=application,
+    )
+    if await result.single():
+        return
+    if not attach:
+        raise DataNotFoundError(f"Tag '{tag_id}' is not attached to {owner} '{owner_id}'")
+    await require_node(tx, owner, owner_id, DataNotFoundError(f"{owner} '{owner_id}' not found"))
+    scope = f" in application '{application}'" if application is not None else ""
+    raise DataNotFoundError(f"Tag '{tag_id}' not found{scope}")
+
+
 @writing
 async def tag_work(tx: AsyncManagedTransaction, work_id: str, tag_id: str, application: str | None = None) -> None:
-    await lock_nodes(tx, "Work", [work_id])
-    await lock_nodes(tx, "Tag", [tag_id])
-    result = await tx.run(TAG_WORK_QUERY, work_id=work_id, tag_id=tag_id, application=application)
-    if not await result.single():
-        await require_node(tx, "Work", work_id, DataNotFoundError(f"Work '{work_id}' not found"))
-        scope = f" in application '{application}'" if application is not None else ""
-        raise DataNotFoundError(f"Tag '{tag_id}' not found{scope}")
+    await _set_tag(tx, "Work", work_id, tag_id, application, attach=True)
 
 
 @writing
 async def untag_work(tx: AsyncManagedTransaction, work_id: str, tag_id: str, application: str | None = None) -> None:
-    await lock_nodes(tx, "Work", [work_id])
-    await lock_nodes(tx, "Tag", [tag_id])
-    not_found = f"Tag '{tag_id}' is not attached to Work '{work_id}'"
-    params = {"work_id": work_id, "tag_id": tag_id, "application": application}
-    await fetch_record(tx, UNTAG_WORK_QUERY, not_found, **params)
+    await _set_tag(tx, "Work", work_id, tag_id, application, attach=False)
 
 
 @writing
 async def tag_segment(
     tx: AsyncManagedTransaction, segment_id: str, tag_id: str, application: str | None = None
 ) -> None:
-    await lock_nodes(tx, "Segment", [segment_id])
-    await lock_nodes(tx, "Tag", [tag_id])
-    result = await tx.run(TAG_SEGMENT_QUERY, segment_id=segment_id, tag_id=tag_id, application=application)
-    if not await result.single():
-        await require_node(tx, "Segment", segment_id, DataNotFoundError(f"Segment '{segment_id}' not found"))
-        scope = f" in application '{application}'" if application is not None else ""
-        raise DataNotFoundError(f"Tag '{tag_id}' not found{scope}")
+    await _set_tag(tx, "Segment", segment_id, tag_id, application, attach=True)
 
 
 @writing
 async def untag_segment(
     tx: AsyncManagedTransaction, segment_id: str, tag_id: str, application: str | None = None
 ) -> None:
-    await lock_nodes(tx, "Segment", [segment_id])
-    await lock_nodes(tx, "Tag", [tag_id])
-    not_found = f"Tag '{tag_id}' is not attached to Segment '{segment_id}'"
-    params = {"segment_id": segment_id, "tag_id": tag_id, "application": application}
-    await fetch_record(tx, UNTAG_SEGMENT_QUERY, not_found, **params)
+    await _set_tag(tx, "Segment", segment_id, tag_id, application, attach=False)

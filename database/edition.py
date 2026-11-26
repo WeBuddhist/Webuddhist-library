@@ -8,9 +8,9 @@ from models.edition import EditionOutput
 from models.enums import EditionType
 from storage import edition_key
 
-from . import excerpt, nomen, recording
+from . import excerpt, nomen, recording, span
 from . import text as text_database
-from .content_state import advance_revision, read_state
+from .content_state import ContentState, advance_revision, lock_connected_editions, read_state
 from .locking import lock_nodes
 from .repository import SessionSource, create_id, fetch_all, query_all, query_one, reading, require_node, writing
 
@@ -193,6 +193,37 @@ async def get(db: SessionSource, edition_id: str) -> EditionOutput:
 async def get_related(db: SessionSource, edition_id: str) -> list[EditionOutput]:
     """Find all editions related through alignment or text relationships."""
     return await query_all(db, GET_RELATED_QUERY, EditionOutput, field="edition", edition_id=edition_id)
+
+
+@writing
+async def commit_content_edit(
+    tx: AsyncManagedTransaction,
+    previous: ContentState,
+    *,
+    content_key: str,
+    content_length: int,
+    span_edit: tuple[int, int, int] | None,
+) -> None:
+    """Publish prepared content. A changed span carries its old start, old end and replacement length."""
+    edition_id = previous.edition_id
+    related = await lock_connected_editions(tx, edition_id)
+    current = await read_state(tx, edition_id)
+    if current.revision != previous.revision:
+        raise DataConflictError(f"Edition changed: expected revision {previous.revision}, current {current.revision}")
+    if span_edit is not None:
+        await span.adjust_spans(tx, edition_id, *span_edit)
+        await excerpt.propagate_edit(tx, edition_id, *span_edit)
+    await tx.run(
+        """
+        MATCH (e:Edition {id: $id})
+        SET e.content_key = $key, e.content_length = $length, e.revision = e.revision + 1
+        """,
+        id=edition_id,
+        key=content_key,
+        length=content_length,
+    )
+    for related_id in related:
+        await advance_revision(tx, related_id)
 
 
 @writing

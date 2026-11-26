@@ -6,7 +6,14 @@ from dataclasses import dataclass
 import pytest
 from neo4j.exceptions import ClientError
 
-from database.neo4j_triggers import SYSTEM_DATABASE_NAME, TRIGGERS, install_triggers, wait_for_triggers
+from database.neo4j_triggers import (
+    SYSTEM_DATABASE_NAME,
+    TRIGGERS,
+    _required_relationship_triggers,
+    install_triggers,
+    wait_for_triggers,
+)
+from database.schema import NODES
 from tests.conftest import NEO4J_TRIGGER_REFRESH_SECONDS
 from tests.schema_contract import EXPECTED_TRIGGERS
 
@@ -15,6 +22,19 @@ from tests.schema_contract import EXPECTED_TRIGGERS
 class TriggerCase:
     name: str
     setup_query: str
+
+
+def test_new_relationship_triggers_follow_schema(monkeypatch):
+    relationships = {
+        "OWNER": {"target": "Person | AI", "cardinality": "one", "required": True},
+        "SOURCE": {"target": "Text", "cardinality": "many", "required": True},
+        "PARENT": {"target": "Work", "cardinality": "one", "required": False},
+    }
+    monkeypatch.setitem(NODES, "Example", {"relationships": relationships})
+    rules = {rule.name: rule for rule in _required_relationship_triggers() if rule.name.startswith("enforce_example_")}
+    assert set(rules) == {"enforce_example_owner", "enforce_example_owner_max_one", "enforce_example_source"}
+    assert "(node)-[:OWNER]->(:Person|AI)" in rules["enforce_example_owner"].audit
+    assert "count { (node)-[:OWNER]->() }" in rules["enforce_example_owner_max_one"].audit
 
 
 def _query_with_metadata(setup_query: str, trigger_query: str) -> str:

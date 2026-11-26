@@ -106,6 +106,21 @@ async def test_bulk_exhausts_bounded_retries(monkeypatch):
     client.indices.refresh.assert_not_awaited()
 
 
+@pytest.mark.parametrize(("size", "expected"), [
+    (2, [[0, 1], [2, 3], [4]]),
+    (-1, [[0, 1, 2, 3, 4]]),
+])
+async def test_scroll_groups_hits_and_forwards_requested_size(monkeypatch, size, expected):
+    async def scan(_client, **kwargs):
+        assert kwargs["size"] == size
+        for i in range(5):
+            yield {"_id": i}
+
+    monkeypatch.setattr(search_client, "async_scan", scan)
+    pages = [page async for page in SearchIndex(None, "test").pages({"size": size})]
+    assert pages == [[{"_id": i} for i in group] for group in expected]
+
+
 @pytest.mark.parametrize("ending", ["exhausted", "early", "error", "cancelled"])
 async def test_scroll_context_is_released_for_every_exit(ending):
     import asyncio

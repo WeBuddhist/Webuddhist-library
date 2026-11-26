@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from database import language as language_database
 from database import person as person_database
 from database import text as text_database
+from database.repository import iter_id_batches
 from errors import DataNotFoundError
 from models.base import base_language_code
 from models.contribution import PersonContributionOutput
@@ -39,6 +40,19 @@ class CatalogSearchService:
             return _text_document(await text_database.get(db, entity_id))
         except DataNotFoundError:
             return {"id": _document_id(kind, entity_id), "document_type": kind, "deleted": True}
+
+    async def populate_index(self, db: Database) -> int:
+        """Fill an empty replacement index during a write pause."""
+        indexed = 0
+        async for rows in iter_id_batches(db, "MATCH (p:Person) WHERE p.id > $after RETURN p.id AS id"):
+            people = await person_database.get_by_ids(db, [row["id"] for row in rows])
+            indexed += await self.index.bulk_index(map(_person_document, people), refresh=False)
+        # A canonical text has an owning Work. Older graphs can contain texts without one.
+        text_query = "MATCH (t:Text) WHERE t.id > $after AND EXISTS { (t)-[:TEXT_OF]->(:Work) } RETURN t.id AS id"
+        async for rows in iter_id_batches(db, text_query):
+            texts = await text_database.get_by_ids(db, [row["id"] for row in rows])
+            indexed += await self.index.bulk_index(map(_text_document, texts), refresh=False)
+        return indexed
 
     async def index_entity(self, kind: str, entity_id: str, db: Database) -> None:
         await self.index.publish(await self.prepare_document(kind, entity_id, db))

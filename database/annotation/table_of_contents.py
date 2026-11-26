@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, LiteralString
 
 from database import nomen
-from database.content_state import read_value, touch_annotation, touch_edition, validate_edition_exists
+from database.content_state import read_value, touch_annotation, touch_edition
 from database.excerpt import read_edition
 from database.repository import SessionSource, fetch_record, reading, writing
 from errors import DataNotFoundError
@@ -15,7 +15,7 @@ from models.annotation import (
 )
 
 if TYPE_CHECKING:
-    from neo4j import AsyncManagedTransaction, Record
+    from neo4j import AsyncManagedTransaction
 
     from database.excerpt import ExcerptMap
 
@@ -57,40 +57,32 @@ MATCH (parent:TableOfContentsSection {id: section_data.parent_id})
 CREATE (section)-[:SUBSECTION_OF]->(parent)
 RETURN count(section) AS count
 """
-GET_BY_ID_QUERY: LiteralString = """
-MATCH (toc:TableOfContents {id: $toc_id})-[:TOC_OF]->(edition:Edition)-[:EDITION_OF]->(text:Text)
+_TOC_HEADER: LiteralString = """
 OPTIONAL MATCH (toc)-[:HAS_METADATA]->(metadata:AnnotationMetadata)
-RETURN {
-    id: toc.id,
-    edition_id: edition.id,
-    text_id: text.id,
-    metadata: CASE WHEN metadata IS NULL THEN null ELSE {name: metadata.name} END
-} AS toc
+WITH toc, toc {.id, edition_id: edition.id, text_id: text.id, metadata: metadata {.name}} AS header
 """
-GET_BY_EDITION_ID_QUERY: LiteralString = """
-MATCH (edition:Edition {id: $edition_id})-[:EDITION_OF]->(text:Text)
-MATCH (toc:TableOfContents)-[:TOC_OF]->(edition)
-OPTIONAL MATCH (toc)-[:HAS_METADATA]->(metadata:AnnotationMetadata)
-RETURN {
-    id: toc.id,
-    edition_id: edition.id,
-    text_id: text.id,
-    metadata: CASE WHEN metadata IS NULL THEN null ELSE {name: metadata.name} END
-} AS toc
-ORDER BY toc.id
-"""
-GET_SECTIONS_QUERY: LiteralString = f"""
-MATCH (section:TableOfContentsSection)-[:SECTION_OF]->(:TableOfContents {{id: $toc_id}})
+_SECTION_ROWS: LiteralString = f"""
+MATCH (section:TableOfContentsSection)-[:SECTION_OF]->(toc)
 MATCH (span:Span)-[:SPAN_OF]->(section)
 OPTIONAL MATCH (section)-[:SUBSECTION_OF]->(parent:TableOfContentsSection)
-RETURN {{
-    id: section.id,
+RETURN {{parent_id: parent.id, section: section {{
+    .id,
     title: {nomen.localized_map("(section)-[:HAS_TITLE]->(:Nomen)")},
     summary: nullIf({nomen.localized_map("(section)-[:HAS_SUMMARY]->(:Nomen)")}, {{}}),
-    span: {{start: span.start, end: span.end}}
-}} AS section,
-parent.id AS parent_id
-ORDER BY parent_id, section.span.start, section.span.end, section.id
+    span: span {{.start, .end}}
+}}}} AS row
+ORDER BY row.parent_id, row.section.span.start, row.section.span.end, row.section.id
+"""
+GET_BY_ID_QUERY: LiteralString = f"""
+MATCH (toc:TableOfContents {{id: $toc_id}})-[:TOC_OF]->(edition:Edition)-[:EDITION_OF]->(text:Text)
+{_TOC_HEADER}
+RETURN header
+"""
+GET_BY_EDITION_ID_QUERY: LiteralString = f"""
+MATCH (edition:Edition {{id: $edition_id}})-[:EDITION_OF]->(text:Text)
+MATCH (toc:TableOfContents)-[:TOC_OF]->(edition)
+{_TOC_HEADER}
+RETURN header, COLLECT {{ {_SECTION_ROWS} }} AS sections ORDER BY header.id
 """
 _DELETE_BODY: LiteralString = """
 OPTIONAL MATCH (toc)-[:HAS_METADATA]->(metadata:AnnotationMetadata)
@@ -141,7 +133,7 @@ async def _flatten_sections(
     return flattened
 
 
-def _build_sections(records: Sequence[dict[str, Any] | Record]) -> list[TableOfContentsSectionOutput]:
+def _build_toc(header: dict, records: Sequence[dict[str, Any]]) -> TableOfContentsOutput:
     nodes: dict[str, TableOfContentsSectionOutput] = {}
     parent_ids: dict[str, str | None] = {}
     for record in records:
@@ -149,29 +141,11 @@ def _build_sections(records: Sequence[dict[str, Any] | Record]) -> list[TableOfC
         nodes[node.id] = node
         parent_ids[node.id] = record["parent_id"]
     roots: list[TableOfContentsSectionOutput] = []
-    for node_id, node in nodes.items():
-        parent_id = parent_ids[node_id]
-        if parent_id and parent_id in nodes:
-            nodes[parent_id].subsections.append(node)
-        else:
-            roots.append(node)
-    for node in nodes.values():
-        node.subsections.sort(key=lambda item: (item.span.start, item.span.end, item.id))
-    roots.sort(key=lambda item: (item.span.start, item.span.end, item.id))
-    return roots
-
-
-async def _build_toc_output(tx: AsyncManagedTransaction, record: dict[str, Any] | Record) -> TableOfContentsOutput:
-    toc_data = dict(record["toc"])
-    result = await tx.run(GET_SECTIONS_QUERY, toc_id=toc_data["id"])
-    sections = _build_sections(await result.data())
-    return TableOfContentsOutput.model_validate(toc_data | {"sections": sections})
-
-
-async def _get_all(tx: AsyncManagedTransaction, edition_id: str) -> list[TableOfContentsOutput]:
-    await validate_edition_exists(tx, edition_id)
-    result = await tx.run(GET_BY_EDITION_ID_QUERY, edition_id=edition_id)
-    return [await _build_toc_output(tx, record) for record in await result.data()]
+    for node in sorted(nodes.values(), key=lambda item: (item.span.start, item.span.end, item.id)):
+        parent_id = parent_ids[node.id]
+        siblings = nodes[parent_id].subsections if parent_id is not None and parent_id in nodes else roots
+        siblings.append(node)
+    return TableOfContentsOutput.model_validate(header | {"sections": roots})
 
 
 @writing
@@ -207,7 +181,11 @@ async def delete(tx: AsyncManagedTransaction, toc_id: str) -> None:
 async def get(tx: AsyncManagedTransaction, toc_id: str) -> TableOfContentsOutput:
     record = await fetch_record(tx, GET_BY_ID_QUERY, f"Table of contents with ID '{toc_id}' not found", toc_id=toc_id)
 
-    return await read_value(tx, record["toc"]["edition_id"], lambda tx: _build_toc_output(tx, record))
+    async def read(tx: AsyncManagedTransaction) -> TableOfContentsOutput:
+        result = await tx.run("MATCH (toc:TableOfContents {id: $toc_id})\n" + _SECTION_ROWS, toc_id=toc_id)
+        return _build_toc(record["header"], await result.value("row"))
+
+    return await read_value(tx, record["header"]["edition_id"], read)
 
 
 async def get_all(db: SessionSource, edition_id: str) -> list[TableOfContentsOutput]:
@@ -215,7 +193,8 @@ async def get_all(db: SessionSource, edition_id: str) -> list[TableOfContentsOut
     async def read(
         tx: AsyncManagedTransaction, source_id: str, excerpt: ExcerptMap | None
     ) -> list[TableOfContentsOutput]:
-        tocs = await _get_all(tx, source_id)
+        result = await tx.run(GET_BY_EDITION_ID_QUERY, edition_id=source_id)
+        tocs = [_build_toc(record["header"], record["sections"]) async for record in result]
         return excerpt.project_tocs(tocs) if excerpt else tocs
 
     return await db.read(read_edition, edition_id, read)

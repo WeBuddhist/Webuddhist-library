@@ -16,7 +16,7 @@ This document provides an overview of the Neo4j-backed data access layer in [dat
 
 ## Overview
 
-The **Database** class in [database/database.py](../../database/database.py) holds an async Neo4j driver. Domain operations live in modules such as `text` and `person`. Graph labels and relationships are declared in [neo4j_schema.yaml](../../database/neo4j_schema.yaml), which is also the source of the unique constraints. Lookup indexes are listed in [schema.py](../../database/schema.py); APOC triggers (including required-relationship rules) live in [neo4j_triggers.py](../../database/neo4j_triggers.py).
+The **Database** class in [database/database.py](../../database/database.py) holds an async Neo4j driver. Domain operations live in modules such as `text` and `person`. The graph schema supplies the unique constraints and required relationship rules. Each required relationship generates an APOC existence check, plus an at-most-one check when its cardinality is `one`. The trigger module also defines domain-specific rules. [Graph schema](../../database/neo4j_schema.yaml) · [Lookup indexes](../../database/schema.py) · [APOC triggers](../../database/neo4j_triggers.py)
 
 ---
 

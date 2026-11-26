@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -88,9 +89,23 @@ async def test_missing_tag_identifies_tag(client, work, application):
     assert response.json()["detail"] == f"Tag 'missing-tag' not found{scope}"
 
 
-async def test_missing_work_identifies_work(test_database, work):
-    with pytest.raises(DataNotFoundError, match="^Work 'missing-work' not found$"):
-        await tag_database.tag_work(test_database, "missing-work", work["a"])
+@pytest.mark.parametrize(("owner", "attach", "detach"), [
+    ("Work", tag_database.tag_work, tag_database.untag_work),
+    ("Segment", tag_database.tag_segment, tag_database.untag_segment),
+])
+async def test_missing_tag_owner_keeps_lock_order_and_errors(test_database, work, owner, attach, detach, monkeypatch):
+    locks = AsyncMock(wraps=tag_database.lock_nodes)
+    monkeypatch.setattr(tag_database, "lock_nodes", locks)
+    tag_id = work["a"]
+    for operation, message in (
+        (attach, f"{owner} 'missing' not found"),
+        (detach, f"Tag '{tag_id}' is not attached to {owner} 'missing'"),
+    ):
+        locks.reset_mock()
+        with pytest.raises(DataNotFoundError) as error:
+            await operation(test_database, "missing", tag_id)
+        assert str(error.value) == message
+        assert [call.args[1:] for call in locks.await_args_list] == [(owner, ["missing"]), ("Tag", [tag_id])]
 
 
 async def test_bound_key_cannot_create_text_with_foreign_category(auth_client, test_database, work):
@@ -132,13 +147,18 @@ async def test_foreign_tag_cannot_be_attached_or_removed(auth_client, test_datab
     )
     segment = (await get_all_segments_by_edition(test_database, edition_id))[0]
     await tag_database.tag_segment(test_database, segment.id, work["b"])
-    for resource, resource_id in (("texts", work["text"]), ("segments", segment.id)):
+    work_id = await text_database.get_work_id(test_database, work["text"])
+    for resource, resource_id, owner, owner_id in (
+        ("texts", work["text"], "Work", work_id), ("segments", segment.id, "Segment", segment.id)
+    ):
         response = await auth_client.request(
             method, f"/v2/{resource}/{resource_id}/tags/{work['b']}", headers=work["headers"]
         )
         assert response.status_code == 404, response.text
-        if resource == "texts" and method == "POST":
+        if method == "POST":
             assert response.json()["detail"] == f"Tag '{work['b']}' not found in application 'test_application'"
+        else:
+            assert response.json()["detail"] == f"Tag '{work['b']}' is not attached to {owner} '{owner_id}'"
     assert work["b"] in (await text_database.get(test_database, work["text"])).tag_ids
     assert work["b"] in (await segment_database.get(test_database, segment.id)).tag_ids
 

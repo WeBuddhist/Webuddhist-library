@@ -4,7 +4,7 @@ import logging
 from enum import StrEnum
 from typing import LiteralString, cast
 
-from neo4j import AsyncDriver, AsyncManagedTransaction, RoutingControl
+from neo4j import AsyncDriver, AsyncManagedTransaction, AsyncResult, RoutingControl
 
 from database.neo4j_triggers import audit_triggers, install_triggers
 from database.schema import schema_statements
@@ -124,8 +124,9 @@ UPGRADE_RECORDING_QUERY: LiteralString = """
 
 async def _ids(driver: AsyncDriver, database: str, query: LiteralString, **params: object) -> list[str]:
     """The first column of every row."""
-    records, _, _ = await driver.execute_query(query, params, database_=database, routing_=RoutingControl.READ)
-    return [record[0] for record in records]
+    return await driver.execute_query(
+        query, params, database_=database, routing_=RoutingControl.READ, result_transformer_=AsyncResult.value
+    )
 
 
 async def legacy_recording_ids(driver: AsyncDriver, database: str) -> list[str]:

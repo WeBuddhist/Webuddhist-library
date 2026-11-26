@@ -3,12 +3,11 @@
 import argparse
 import asyncio
 import logging
-from typing import TYPE_CHECKING, LiteralString
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from config import check_environment, settings
 from database import Database
-from database.repository import iter_id_batches
 from search.catalog import CatalogSearchService
 from search.catalog_mapping import catalog_index_body
 from search.client import create_search_client
@@ -41,7 +40,7 @@ async def rebuild(
     await client.indices.create(index=names[content_alias], body=content_index_body())
     catalog = CatalogSearchService(client=client, index_name=names[catalog_alias])
     content = ContentSearchService(client=client, index_name=names[content_alias])
-    counts = await _populate(db, storage, catalog, content, catalog_alias=catalog_alias, content_alias=content_alias)
+    counts = {catalog_alias: await catalog.populate_index(db), content_alias: await content.populate_index(db, storage)}
     for alias, index in names.items():
         await client.indices.refresh(index=index)
         actual = (await client.count(index=index))["count"]
@@ -56,31 +55,6 @@ async def rebuild(
         logger.warning("Replacing concrete indexes with aliases of the same names: %s", sorted(concrete))
     await client.indices.update_aliases(body={"actions": actions})
     return {"previous": old, "current": names, "documents": counts, "replaced_concrete": sorted(concrete)}
-
-
-async def _populate(
-    db: Database,
-    storage: Storage,
-    catalog: CatalogSearchService,
-    content: ContentSearchService,
-    *,
-    catalog_alias: str,
-    content_alias: str,
-) -> dict[str, int]:
-    counts = {catalog_alias: 0, content_alias: 0}
-    labels: dict[str, LiteralString] = {"person": "Person", "text": "Text", "edition": "Edition"}
-    for kind, label in labels.items():
-        async for rows in iter_id_batches(db, f"MATCH (n:{label}) WHERE n.id > $after RETURN n.id AS id"):
-            if kind == "edition":
-                for row in rows:
-                    chunks = await content.prepare_documents(row["id"], db, storage)
-                    counts[content_alias] += await content.index.bulk_index(chunks, refresh=False)
-            else:
-                documents = [await catalog.prepare_document(kind, row["id"], db) for row in rows]
-                counts[catalog_alias] += await catalog.index.bulk_index(
-                    (doc for doc in documents if not doc.get("deleted")), refresh=False
-                )
-    return counts
 
 
 async def main() -> None:

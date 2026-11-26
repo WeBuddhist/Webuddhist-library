@@ -171,13 +171,12 @@ class TestTableOfContents:
         names = {toc["metadata"]["name"] for toc in response.json()}
         assert names == {"First toc", "Second toc"}
 
-    async def test_add_table_of_contents_edition_not_found(self, client):
-        response = await client.post(
-            "/v2/editions/nonexistent_id/table-of-contents", json=_table_of_contents_payload()
-        )
-
+    @pytest.mark.parametrize("method", ["GET", "POST"])
+    async def test_table_of_contents_edition_not_found(self, client, method):
+        body = {"json": _table_of_contents_payload()} if method == "POST" else {}
+        response = await client.request(method, "/v2/editions/nonexistent_id/table-of-contents", **body)
         assert response.status_code == 404
-        assert "detail" in response.json()
+        assert response.json()["detail"] == "Edition with ID 'nonexistent_id' not found"
 
     async def test_table_of_contents_creates_span_of_for_every_section(
         self, client, test_database, test_person_data

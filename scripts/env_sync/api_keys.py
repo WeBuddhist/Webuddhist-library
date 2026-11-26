@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
 
-from neo4j import Driver, GraphDatabase, ManagedTransaction
+from neo4j import Driver, GraphDatabase, ManagedTransaction, Result
 
 from config import settings
 
@@ -83,8 +83,7 @@ def _driver() -> Driver:
 
 def save(path: str) -> None:
     with _driver() as driver:
-        records, _, _ = driver.execute_query(EXPORT_QUERY, database_=settings.neo4j_database)
-    keys = [record.data() for record in records]
+        keys = driver.execute_query(EXPORT_QUERY, database_=settings.neo4j_database, result_transformer_=Result.data)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(keys, f)

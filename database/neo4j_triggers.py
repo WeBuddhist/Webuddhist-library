@@ -6,6 +6,7 @@ from typing import Literal, LiteralString, cast
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
+from database.schema import NODES
 from models.enums import AUDIO_ROLES
 
 logger = logging.getLogger(__name__)
@@ -161,63 +162,28 @@ def _no_self_ref_trigger(rel_type: str, description: str | None = None) -> Trigg
     )
 
 
-# Required / at-most-one relationship rules. Kept here (not in neo4j_schema.yaml) so the YAML
-# describes the graph shape without owning APOC enforcement.
-_REQUIRED_RELATIONSHIPS: list[tuple[str, str, str, str, bool]] = [
-    # name, source, rel_type, target, max_one
-    ("enforce_work_has_category", "Work", "HAS_CATEGORY", "Category", True),
-    ("enforce_tag_belongs_to", "Tag", "BELONGS_TO", "Application", True),
-    ("enforce_tag_has_title", "Tag", "HAS_TITLE", "Nomen", True),
-    ("enforce_category_belongs_to", "Category", "BELONGS_TO", "Application", True),
-    ("enforce_category_has_title", "Category", "HAS_TITLE", "Nomen", True),
-    ("enforce_text_has_text_of", "Text", "TEXT_OF", "Work", True),
-    ("enforce_text_has_language", "Text", "HAS_LANGUAGE", "Language", True),
-    ("enforce_text_has_title", "Text", "HAS_TITLE", "Nomen", True),
-    ("enforce_text_has_license", "Text", "HAS_LICENSE", "LicenseType", True),
-    ("enforce_edition_has_type", "Edition", "HAS_TYPE", "EditionType", True),
-    ("enforce_edition_edition_of", "Edition", "EDITION_OF", "Text", True),
-    ("enforce_audio_audio_of", "Audio", "AUDIO_OF", "Work", True),
-    ("enforce_audio_recitation_of", "Audio", "RECITATION_OF", "Text", True),
-    ("enforce_audio_has_language", "Audio", "HAS_LANGUAGE", "Language", True),
-    ("enforce_audio_has_license", "Audio", "HAS_LICENSE", "LicenseType", True),
-    ("enforce_audio_has_contribution", "Audio", "HAS_CONTRIBUTION", "Contribution", False),
-    ("enforce_recording_rendition_of", "Recording", "RENDITION_OF", "Audio", True),
-    ("enforce_cue_cue_of", "Cue", "CUE_OF", "Recording", True),
-    ("enforce_segment_segment_of", "Segment", "SEGMENT_OF", "Segmentation", True),
-    (
-        "enforce_span_span_of",
-        "Span",
-        "SPAN_OF",
-        "Segment|BibliographicMetadata|Note|Mark|Attribute|Page|TableOfContentsSection|Cue|Edition",
-        True,
-    ),
-    ("enforce_bibmeta_bibliography_of", "BibliographicMetadata", "BIBLIOGRAPHY_OF", "Edition", True),
-    ("enforce_bibmeta_has_type", "BibliographicMetadata", "HAS_TYPE", "BibliographyType", True),
-    ("enforce_note_note_of", "Note", "NOTE_OF", "Edition", True),
-    ("enforce_note_has_type", "Note", "HAS_TYPE", "NoteType", True),
-    ("enforce_mark_mark_of", "Mark", "MARK_OF", "Edition", True),
-    ("enforce_mark_has_type", "Mark", "HAS_TYPE", "MarkType", True),
-    ("enforce_attribute_attribute_of", "Attribute", "ATTRIBUTE_OF", "Edition", True),
-    ("enforce_attribute_has_type", "Attribute", "HAS_TYPE", "AttributeType", True),
-    ("enforce_pagination_pagination_of", "Pagination", "PAGINATION_OF", "Edition", True),
-    ("enforce_toc_edition", "TableOfContents", "TOC_OF", "Edition", True),
-    ("enforce_toc_section", "TableOfContentsSection", "SECTION_OF", "TableOfContents", True),
-    ("enforce_toc_section_title", "TableOfContentsSection", "HAS_TITLE", "Nomen", True),
-    ("enforce_volume_volume_of", "Volume", "VOLUME_OF", "Pagination", True),
-    ("enforce_page_page_of", "Page", "PAGE_OF", "Volume", True),
-    ("enforce_contribution_by", "Contribution", "BY", "Person|AI", True),
-    ("enforce_contribution_with_role", "Contribution", "WITH_ROLE", "RoleType", True),
-    ("enforce_person_has_name", "Person", "HAS_NAME", "Nomen", True),
-    ("enforce_nomen_has_localization", "Nomen", "HAS_LOCALIZATION", "LocalizedText", False),
-    ("enforce_localizedtext_has_language", "LocalizedText", "HAS_LANGUAGE", "Language", True),
-]
+# Deployed names that differ from the enforce_<source>_<relationship> convention.
+_RELATIONSHIP_TRIGGER_NAMES = {
+    ("Text", "TEXT_OF"): "enforce_text_has_text_of",
+    ("BibliographicMetadata", "BIBLIOGRAPHY_OF"): "enforce_bibmeta_bibliography_of",
+    ("BibliographicMetadata", "HAS_TYPE"): "enforce_bibmeta_has_type",
+    ("TableOfContents", "TOC_OF"): "enforce_toc_edition",
+    ("TableOfContentsSection", "SECTION_OF"): "enforce_toc_section",
+    ("TableOfContentsSection", "HAS_TITLE"): "enforce_toc_section_title",
+}
 
 
 def _required_relationship_triggers() -> Iterator[Trigger]:
-    for name, source, rel_type, target, max_one in _REQUIRED_RELATIONSHIPS:
-        yield _required_rel_trigger(name, source, rel_type, target)
-        if max_one:
-            yield _max_one_trigger(f"{name}_max_one", source, rel_type, None if "|" in target else target)
+    for source, node in NODES.items():
+        for rel_type, spec in node.get("relationships", {}).items():
+            if not spec["required"]:
+                continue
+            name = _RELATIONSHIP_TRIGGER_NAMES.get((source, rel_type), f"enforce_{source.lower()}_{rel_type.lower()}")
+            targets = [label.strip() for label in spec["target"].split("|")]
+            yield _required_rel_trigger(name, source, rel_type, "|".join(targets))
+            if spec["cardinality"] == "one":
+                # For a union, count outgoing relationships across all target labels.
+                yield _max_one_trigger(f"{name}_max_one", source, rel_type, targets[0] if len(targets) == 1 else None)
 
 
 def _node_rule(name: str, description: str, label: str, message: str, invalid: str) -> Trigger:
@@ -682,8 +648,7 @@ async def audit_triggers(driver: AsyncDriver, database: str = DATABASE_NAME) -> 
         found: dict[str, list[str]] = {}
         for trigger in TRIGGERS:
             result = await tx.run(cast(LiteralString, trigger.audit))
-            records = await result.data()
-            violating_ids = [str(r["violating_id"]) for r in records]
+            violating_ids = [str(value) for value in await result.value("violating_id")]
             if violating_ids:
                 found[trigger.name] = violating_ids
                 preview = ", ".join(violating_ids[:5])

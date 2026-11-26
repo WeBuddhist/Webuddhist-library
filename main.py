@@ -10,7 +10,8 @@ from opensearchpy.exceptions import OpenSearchException
 from config import check_environment, settings
 from database import Database
 from dependencies import get_api_key
-from errors import PROBLEM_JSON, InvalidRequestError, Problem, add_exception_handlers
+from errors import InvalidRequestError
+from http_errors import PROBLEM_JSON, Problem, add_exception_handlers
 from observability import setup_telemetry
 from routers.alignments import router as alignments_router
 from routers.annotations import router as annotations_router

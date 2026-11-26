@@ -6,6 +6,7 @@ from itertools import batched
 from typing import TYPE_CHECKING
 
 from database.content_state import read_at_revision, read_revisions
+from database.repository import iter_id_batches
 from errors import DataNotFoundError, DataValidationError
 from models.content_search import ContentSearchResult, ContentSearchSpan
 from search.client import SearchIndex, term_filters
@@ -36,6 +37,15 @@ class ContentSearchService:
 
     async def setup_index(self) -> None:
         await self.index.setup_index(content_index_body())
+
+    async def populate_index(self, db: Database, storage: Storage) -> int:
+        """Fill an empty replacement index during a write pause."""
+        indexed = 0
+        async for rows in iter_id_batches(db, "MATCH (e:Edition) WHERE e.id > $after RETURN e.id AS id"):
+            for row in rows:
+                chunks = await self.prepare_documents(row["id"], db, storage)
+                indexed += await self.index.bulk_index(chunks, refresh=False)
+        return indexed
 
     async def prepare_documents(self, edition_id: str, db: Database, storage: Storage) -> list[dict]:
         async def eligibility(tx: AsyncManagedTransaction) -> bool:
