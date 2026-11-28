@@ -181,4 +181,5 @@ but key restoration failed, the target database can still contain production API
 ## Documentation
 
 See the [API guide](docs/api-documentation/README.md) for route documentation and examples.
+The [graph schema syntax reference](docs/reference/graph-schema.md) covers Neo4j declarations and conditional cardinality.
 The running API exposes Swagger UI at `/docs`, ReDoc at `/redoc`, and its OpenAPI schema at `/openapi.json`.

@@ -1,131 +1,71 @@
-def _tibetan_analyzer(char_filter: str, token_filter: str) -> dict:
-    return {"type": "custom", "tokenizer": "tibetan", "char_filter": [char_filter], "filter": [token_filter]}
+from opensearchpy import Index, Keyword, Text, analyzer, char_filter, token_filter
+from opensearchpy.helpers.analysis import Analyzer, CharFilter, TokenFilter
 
 
-def _sanskrit_char_filter(input_method: str) -> dict:
-    return {
-        "type": "iast",
-        "input_method": input_method,
-        "lenient": True,
-        "filter_geminates": True,
-        "normalize_anusvara": True,
-    }
+def _tibetan_analyzer(name: str, chars: CharFilter, terms: TokenFilter | str) -> Analyzer:
+    return analyzer(name, tokenizer="tibetan", char_filter=[chars], filter=[terms])
+
+
+def _sanskrit_analyzer(script: str) -> Analyzer:
+    name = f"catalog_sanskrit_{script}"
+    chars = char_filter(
+        f"{name}_char", type="iast", input_method=script, lenient=True, filter_geminates=True, normalize_anusvara=True
+    )
+    return analyzer(name, tokenizer="iast", char_filter=[chars], filter=["lowercase"])
 
 
 def catalog_index_body() -> dict:
-    return {
-        "settings": {
-            "number_of_shards": 1,
-            "analysis": {
-                "analyzer": {
-                    "catalog_folded": {
-                        "type": "custom",
-                        "tokenizer": "icu_tokenizer",
-                        "filter": ["lowercase", "icu_folding"],
-                    },
-                    "catalog_plain": {
-                        "type": "custom",
-                        "tokenizer": "standard",
-                        "filter": ["lowercase"],
-                    },
-                    "catalog_tibetan": _tibetan_analyzer(
-                        "catalog_tibetan_lenient_char", "catalog_tibetan_lenient_filter"
-                    ),
-                    "catalog_tibetan_ewts": _tibetan_analyzer(
-                        "catalog_tibetan_ewts_char", "catalog_tibetan_lenient_filter"
-                    ),
-                    "catalog_tibetan_phonetic_index": _tibetan_analyzer(
-                        "catalog_tibetan_lenient_char", "tibetan-for-english-phonetic"
-                    ),
-                    "catalog_tibetan_ewts_phonetic_index": _tibetan_analyzer(
-                        "catalog_tibetan_ewts_char", "tibetan-for-english-phonetic"
-                    ),
-                    "catalog_tibetan_phonetic_search": {
-                        "type": "custom",
-                        "tokenizer": "tibetan-english-phonetic",
-                        "char_filter": ["tibetan-english-phonetic"],
-                    },
-                    "catalog_sanskrit_roman": {
-                        "type": "custom",
-                        "char_filter": ["catalog_sanskrit_roman_char"],
-                        "tokenizer": "iast",
-                        "filter": ["lowercase"],
-                    },
-                    "catalog_sanskrit_deva": {
-                        "type": "custom",
-                        "char_filter": ["catalog_sanskrit_deva_char"],
-                        "tokenizer": "iast",
-                        "filter": ["lowercase"],
-                    },
-                },
-                "char_filter": {
-                    "catalog_tibetan_lenient_char": {
-                        "type": "tibetan",
-                        "lenient": True,
-                    },
-                    "catalog_tibetan_ewts_char": {
-                        "type": "tibetan",
-                        "lenient": True,
-                        "input_method": "ewts",
-                    },
-                    "catalog_sanskrit_roman_char": _sanskrit_char_filter("roman"),
-                    "catalog_sanskrit_deva_char": _sanskrit_char_filter("deva"),
-                },
-                "filter": {
-                    "catalog_tibetan_lenient_filter": {
-                        "type": "tibetan",
-                        "remove_affixes": True,
-                        "normalize_paba": True,
-                    },
-                },
+    folded = analyzer("catalog_folded", tokenizer="icu_tokenizer", filter=["lowercase", "icu_folding"])
+    plain = analyzer("catalog_plain", tokenizer="standard", filter=["lowercase"])
+    tibetan_chars = char_filter("catalog_tibetan_lenient_char", type="tibetan", lenient=True)
+    ewts_chars = char_filter("catalog_tibetan_ewts_char", type="tibetan", lenient=True, input_method="ewts")
+    tibetan_terms = token_filter(
+        "catalog_tibetan_lenient_filter", type="tibetan", remove_affixes=True, normalize_paba=True
+    )
+    tibetan = _tibetan_analyzer("catalog_tibetan", tibetan_chars, tibetan_terms)
+    ewts = _tibetan_analyzer("catalog_tibetan_ewts", ewts_chars, tibetan_terms)
+    tibetan_phonetic = _tibetan_analyzer(
+        "catalog_tibetan_phonetic_index", tibetan_chars, "tibetan-for-english-phonetic"
+    )
+    ewts_phonetic = _tibetan_analyzer("catalog_tibetan_ewts_phonetic_index", ewts_chars, "tibetan-for-english-phonetic")
+    phonetic_search = analyzer(
+        "catalog_tibetan_phonetic_search",
+        tokenizer="tibetan-english-phonetic",
+        char_filter=["tibetan-english-phonetic"],
+    )
+
+    index = Index(name=None).settings(number_of_shards=1)
+    mapping = index.get_or_create_mapping().meta("_meta", projection_version=2)
+    for name in (
+        "id",
+        "document_type",
+        "person_id",
+        "text_id",
+        "bdrc",
+        "wiki",
+        "language",
+        "category_id",
+        "tag_ids",
+        "contributor_ids",
+    ):
+        mapping.field(name, Keyword())
+    for name in ("primary_labels", "alt_labels", "search_labels_folded"):
+        mapping.field(name, Text(analyzer=folded))
+    mapping.field(
+        "search_labels_bo",
+        Text(
+            analyzer=tibetan,
+            fields={
+                "phonetic": Text(analyzer=tibetan_phonetic, search_analyzer=phonetic_search),
+                "ewts": Text(analyzer=tibetan, search_analyzer=ewts),
             },
-        },
-        "mappings": {
-            "_meta": {"projection_version": 2},
-            "properties": {
-                "id": {"type": "keyword"},
-                "document_type": {"type": "keyword"},
-                "person_id": {"type": "keyword"},
-                "text_id": {"type": "keyword"},
-                "bdrc": {"type": "keyword"},
-                "wiki": {"type": "keyword"},
-                "language": {"type": "keyword"},
-                "category_id": {"type": "keyword"},
-                "tag_ids": {"type": "keyword"},
-                "contributor_ids": {"type": "keyword"},
-                "primary_labels": {"type": "text", "analyzer": "catalog_folded"},
-                "alt_labels": {"type": "text", "analyzer": "catalog_folded"},
-                "search_labels_folded": {"type": "text", "analyzer": "catalog_folded"},
-                "search_labels_bo": {
-                    "type": "text",
-                    "analyzer": "catalog_tibetan",
-                    "fields": {
-                        "phonetic": {
-                            "type": "text",
-                            "analyzer": "catalog_tibetan_phonetic_index",
-                            "search_analyzer": "catalog_tibetan_phonetic_search",
-                        },
-                        "ewts": {
-                            "type": "text",
-                            "analyzer": "catalog_tibetan",
-                            "search_analyzer": "catalog_tibetan_ewts",
-                        },
-                    },
-                },
-                "search_labels_bo_ewts": {
-                    "type": "text",
-                    "analyzer": "catalog_tibetan_ewts",
-                    "fields": {
-                        "phonetic": {
-                            "type": "text",
-                            "analyzer": "catalog_tibetan_ewts_phonetic_index",
-                            "search_analyzer": "catalog_tibetan_phonetic_search",
-                        },
-                    },
-                },
-                "search_labels_sa": {"type": "text", "analyzer": "catalog_sanskrit_roman"},
-                "search_labels_sa_deva": {"type": "text", "analyzer": "catalog_sanskrit_deva"},
-                "search_labels_plain": {"type": "text", "analyzer": "catalog_plain"},
-            },
-        },
-    }
+        ),
+    )
+    mapping.field(
+        "search_labels_bo_ewts",
+        Text(analyzer=ewts, fields={"phonetic": Text(analyzer=ewts_phonetic, search_analyzer=phonetic_search)}),
+    )
+    mapping.field("search_labels_sa", Text(analyzer=_sanskrit_analyzer("roman")))
+    mapping.field("search_labels_sa_deva", Text(analyzer=_sanskrit_analyzer("deva")))
+    mapping.field("search_labels_plain", Text(analyzer=plain))
+    return index.to_dict()

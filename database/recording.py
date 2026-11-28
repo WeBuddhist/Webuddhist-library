@@ -30,75 +30,39 @@ RETURN {{
     id: r.id, format: r.format, size_bytes: r.size_bytes, duration_ms: r.duration_ms,
     audio_id: a.id,
     text_id: [(a)-[:RECITATION_OF]->(t:Text) | t.id][0],
-    edition_id: [(r)-[:FOLLOWS]->(m:Edition) | m.id][0],
+    edition_id: m.id,
     title: {nomen.optional_localized_map("(r)-[:HAS_TITLE]->(:Nomen)")}
 }} AS recording
 """
-GET_BY_ID_QUERY: LiteralString = f"""
-MATCH (r:Recording {{id: $recording_id}})-[:RENDITION_OF]->(a:Audio)
-{_RECORDING_RETURN}
-"""
-GET_BY_AUDIO_ID_QUERY: LiteralString = f"""
-MATCH (r:Recording)-[:RENDITION_OF]->(a:Audio {{id: $audio_id}})
-WITH r, a
-ORDER BY r.id
-{_RECORDING_RETURN}
-"""
-GET_BY_EDITION_ID_QUERY: LiteralString = f"""
-MATCH (r:Recording)-[:FOLLOWS]->(:Edition {{id: $edition_id}})
-MATCH (r)-[:RENDITION_OF]->(a:Audio)
-WITH r, a
-ORDER BY r.id
-{_RECORDING_RETURN}
-"""
+_MATCH_RECORDING: LiteralString = "MATCH (m:Edition)<-[:FOLLOWS]-(r:Recording)-[:RENDITION_OF]->(a:Audio)"
+_ORDERED_RECORDINGS: LiteralString = _RECORDING_RETURN + " ORDER BY r.id"
+GET_BY_ID_QUERY: LiteralString = f"{_MATCH_RECORDING} WHERE r.id = $recording_id {_RECORDING_RETURN}"
+GET_BY_AUDIO_ID_QUERY: LiteralString = f"{_MATCH_RECORDING} WHERE a.id = $audio_id {_ORDERED_RECORDINGS}"
+GET_BY_EDITION_ID_QUERY: LiteralString = f"{_MATCH_RECORDING} WHERE m.id = $edition_id {_ORDERED_RECORDINGS}"
 FOLLOWS_TARGET_QUERY: LiteralString = """
 MATCH (a:Audio {id: $audio_id})-[:RECITATION_OF]->(recited:Text)
-MATCH (m:Edition {id: $edition_id})-[:EDITION_OF]->(edition_text:Text)
+OPTIONAL MATCH (m:Edition {id: $edition_id})-[:EDITION_OF]->(edition_text:Text)
 RETURN recited.id AS recited_text_id, edition_text.id AS edition_text_id
 """
-LINKS_QUERY: LiteralString = """
-MATCH (r:Recording {id: $recording_id})-[:RENDITION_OF]->(a:Audio)
-RETURN a.id AS audio_id, [(r)-[:FOLLOWS]->(m:Edition) | m.id][0] AS edition_id
+FOLLOWED_EDITION_QUERY: LiteralString = """
+MATCH (:Recording {id: $recording_id})-[:FOLLOWS]->(m:Edition)
+RETURN m.id AS edition_id
 """
 CREATE_QUERY: LiteralString = """
 MATCH (a:Audio {id: $audio_id})
+MATCH (m:Edition {id: $edition_id})
 OPTIONAL MATCH (title:Nomen {id: $title_nomen_id})
 CREATE (r:Recording {
     id: $recording_id, audio_key: $audio_key, format: $format, size_bytes: $size_bytes,
     duration_ms: $duration_ms
 })
-CREATE (r)-[:RENDITION_OF]->(a)
+CREATE (r)-[:RENDITION_OF]->(a), (r)-[:FOLLOWS]->(m)
 CALL (*) { WHEN title IS NOT NULL THEN { CREATE (r)-[:HAS_TITLE]->(title) } }
-CALL (*) {
-    WHEN $edition_id IS NOT NULL THEN {
-        MATCH (m:Edition {id: $edition_id})
-        CREATE (r)-[:FOLLOWS]->(m)
-    }
-}
 RETURN r.id AS recording_id
-"""
-SET_FOLLOWS_QUERY: LiteralString = """
-MATCH (r:Recording {id: $recording_id})
-OPTIONAL MATCH (r)-[existing:FOLLOWS]->()
-DELETE existing
-WITH DISTINCT r
-MATCH (m:Edition {id: $edition_id})
-CREATE (r)-[:FOLLOWS]->(m)
-FINISH
-"""
-REMOVE_FOLLOWS_QUERY: LiteralString = """
-MATCH (r:Recording {id: $recording_id})-[existing:FOLLOWS]->()
-DELETE existing
-FINISH
 """
 GET_STORAGE_KEY_QUERY: LiteralString = """
 MATCH (r:Recording {id: $recording_id})
 RETURN r.audio_key AS key
-"""
-COUNT_CUED_FOLLOWERS_QUERY: LiteralString = """
-MATCH (r:Recording)-[:FOLLOWS]->(:Edition {id: $edition_id})
-WHERE EXISTS { (:Cue)-[:CUE_OF]->(r) }
-RETURN count(r) AS count
 """
 _DELETE_CUES_OF_MATCHED: LiteralString = """
 CALL (r) {
@@ -146,19 +110,14 @@ async def get(tx: AsyncManagedTransaction, recording_id: str) -> RecordingOutput
     )
 
 
-async def _validate_audio_exists(tx: AsyncManagedTransaction, audio_id: str) -> None:
-    await require_node(tx, "Audio", audio_id, DataNotFoundError(f"Audio with ID '{audio_id}' not found"))
-
-
 @reading
-async def validate_target(tx: AsyncManagedTransaction, audio_id: str, edition_id: str | None) -> None:
-    """Check the Audio exists and that the edition to follow is an edition of the text it recites."""
-    await _validate_audio_exists(tx, audio_id)
-    if edition_id is None:
-        return
-    await validate_edition_exists(tx, edition_id)
-    result = await tx.run(FOLLOWS_TARGET_QUERY, audio_id=audio_id, edition_id=edition_id)
-    record = await result.single(strict=True)
+async def validate_target(tx: AsyncManagedTransaction, audio_id: str, edition_id: str) -> None:
+    """Resolve both parents and check that they refer to the same text."""
+    record = await fetch_record(
+        tx, FOLLOWS_TARGET_QUERY, f"Audio with ID '{audio_id}' not found", audio_id=audio_id, edition_id=edition_id
+    )
+    if record["edition_text_id"] is None:
+        raise DataNotFoundError(f"Edition with ID '{edition_id}' not found")
     if record["recited_text_id"] != record["edition_text_id"]:
         raise DataValidationError(
             f"Edition '{edition_id}' is an edition of text '{record['edition_text_id']}', "
@@ -166,35 +125,18 @@ async def validate_target(tx: AsyncManagedTransaction, audio_id: str, edition_id
         )
 
 
-async def _get_links(tx: AsyncManagedTransaction, recording_id: str) -> tuple[str, str | None]:
+async def _followed_edition_id(tx: AsyncManagedTransaction, recording_id: str) -> str:
     not_found = f"Recording with ID '{recording_id}' not found"
-    record = await fetch_record(tx, LINKS_QUERY, not_found, recording_id=recording_id)
-    return (record["audio_id"], record["edition_id"])
+    record = await fetch_record(tx, FOLLOWED_EDITION_QUERY, not_found, recording_id=recording_id)
+    return record["edition_id"]
 
 
-async def _lock(tx: AsyncManagedTransaction, recording_id: str, also: str | None = None) -> tuple[str, str | None]:
-    """Lock the recording, then the edition it follows (and `also`); return its audio and that edition.
-
-    Changing FOLLOWS or deleting the edition needs the recording's lock, so the edition read here stays put.
-    """
-    await lock_nodes(tx, "Recording", [recording_id])
-    audio_id, followed = await _get_links(tx, recording_id)
-    await lock_nodes(tx, "Edition", sorted({edition for edition in (followed, also) if edition}))
-    return (audio_id, followed)
-
-
-async def _lock_followed_edition(tx: AsyncManagedTransaction, recording_id: str) -> ContentState | None:
+async def _lock_followed_edition(tx: AsyncManagedTransaction, recording_id: str) -> ContentState:
     """Lock the followed edition and the recording. Cue writes change that edition's annotations."""
-    _, edition_id = await _lock(tx, recording_id)
-    if edition_id is None:
-        return None
+    await lock_nodes(tx, "Recording", [recording_id])
+    edition_id = await _followed_edition_id(tx, recording_id)
     await advance_revision(tx, edition_id)
     return await read_state(tx, edition_id)
-
-
-async def count_cued_followers(tx: AsyncManagedTransaction, edition_id: str) -> int:
-    result = await tx.run(COUNT_CUED_FOLLOWERS_QUERY, edition_id=edition_id)
-    return (await result.single(strict=True))["count"]
 
 
 @writing
@@ -208,12 +150,10 @@ async def add(
     audio_format: AudioFormat,
     size_bytes: int,
 ) -> str:
-    if recording.edition_id is not None:
-        await lock_nodes(tx, "Edition", [recording.edition_id])
+    await lock_nodes(tx, "Edition", [recording.edition_id])
     await lock_nodes(tx, "Audio", [audio_id])
     await validate_target(tx, audio_id, recording.edition_id)
-    title = recording.title.root if recording.title else None
-    title_nomen_id = await nomen.create_optional(tx, title)
+    title_nomen_id = await nomen.create_optional(tx, recording.title.root if recording.title else None)
     return await create_id(
         tx,
         CREATE_QUERY,
@@ -237,7 +177,7 @@ async def delete(tx: AsyncManagedTransaction, recording_id: str) -> None:
 
 @reading
 async def get_all_by_audio(tx: AsyncManagedTransaction, audio_id: str) -> list[RecordingOutput]:
-    await _validate_audio_exists(tx, audio_id)
+    await require_node(tx, "Audio", audio_id, DataNotFoundError(f"Audio with ID '{audio_id}' not found"))
     return await fetch_all(tx, GET_BY_AUDIO_ID_QUERY, RecordingOutput, field="recording", audio_id=audio_id)
 
 
@@ -257,9 +197,7 @@ async def get_storage_location(db: SessionSource, recording_id: str) -> str:
 
 @reading
 async def get_cues(tx: AsyncManagedTransaction, recording_id: str) -> list[RecordingCue]:
-    _, edition_id = await _get_links(tx, recording_id)
-    if edition_id is None:
-        return []
+    edition_id = await _followed_edition_id(tx, recording_id)
     return await read_value(
         tx, edition_id, lambda tx: fetch_all(tx, GET_CUES_QUERY, RecordingCue, recording_id=recording_id)
     )
@@ -268,10 +206,6 @@ async def get_cues(tx: AsyncManagedTransaction, recording_id: str) -> list[Recor
 @writing
 async def replace_cues(tx: AsyncManagedTransaction, recording_id: str, cues: list[RecordingCue]) -> None:
     state = await _lock_followed_edition(tx, recording_id)
-    if state is None:
-        raise DataValidationError(
-            f"Recording '{recording_id}' does not follow an edition; set FOLLOWS before adding cues"
-        )
     state.validate_span(max(cue.span.end for cue in cues))
     await tx.run(DELETE_CUES_QUERY, recording_id=recording_id)
     await tx.run(CREATE_CUES_QUERY, recording_id=recording_id, cues=[cue.model_dump() for cue in cues])
@@ -279,30 +213,8 @@ async def replace_cues(tx: AsyncManagedTransaction, recording_id: str, cues: lis
 
 @writing
 async def delete_cues(tx: AsyncManagedTransaction, recording_id: str) -> None:
-    if await _lock_followed_edition(tx, recording_id) is not None:
-        await tx.run(DELETE_CUES_QUERY, recording_id=recording_id)
-
-
-@writing
-async def set_follows(tx: AsyncManagedTransaction, recording_id: str, edition_id: str) -> None:
-    """Follow an edition. Cues point into the old edition, so a change of edition deletes them."""
-    audio_id, current = await _lock(tx, recording_id, also=edition_id)
-    await validate_target(tx, audio_id, edition_id)
-    if current == edition_id:
-        return
-    if current is not None:
-        await advance_revision(tx, current)
+    await _lock_followed_edition(tx, recording_id)
     await tx.run(DELETE_CUES_QUERY, recording_id=recording_id)
-    await tx.run(SET_FOLLOWS_QUERY, recording_id=recording_id, edition_id=edition_id)
-
-
-@writing
-async def remove_follows(tx: AsyncManagedTransaction, recording_id: str) -> None:
-    """Stop following an edition and delete the cues that pointed into it."""
-    if await _lock_followed_edition(tx, recording_id) is None:
-        return
-    await tx.run(DELETE_CUES_QUERY, recording_id=recording_id)
-    await tx.run(REMOVE_FOLLOWS_QUERY, recording_id=recording_id)
 
 
 @writing

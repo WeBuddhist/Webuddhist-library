@@ -12,6 +12,7 @@ from opensearchpy.exceptions import OpenSearchException
 from pydantic import BaseModel, ValidationError
 from starlette.exceptions import HTTPException
 
+from database.neo4j_triggers import RULE_DESCRIPTIONS
 from errors import OpenPechaError
 
 logger = logging.getLogger("errors")
@@ -36,12 +37,9 @@ def problem(status: int, detail: str, errors: list[dict[str, str]] | None = None
 
 def _map_neo4j_client_error(code: str, message: str) -> tuple[int, str]:
     if code == "Neo.ClientError.Transaction.TransactionHookFailed" or "Error executing triggers" in message:
-        _, marker, detail = message.partition("java.lang.RuntimeException:")
-        if marker:
-            return 422, detail.strip().partition(", enforce_")[0].strip(" }")
-        match = re.search(r"Error executing triggers \{([^=]+)=([^}]+?)\s*(?:,\s*[A-Za-z0-9_]+=|\})", message)
-        if match:
-            return 422, f"{match[1].strip()}: {match[2].strip()}"
+        for name in re.findall(r"\b(enforce_[a-z0-9_]+):", message):
+            if description := RULE_DESCRIPTIONS.get(name):
+                return 422, description
         return 422, "Database validation failed due to trigger constraints."
     if "Constraint" in code:
         return 409, "Database constraint violation."
@@ -72,7 +70,7 @@ def add_exception_handlers(app: FastAPI) -> None:
     async def neo4j_client_error_handler(_request: Request, exc: Neo4jClientError) -> JSONResponse:
         code = getattr(exc, "code", "unknown")
         status_code, message = _map_neo4j_client_error(code, str(exc))
-        logger.warning("Neo4j client error (%s): %s", code, message)
+        logger.warning("Neo4j client error (%s): %s", code, exc)
         return problem(status_code, message)
 
     @app.exception_handler(OpenSearchException)

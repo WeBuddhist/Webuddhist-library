@@ -6,16 +6,16 @@ graph TD
   Contribution["Contribution<br/>role: singer"]
   Person["Person: Lama Tsering"]
   R1["Recording: without music<br/>audio_key = objects/{recording_id}"]
-  R2["Recording: with music<br/>no edition, no cues"]
+  R2["Recording: with music<br/>no cues"]
   Cue["Cues (already in dev)<br/>start_ms, end_ms + Span"]
 
   Text -->|TEXT_OF| Work
   Edition -->|EDITION_OF| Text
-  Audio -->|AUDIO_OF| Work
   Audio -->|RECITATION_OF| Text
   R1 -->|RENDITION_OF| Audio
   R2 -->|RENDITION_OF| Audio
   R1 -->|"FOLLOWS (same text only)"| Edition
+  R2 -->|FOLLOWS| Edition
   Cue -->|CUE_OF| R1
   Cue -.->|span in| Edition
   Audio -->|HAS_CONTRIBUTION| Contribution

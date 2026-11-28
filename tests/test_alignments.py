@@ -80,6 +80,20 @@ async def _create_segmentation(
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestEditionPairAlignments:
+    async def test_get_alignments_identifies_the_missing_edition(self, client, test_database):
+        person_id = await _create_person(test_database)
+        text_id = await _create_text(test_database, person_id, "Alignment lookup")
+        edition_id = await _create_edition(client, text_id, "0123456789")
+        missing_id = generate_id()
+
+        source = await client.get(f"/v2/editions/{missing_id}/alignments/{edition_id}")
+        assert source.status_code == 404
+        assert source.json()["detail"] == f"Edition with ID '{missing_id}' not found"
+
+        target = await client.get(f"/v2/editions/{edition_id}/alignments/{missing_id}")
+        assert target.status_code == 404
+        assert target.json()["detail"] == f"Target edition '{missing_id}' not found"
+
     async def test_replace_get_and_delete_edition_pair_alignments(self, client, test_database):
         person_id = await _create_person(test_database)
         source_text_id = await _create_text(test_database, person_id, "Alignment Source")

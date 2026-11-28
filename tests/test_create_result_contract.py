@@ -69,6 +69,7 @@ from models.annotation import (
     Span,
     Volume,
 )
+from models.edition import EditionInput
 from models.enums import AudioFormat, BibliographyType, MarkType, NoteType
 
 
@@ -267,7 +268,7 @@ async def test_pagination_create_strictly_returns_neo4j_id(monkeypatch, skip_spa
 
 async def test_segmentation_create_strictly_returns_neo4j_id(monkeypatch, skip_span_validation):
     monkeypatch.setattr(segmentation_database, "generate_id", lambda: "submitted-segmentation-id")
-    create_result = TrackingResult({"id": "neo4j-segmentation-id", "segment_count": 1})
+    create_result = TrackingResult({"id": "neo4j-segmentation-id"})
     tx = FakeTransaction({segmentation_database.CREATE_QUERY: create_result})
     segmentation = SegmentationInput(segments=[SegmentInput(lines=[Span(start=0, end=1)])])
     returned_id = await segmentation_database.add(tx, "edition-id", segmentation)
@@ -355,15 +356,20 @@ async def test_text_create_strictly_returns_neo4j_id(monkeypatch, translation_of
     assert_strict_neo4j_id(create_result, returned_id, "text_id")
 
 
-async def test_edition_create_strictly_returns_neo4j_id(monkeypatch):
-    monkeypatch.setattr(edition_database, "_validate_create", AsyncMock())
+async def test_edition_create_strictly_returns_neo4j_id():
     create_result = TrackingResult({"edition_id": "neo4j-edition-id"})
-    tx = FakeTransaction({edition_database.CREATE_QUERY: create_result})
-    edition = SimpleNamespace(
-        incipit_title=None, bdrc=None, wiki=None, type=SimpleNamespace(value="critical"), colophon=None, source=None
-    )
+    tx = FakeTransaction({edition_database.CREATE_QUERY: create_result}, default_record={"duplicate_critical": False})
+    edition = EditionInput(type="critical")
     returned_id = await edition_database._create(tx, edition, "text-id", "submitted-edition-id", 1)
     assert_strict_neo4j_id(create_result, returned_id, "edition_id")
+
+
+async def test_duplicate_critical_edition_fails_before_graph_writes():
+    tx = RecordingTransaction({"duplicate_critical": True})
+    edition = EditionInput(type="critical", incipit_title={"en": "Second edition"})
+    with pytest.raises(DataValidationError, match="Critical edition already present for this text"):
+        await edition_database.create(tx, edition, "second-id", "text-id", 1)
+    assert all("CREATE" not in query and "MERGE" not in query for query, _ in tx.calls)
 
 
 async def test_recording_create_strictly_returns_neo4j_id(monkeypatch):

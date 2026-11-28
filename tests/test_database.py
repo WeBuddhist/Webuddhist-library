@@ -989,7 +989,7 @@ class TestSpanDatabase:
                 """
                 MATCH (m:Edition {id: $edition_id})
                 CREATE (m)-[:HAS_SEGMENTATION]->(segmentation:Segmentation {id: $segmentation_id})
-                CREATE (seg:Segment {id: $segment_id})-[:SEGMENT_OF]->(segmentation)
+                CREATE (seg:Segment {id: $segment_id, type: 'paragraph'})-[:SEGMENT_OF]->(segmentation)
                 CREATE (span:Span {start: $start, end: $end})-[:SPAN_OF]->(seg)
                 """,
                 edition_id=edition_id,
@@ -1031,7 +1031,7 @@ class TestSpanDatabase:
             await session.run(
                 """
                 MATCH (m:Edition {id: $edition_id})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
-                CREATE (seg:Segment {id: $segment_id})-[:SEGMENT_OF]->(segmentation)
+                CREATE (seg:Segment {id: $segment_id, type: 'paragraph'})-[:SEGMENT_OF]->(segmentation)
                 CREATE (span:Span {start: $start, end: $end})-[:SPAN_OF]->(seg)
                 """,
                 edition_id=edition_id,

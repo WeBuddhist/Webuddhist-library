@@ -361,94 +361,79 @@ class TestInlineTagging:
 class TestTagSegment:
     """Tests for tagging/untagging segments"""
 
-    async def test_tag_segment(self, client, test_database):
+    @pytest.fixture
+    async def segment_id(self, client, test_database):
+        await _seed_person(test_database)
+        text_id = await _create_text(client)
+        response = await client.post(f"/v2/texts/{text_id}/editions", json={
+            "metadata": {"type": "critical"}, "content": "x",
+            "segmentation": {"segments": [{"lines": [{"start": 0, "end": 1}]}]},
+        })
+        assert response.status_code == 201, response.text
+        edition_id = response.json()["id"]
+        segments = await client.get(f"/v2/editions/{edition_id}/segmentation/segments")
+        return segments.json()["items"][0]["id"]
+
+    async def test_tag_segment(self, client, test_database, segment_id):
         """Test adding a tag to a segment"""
         tag_id = await _create_tag(client, {"title": {"en": "Segment Tag"}})
 
-        async with test_database.get_session() as session:
-            await session.run("""
-                CREATE (sgn:Segmentation {id: 'test_sgn_tag'})
-                CREATE (seg:Segment {id: 'test_seg_tag'})
-                CREATE (seg)-[:SEGMENT_OF]->(sgn)
-            """)
-
-        await tag.tag_segment(test_database, "test_seg_tag", tag_id)
+        await tag.tag_segment(test_database, segment_id, tag_id)
 
         async with test_database.get_session() as session:
             cursor = await session.run("""
-                MATCH (s:Segment {id: 'test_seg_tag'})-[:HAS_TAG]->(t:Tag {id: $tag_id})
+                MATCH (s:Segment {id: $segment_id})-[:HAS_TAG]->(t:Tag {id: $tag_id})
                 RETURN t.id AS tag_id
-            """, tag_id=tag_id)
+            """, tag_id=tag_id, segment_id=segment_id)
             result = await cursor.single()
             assert result is not None
             assert result["tag_id"] == tag_id
 
-    async def test_untag_segment(self, client, test_database):
+    async def test_untag_segment(self, client, test_database, segment_id):
         """Test removing a tag from a segment"""
         tag_id = await _create_tag(client, {"title": {"en": "Segment Untag"}})
 
-        async with test_database.get_session() as session:
-            await session.run("""
-                CREATE (sgn:Segmentation {id: 'test_sgn_untag'})
-                CREATE (seg:Segment {id: 'test_seg_untag'})
-                CREATE (seg)-[:SEGMENT_OF]->(sgn)
-            """)
-
-        await tag.tag_segment(test_database, "test_seg_untag", tag_id)
-        await tag.untag_segment(test_database, "test_seg_untag", tag_id)
+        await tag.tag_segment(test_database, segment_id, tag_id)
+        await tag.untag_segment(test_database, segment_id, tag_id)
 
         async with test_database.get_session() as session:
             cursor = await session.run("""
-                MATCH (s:Segment {id: 'test_seg_untag'})-[:HAS_TAG]->(t:Tag {id: $tag_id})
+                MATCH (s:Segment {id: $segment_id})-[:HAS_TAG]->(t:Tag {id: $tag_id})
                 RETURN t.id AS tag_id
-            """, tag_id=tag_id)
+            """, tag_id=tag_id, segment_id=segment_id)
             result = await cursor.single()
             assert result is None
 
-    async def test_tag_segment_via_api(self, client, test_database):
+    async def test_tag_segment_via_api(self, client, test_database, segment_id):
         """Test tagging a segment via API endpoint"""
         tag_id = await _create_tag(client, {"title": {"en": "API Segment Tag"}})
 
-        async with test_database.get_session() as session:
-            await session.run("""
-                CREATE (sgn:Segmentation {id: 'test_sgn_api'})
-                CREATE (seg:Segment {id: 'test_seg_api'})
-                CREATE (seg)-[:SEGMENT_OF]->(sgn)
-            """)
-
-        response = await client.post(f"/v2/segments/test_seg_api/tags/{tag_id}")
+        response = await client.post(f"/v2/segments/{segment_id}/tags/{tag_id}")
         assert response.status_code == 204
 
         async with test_database.get_session() as session:
             cursor = await session.run("""
-                MATCH (s:Segment {id: 'test_seg_api'})-[:HAS_TAG]->(t:Tag {id: $tag_id})
+                MATCH (s:Segment {id: $segment_id})-[:HAS_TAG]->(t:Tag {id: $tag_id})
                 RETURN t.id AS tag_id
-            """, tag_id=tag_id)
+            """, tag_id=tag_id, segment_id=segment_id)
             result = await cursor.single()
             assert result is not None
             assert result["tag_id"] == tag_id
 
-    async def test_untag_segment_via_api(self, client, test_database):
+    async def test_untag_segment_via_api(self, client, test_database, segment_id):
         """Test untagging a segment via API endpoint"""
         tag_id = await _create_tag(client, {"title": {"en": "API Segment Untag"}})
 
-        async with test_database.get_session() as session:
-            await session.run("""
-                CREATE (sgn:Segmentation {id: 'test_sgn_api_untag'})
-                CREATE (seg:Segment {id: 'test_seg_api_untag'})
-                CREATE (seg)-[:SEGMENT_OF]->(sgn)
-            """)
+        await client.post(f"/v2/segments/{segment_id}/tags/{tag_id}")
 
-        await client.post(f"/v2/segments/test_seg_api_untag/tags/{tag_id}")
-
-        response = await client.delete(f"/v2/segments/test_seg_api_untag/tags/{tag_id}")
+        response = await client.delete(f"/v2/segments/{segment_id}/tags/{tag_id}")
         assert response.status_code == 204
 
         async with test_database.get_session() as session:
             cursor = await session.run("""
-                MATCH (s:Segment {id: 'test_seg_api_untag'})-[:HAS_TAG]->(t:Tag {id: $tag_id})
+                MATCH (s:Segment {id: $segment_id})-[:HAS_TAG]->(t:Tag {id: $tag_id})
                 RETURN t.id AS tag_id
-            """, tag_id=tag_id)
+            """, tag_id=tag_id, segment_id=segment_id)
             result = await cursor.single()
             assert result is None
 

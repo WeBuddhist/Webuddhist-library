@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 async def run(*, apply: bool, content: bool = False) -> None:
     async with Database.from_settings(settings) as db:
         driver = db._driver  # noqa: SLF001 - schema DDL needs the migration-owned driver
+        if content:
+            # The schema audit requires stored editions to have the keys this backfill supplies.
+            async with Storage.open(settings) as storage:
+                count = await migrate_content(db, storage, apply=apply)
+            logger.info("Verified %d edition content objects", count)
         if apply:
             await migrate(driver, settings.neo4j_database)
             logger.info("Schema upgrade completed")
@@ -23,16 +28,12 @@ async def run(*, apply: bool, content: bool = False) -> None:
             violations = await audit_schema(driver, settings.neo4j_database)
             for name, ids in violations.items():
                 logger.error("%s (%d): %s", name, len(ids), ids[:20])
-            if violations:
-                raise SystemExit(1)
             pending = await legacy_recording_ids(driver, settings.neo4j_database)
             if pending:
-                logger.info("%d legacy recording(s) will be converted by --apply: %s", len(pending), pending[:20])
+                logger.info("%d legacy recording(s) await conversion: %s", len(pending), pending[:20])
+            if violations:
+                raise SystemExit(1)
             logger.info("Schema audit passed")
-        if content:
-            async with Storage.open(settings) as storage:
-                count = await migrate_content(db, storage, apply=apply)
-                logger.info("Verified %d edition content objects", count)
 
 
 if __name__ == "__main__":

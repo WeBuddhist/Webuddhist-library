@@ -232,7 +232,7 @@ async def test_failed_update_response_rolls_back_metadata(test_database, monkeyp
         entity_id = await recording.add(
             db,
             audio_id,
-            RecordingInput(),
+            RecordingInput(edition_id=edition),
             recording_id,
             audio_key=f"objects/{recording_id}",
             audio_format=AudioFormat.MP3,

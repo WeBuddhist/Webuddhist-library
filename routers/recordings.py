@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Path, status
+from fastapi import APIRouter, Body, status
 from fastapi.responses import RedirectResponse
 
 from content_service import sign_recording_audio_url
@@ -80,33 +80,6 @@ async def replace_recording_cues(
 )
 async def delete_recording_cues(recording_id: RecordingId, db: DatabaseDep) -> None:
     await recording.delete_cues(db, recording_id)
-
-
-@router.put(
-    "/{recording_id}/edition/{edition_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Follow an edition",
-    description=(
-        "Link a recording to the edition its cues point into. The edition must be an edition of the text the "
-        "audio recites. Following a different edition deletes the existing cues."
-    ),
-)
-async def set_recording_edition(
-    recording_id: RecordingId,
-    edition_id: Annotated[str, Path(description="The ID of the edition to follow")],
-    db: DatabaseDep,
-) -> None:
-    await recording.set_follows(db, recording_id, edition_id)
-
-
-@router.delete(
-    "/{recording_id}/edition",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Stop following an edition",
-    description="Remove the recording's link to its edition and delete its cues.",
-)
-async def delete_recording_edition(recording_id: RecordingId, db: DatabaseDep) -> None:
-    await recording.remove_follows(db, recording_id)
 
 
 @router.patch(

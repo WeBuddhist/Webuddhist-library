@@ -61,7 +61,7 @@ async def get_recordings(audio_id: AudioId, db: DatabaseDep) -> list[RecordingOu
 )
 async def post_recording(
     audio_id: AudioId,
-    metadata: Annotated[str, Form(description="JSON-encoded recording metadata")],
+    metadata: Annotated[str, Form(description="JSON-encoded recording metadata, including the required edition_id")],
     file: Annotated[UploadFile, File(description="Audio file")],
     db: DatabaseDep,
     storage: StorageDep,

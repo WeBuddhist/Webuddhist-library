@@ -442,7 +442,7 @@ class TestCreateEdition(TestEditionsEndpoints):
         second_response = await client.post(f"/v2/texts/{text_id}/editions", json=second_edition_data)
 
         assert second_response.status_code == 422
-        assert "detail" in second_response.json()
+        assert second_response.json()["detail"] == "Critical edition already present for this text"
 
     @pytest.mark.parametrize("include_segmentation", [False, True])
     async def test_create_edition_round_trip(self, client, test_database, test_person_data, include_segmentation):
@@ -623,6 +623,10 @@ class TestEditionAnnotations(TestEditionsEndpoints):
         person_id = await self._create_test_person(test_database, test_person_data)
         text_id = await self._create_test_text(test_database, person_id)
         edition_id = await self._create_test_edition(client, text_id, "0123456789")
+        segments_url = f"/v2/editions/{edition_id}/segmentation/segments"
+        missing = await client.get(segments_url)
+        assert missing.status_code == 404
+        assert missing.json()["detail"] == f"Segmentation for edition '{edition_id}' not found"
 
         annotation_data = {
             "segments": [
@@ -648,6 +652,10 @@ class TestEditionAnnotations(TestEditionsEndpoints):
         assert second_body["has_more"] is False
         assert second_body["offset"] == 1
         assert second_body["limit"] == 1
+
+        empty = await client.get(segments_url, params={"limit": 1, "offset": 2})
+        assert empty.status_code == 200
+        assert empty.json()["items"] == []
 
         all_items = (await client.get(f"/v2/editions/{edition_id}/segmentation/segments")).json()["items"]
         assert [item["id"] for item in first_body["items"] + second_body["items"]] == [item["id"] for item in all_items]

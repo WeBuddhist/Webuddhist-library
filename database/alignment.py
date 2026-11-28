@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, LiteralString
 
-from database.content_state import read_value, touch_edition, validate_edition_exists
+from database.content_state import read_value, touch_edition
 from database.cypher import application_tag_ids, segment_lines
 from database.repository import SessionSource, fetch_all, require_node, writing
 from errors import DataNotFoundError, InvalidRequestError
@@ -8,6 +8,16 @@ from models.alignment import EditionAlignmentInput, EditionAlignmentOutput, Edit
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
+
+
+def _aligned_segment(side: LiteralString) -> LiteralString:
+    segment = f"{side}_segment"
+    return f"""{segment} {{
+      .id, .type, .reference,
+      segmentation_id: {side}_segmentation.id, edition_id: {side}_edition.id, text_id: {side}_text.id,
+      lines: {side}_lines, tag_ids: nullIf({application_tag_ids(f"({segment})")}, [])
+    }} AS {segment}"""
+
 
 VALIDATE_SEGMENT_REFERENCES_QUERY: LiteralString = """
 RETURN
@@ -55,26 +65,7 @@ ORDER BY source_edition.id, source_segmentation.id, source_min_start, source_lin
          target_edition.id, target_segmentation.id, target_min_start, target_lines[-1].end, target_segment.id
 SKIP $offset
 LIMIT $limit
-RETURN {{
-  id: source_segment.id,
-  type: source_segment.type,
-  reference: source_segment.reference,
-  segmentation_id: source_segmentation.id,
-  edition_id: source_edition.id,
-  text_id: source_text.id,
-  lines: source_lines,
-  tag_ids: nullIf({application_tag_ids("(source_segment)")}, [])
-}} AS source_segment,
-{{
-  id: target_segment.id,
-  type: target_segment.type,
-  reference: target_segment.reference,
-  segmentation_id: target_segmentation.id,
-  edition_id: target_edition.id,
-  text_id: target_text.id,
-  lines: target_lines,
-  tag_ids: nullIf({application_tag_ids("(target_segment)")}, [])
-}} AS target_segment
+RETURN {_aligned_segment("source")}, {_aligned_segment("target")}
 """
 GET_BY_EDITION_QUERY: LiteralString = """
 MATCH (e:Edition {id: $edition_id})-[:EDITION_OF]->(et:Text)
@@ -107,43 +98,11 @@ async def replace(
     )
 
 
-async def _get(
-    tx: AsyncManagedTransaction,
-    source_edition_id: str,
-    target_edition_id: str,
-    *,
-    offset: int,
-    limit: int,
-    application: str | None,
-) -> list[EditionAlignmentPairOutput]:
-    await _validate_edition_pair(tx, source_edition_id, target_edition_id)
-    return await fetch_all(
-        tx,
-        GET_EDITION_PAIR_QUERY,
-        EditionAlignmentPairOutput,
-        source_edition_id=source_edition_id,
-        target_edition_id=target_edition_id,
-        offset=offset,
-        limit=limit,
-        application=application,
-    )
-
-
-async def _get_all_for_edition(tx: AsyncManagedTransaction, edition_id: str) -> list[EditionAlignmentOutput]:
-    await validate_edition_exists(tx, edition_id)
-    return await fetch_all(tx, GET_BY_EDITION_QUERY, EditionAlignmentOutput, edition_id=edition_id)
-
-
 @writing
 async def delete(tx: AsyncManagedTransaction, source_edition_id: str, target_edition_id: str) -> None:
     for edition_id in sorted({source_edition_id, target_edition_id}):
         await touch_edition(tx, edition_id)
     await tx.run(DELETE_EDITION_PAIR_QUERY, source_edition_id=source_edition_id, target_edition_id=target_edition_id)
-
-
-async def _validate_edition_pair(tx: AsyncManagedTransaction, source_edition_id: str, target_edition_id: str) -> None:
-    for role, edition_id in (("Source", source_edition_id), ("Target", target_edition_id)):
-        await require_node(tx, "Edition", edition_id, DataNotFoundError(f"{role} edition '{edition_id}' not found"))
 
 
 async def _validate_segment_references(
@@ -162,29 +121,18 @@ async def _validate_segment_references(
                 f"source_segment_reference and target_segment_reference must be different when aligning an edition "
                 f"to itself: {', '.join(self_aligned_references)}"
             )
-    source_segment_references = sorted({item.source_segment_reference for item in alignment.alignments})
-    target_segment_references = sorted({item.target_segment_reference for item in alignment.alignments})
     result = await tx.run(
         VALIDATE_SEGMENT_REFERENCES_QUERY,
         source_edition_id=source_edition_id,
         target_edition_id=target_edition_id,
-        source_segment_references=source_segment_references,
-        target_segment_references=target_segment_references,
+        source_segment_references=sorted({item.source_segment_reference for item in alignment.alignments}),
+        target_segment_references=sorted({item.target_segment_reference for item in alignment.alignments}),
     )
-    record = await result.single()
-    invalid_source_references = record["invalid_source_segment_references"] if record else source_segment_references
-    invalid_target_references = record["invalid_target_segment_references"] if record else target_segment_references
+    record = await result.single(strict=True)
     errors = []
-    if invalid_source_references:
-        errors.append(
-            f"source segment references not found in edition '{source_edition_id}': "
-            f"{', '.join(invalid_source_references)}"
-        )
-    if invalid_target_references:
-        errors.append(
-            f"target segment references not found in edition '{target_edition_id}': "
-            f"{', '.join(invalid_target_references)}"
-        )
+    for side, edition_id in (("source", source_edition_id), ("target", target_edition_id)):
+        if missing := record[f"invalid_{side}_segment_references"]:
+            errors.append(f"{side} segment references not found in edition '{edition_id}': {', '.join(missing)}")
     if errors:
         raise InvalidRequestError("; ".join(errors))
 
@@ -198,12 +146,28 @@ async def get(
     limit: int,
     application: str | None = None,
 ) -> list[EditionAlignmentPairOutput]:
-    return await db.read(
-        read_value,
-        source_edition_id,
-        lambda tx: _get(tx, source_edition_id, target_edition_id, offset=offset, limit=limit, application=application),
-    )
+    async def read(tx: AsyncManagedTransaction) -> list[EditionAlignmentPairOutput]:
+        if target_edition_id != source_edition_id:
+            await require_node(
+                tx, "Edition", target_edition_id, DataNotFoundError(f"Target edition '{target_edition_id}' not found")
+            )
+        return await fetch_all(
+            tx,
+            GET_EDITION_PAIR_QUERY,
+            EditionAlignmentPairOutput,
+            source_edition_id=source_edition_id,
+            target_edition_id=target_edition_id,
+            offset=offset,
+            limit=limit,
+            application=application,
+        )
+
+    return await db.read(read_value, source_edition_id, read)
 
 
 async def get_all_for_edition(db: SessionSource, edition_id: str) -> list[EditionAlignmentOutput]:
-    return await db.read(read_value, edition_id, lambda tx: _get_all_for_edition(tx, edition_id))
+    return await db.read(
+        read_value,
+        edition_id,
+        lambda tx: fetch_all(tx, GET_BY_EDITION_QUERY, EditionAlignmentOutput, edition_id=edition_id),
+    )

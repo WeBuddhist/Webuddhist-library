@@ -6,6 +6,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from opensearchpy.exceptions import OpenSearchException
+from starlette.routing import Router
 
 from config import check_environment, settings
 from database import Database
@@ -77,14 +78,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 def create_app() -> FastAPI:
+    prefix = settings.root_path.rstrip("/")
     app = FastAPI(
         title="OpenPecha API v2",
         version=settings.app_version or API_VERSION,
-        root_path=settings.root_path.rstrip("/"),
         lifespan=lifespan,
         telemetry={
             "auto_configure": settings.otel_enabled,
-            "exclude": lambda scope: scope["path"].removeprefix(scope.get("root_path", "")) in _UNTRACED_PATHS,
+            "exclude": lambda scope: (
+                scope["path"].removeprefix(scope.get("root_path", "")).removeprefix(prefix) in _UNTRACED_PATHS
+            ),
         },
     )
 
@@ -128,6 +131,8 @@ def create_app() -> FastAPI:
     ):
         app.include_router(router, dependencies=[Depends(get_api_key)], responses={"default": errors_doc})
 
+    if prefix:
+        app.mount(prefix, Router(routes=app.routes))
     return app
 
 

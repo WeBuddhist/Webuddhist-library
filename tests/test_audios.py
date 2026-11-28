@@ -12,6 +12,7 @@ import pytest
 
 from database import audio as audio_database
 from database import text
+from database.migrations import migrate
 from errors import DataConflictError, DataNotFoundError
 from identifier import generate_id
 from models.audio import AudioInput
@@ -25,11 +26,6 @@ class TestAudiosEndpoints(RecordingHelpers):
         if "translation_of" not in links:
             links["category_id"] = "category"  # Translations inherit their category.
         return await text.create(db, TextInput(title={language: f"{title} {generate_id()[:6]}"}, language=language, **links))
-
-    async def _work(self, db, node_id: str, relationship: str) -> str:
-        async with db.get_session() as session:
-            result = await session.run(f"MATCH ({{id: $id}})-[:{relationship}]->(w:Work) RETURN w.id AS id", id=node_id)
-            return (await result.single())["id"]
 
     async def test_create_audio(self, client, test_database):
         singer = await self._create_person(test_database, "Lama Tsering")
@@ -62,9 +58,10 @@ class TestAudiosEndpoints(RecordingHelpers):
         assert sorted((c["role"], c["id"]) for c in audio["contributions"]) == sorted(
             [("singer", singer), ("musician", musician)]
         )
-        assert await self._work(test_database, audio_id, "AUDIO_OF") == await self._work(
-            test_database, text_id, "TEXT_OF"
+        rows = await test_database.query(
+            "MATCH (a:Audio {id: $id}) RETURN count { (a)-->(:Work) } AS direct_work_links", id=audio_id
         )
+        assert rows[0]["direct_work_links"] == 0
 
     async def test_create_audio_with_explicit_language_and_defaults(self, client, test_database):
         text_id = await self._text(test_database)
@@ -91,10 +88,34 @@ class TestAudiosEndpoints(RecordingHelpers):
 
         assert response.status_code == 201, response.text
         audio_id = response.json()["id"]
-        assert (await client.get(f"/v2/audios/{audio_id}")).json()["language"] == "en"
-        assert await self._work(test_database, audio_id, "AUDIO_OF") == await self._work(
-            test_database, source, "TEXT_OF"
+        audio = (await client.get(f"/v2/audios/{audio_id}")).json()
+        assert audio["language"] == "en"
+        assert audio["text_id"] == translation
+        rows = await test_database.query(
+            "MATCH (:Audio {id: $id})-[:RECITATION_OF]->(:Text)-[:TEXT_OF]->(w:Work) RETURN w.id AS work_id",
+            id=audio_id,
         )
+        assert [row["work_id"] for row in rows] == [await text.get_work_id(test_database, source)]
+
+    async def test_migration_removes_existing_audio_work_link(self, client, test_database):
+        db = test_database
+        text_id = await self._text(db)
+        work_id = await text.get_work_id(db, text_id)
+        audio_id = await self._create_audio(client, text_id, await self._create_person(db))
+        await db.query(
+            "MATCH (a:Audio {id: $audio_id}), (w:Work {id: $work_id}) CREATE (a)-[:AUDIO_OF]->(w)",
+            write=True, audio_id=audio_id, work_id=work_id,
+        )
+
+        await migrate(db._driver, db._database)
+
+        rows = await db.query(
+            """
+            MATCH (a:Audio {id: $id})-[:RECITATION_OF]->(t:Text)-[:TEXT_OF]->(w:Work)
+            RETURN t.id AS text, w.id AS work, count { (a)-[:AUDIO_OF]->() } AS legacy_links
+            """, id=audio_id,
+        )
+        assert [row.data() for row in rows] == [{"text": text_id, "work": work_id, "legacy_links": 0}]
 
     @pytest.mark.parametrize("role", ["author", "translator", "reviser", "scholar"])
     async def test_create_audio_rejects_non_performer_role(self, client, test_database, role):
@@ -220,9 +241,8 @@ class TestAudiosEndpoints(RecordingHelpers):
         assert await self._count(test_database, "Contribution") == 0
 
     async def test_delete_audio_with_recordings_is_rejected(self, client, test_database):
-        text_id = await self._text(test_database)
-        audio_id = await self._create_audio(client, text_id, await self._create_person(test_database))
-        await self._create_recording(client, audio_id)
+        edition_id, audio_id = await self._setup_audio(client, test_database)
+        await self._create_recording(client, audio_id, edition_id)
 
         response = await client.delete(f"/v2/audios/{audio_id}")
 

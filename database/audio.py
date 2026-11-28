@@ -6,10 +6,11 @@ from errors import DataNotFoundError
 from identifier import generate_id
 from models.audio import AudioInput, AudioOutput, AudioPatch
 
-from . import contribution, language, nomen, text
+from . import contribution, language, nomen
 from .cypher import replace_language, replace_license
 from .locking import lock_nodes
 from .repository import (
+    create_id,
     fetch_all,
     fetch_one,
     fetch_record,
@@ -41,27 +42,18 @@ MATCH (a:Audio {{id: $audio_id}})-[:RECITATION_OF]->(t:Text)
 """
 GET_BY_TEXT_ID_QUERY: LiteralString = f"""
 MATCH (a:Audio)-[:RECITATION_OF]->(t:Text {{id: $text_id}})
-WITH a, t
-ORDER BY a.id
 {_AUDIO_RETURN}
+ORDER BY a.id
 """
 CREATE_QUERY: LiteralString = """
-MATCH (t:Text {id: $text_id})-[:TEXT_OF]->(w:Work)
-MATCH (t)-[text_language_rel:HAS_LANGUAGE]->(text_language:Language)
+MATCH (t:Text {id: $text_id})-[text_language_rel:HAS_LANGUAGE]->(text_language:Language)
+MATCH (lang:Language {code: coalesce($language_code, text_language.code)})
 MATCH (license:LicenseType {name: $license})
 OPTIONAL MATCH (title:Nomen {id: $title_nomen_id})
 CREATE (a:Audio {id: $audio_id, date: $date})
-CREATE (a)-[:AUDIO_OF]->(w), (a)-[:RECITATION_OF]->(t), (a)-[:HAS_LICENSE]->(license)
+CREATE (a)-[:RECITATION_OF]->(t), (a)-[:HAS_LICENSE]->(license),
+       (a)-[:HAS_LANGUAGE {bcp47: coalesce($language, text_language_rel.bcp47, text_language.code)}]->(lang)
 CALL (*) { WHEN title IS NOT NULL THEN { CREATE (a)-[:HAS_TITLE]->(title) } }
-CALL (*) {
-    WHEN $language_code IS NULL THEN {
-        CREATE (a)-[:HAS_LANGUAGE {bcp47: coalesce(text_language_rel.bcp47, text_language.code)}]->(text_language)
-    }
-    ELSE {
-        MATCH (lang:Language {code: $language_code})
-        CREATE (a)-[:HAS_LANGUAGE {bcp47: $language}]->(lang)
-    }
-}
 RETURN a.id AS audio_id
 """
 UPDATE_LICENSE_QUERY: LiteralString = replace_license("Audio")
@@ -89,14 +81,15 @@ async def get(tx: AsyncManagedTransaction, audio_id: str) -> AudioOutput:
 @writing
 async def create(tx: AsyncManagedTransaction, text_id: str, audio: AudioInput, audio_id: str | None = None) -> str:
     audio_id = audio_id or generate_id()
-    await text.lock_with_work(tx, text_id)
+    await lock_nodes(tx, "Text", [text_id])
     await require_node(tx, "Text", text_id, DataNotFoundError(f"Text with ID '{text_id}' not found"))
     await contribution.validate_contribution_references(tx, audio.contributions)
-    title = audio.title.root if audio.title else None
-    title_nomen_id = await nomen.create_optional(tx, title)
+    title_nomen_id = await nomen.create_optional(tx, audio.title.root if audio.title else None)
     language_code = await language.validated_language_code(tx, audio.language)
-    result = await tx.run(
+    created_audio_id = await create_id(
+        tx,
         CREATE_QUERY,
+        "audio_id",
         audio_id=audio_id,
         text_id=text_id,
         date=audio.date,
@@ -105,8 +98,6 @@ async def create(tx: AsyncManagedTransaction, text_id: str, audio: AudioInput, a
         language=audio.language,
         language_code=language_code,
     )
-    record = await result.single(strict=True)
-    created_audio_id = str(record["audio_id"])
     await contribution.create_all(tx, AUDIO_LABEL, created_audio_id, audio.contributions)
     return created_audio_id
 

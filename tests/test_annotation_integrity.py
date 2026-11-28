@@ -1,5 +1,8 @@
+import asyncio
+
 import pytest
 import pytest_asyncio
+from neo4j.exceptions import ClientError
 
 from database import edition as edition_database
 from database import segment as segment_database
@@ -27,6 +30,45 @@ async def edition(test_database):
     edition = generate_id()
     await edition_database.create(db, EditionInput(type="critical"), edition, text, content_length=30)
     return edition
+
+
+async def test_span_cardinality_uses_final_owners_across_groups(test_database, edition):
+    db = test_database
+    note_id = await note_database.add(db, edition, NoteInput(text="note", span={"start": 0, "end": 1}), NoteType.DURCHEN)
+    await segmentation_database.add(db, edition, SegmentationInput(segments=[{"lines": [{"start": 0, "end": 1}]}]))
+    async with db.get_session() as session:
+        async def write(query):
+            await (await session.run(query, id=note_id)).consume()
+
+        with pytest.raises(ClientError, match="enforce_span_span_of_per_note"):
+            await write("MATCH (s:Span)-[:SPAN_OF]->(:Note {id:$id}) DETACH DELETE s")
+        with pytest.raises(ClientError, match="enforce_span_span_of_max_one"):
+            await write("""MATCH (s:Span)-[:SPAN_OF]->(:Note {id:$id}), (seg:Segment)
+                CREATE (s)-[:SPAN_OF]->(seg)""")
+        # Replace the note's span and move its original to a segment in the same commit.
+        await write("""MATCH (s:Span)-[old:SPAN_OF]->(n:Note {id:$id}), (seg:Segment)
+            DELETE old CREATE (s)-[:SPAN_OF]->(seg), (:Span {start:0,end:1})-[:SPAN_OF]->(n)""")
+        assert await (await session.run("MATCH (:Span)-[:SPAN_OF]->(:Segment) RETURN count(*)")).value() == [2]
+
+
+async def test_raw_writers_cannot_attach_two_paginations(test_database, edition):
+    async def attach():
+        async with test_database.get_session() as session:
+            await (await session.run("""
+                MATCH (e:Edition {id:$id})
+                CREATE (p:Pagination {id:randomUUID()})-[:PAGINATION_OF]->(e),
+                       (v:Volume {id:randomUUID()})-[:VOLUME_OF]->(p),
+                       (page:Page {id:randomUUID(), reference:'1'})-[:PAGE_OF]->(v),
+                       (:Span {start:0, end:1})-[:SPAN_OF]->(page)
+                """, id=edition)).consume()
+
+    results = await asyncio.gather(attach(), attach(), return_exceptions=True)
+    assert results.count(None) == 1, results
+    with pytest.raises(ClientError, match="enforce_pagination_pagination_of_per_edition_max_one"):
+        await attach()
+    async with test_database.get_session() as session:
+        assert await (await session.run("MATCH (:Pagination)-[:PAGINATION_OF]->(:Edition {id:$id}) RETURN count(*)",
+                                        id=edition)).value() == [1]
 
 
 @pytest.mark.parametrize("metadata", [None, {}, {"name": "Provenance"}])
@@ -125,16 +167,25 @@ async def test_edits_cannot_empty_a_volume_page(test_database, edition, start, e
         assert record["count"] == 0
 
 
-async def test_empty_legacy_volume_and_imported_attributes_can_be_deleted(test_database, edition):
+async def test_empty_volume_is_rejected_and_legacy_graph_can_be_deleted(test_database, edition):
     db = test_database
+    empty_volume = """MATCH (e:Edition {id: $id})
+        CREATE (:Volume {id: 'empty'})-[:VOLUME_OF]->(:Pagination {id: 'legacy'})-[:PAGINATION_OF]->(e)
+    """
     async with db.get_session() as session:
-        await session.run("""MATCH (e:Edition {id: $id})
-            CREATE (:Volume {id: 'empty'})-[:VOLUME_OF]->(:Pagination {id: 'legacy'})-[:PAGINATION_OF]->(e)
-            CREATE (a:Attribute {id: 'imported'})-[:ATTRIBUTE_OF]->(e)
-            CREATE (a)-[:HAS_TYPE]->(:AttributeType {name: 'legacy'})
+        with pytest.raises(ClientError, match="enforce_page_page_of_per_volume"):
+            await (await session.run(empty_volume, id=edition)).consume()
+
+    async def delete_legacy(tx):
+        # Exercise cleanup of the pre-upgrade shape without committing a new invalid volume.
+        await tx.run(empty_volume + """
+            CREATE (a:Attribute {id: 'imported', value: 0.9})-[:ATTRIBUTE_OF]->(e)
+            CREATE (a)-[:HAS_TYPE]->(:AttributeType {name: 'ocr_confidence'})
             CREATE (:Span {start: 0, end: 1})-[:SPAN_OF]->(a)
             CREATE (a)-[:HAS_METADATA]->(:AnnotationMetadata {id: 'attribute-metadata'})""", id=edition)
-    await edition_database.delete(db, edition)
+        await edition_database.delete(tx, edition)
+
+    await db.write(delete_legacy)
     async with db.get_session() as session:
         record = await (await session.run("MATCH (n:Attribute|Volume|Pagination|Span|AnnotationMetadata) RETURN count(n) AS count")).single()
         assert record["count"] == 0

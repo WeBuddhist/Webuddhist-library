@@ -8,11 +8,12 @@ from models.edition import EditionOutput
 from models.enums import EditionType
 from storage import edition_key
 
-from . import excerpt, nomen, recording, span
+from . import excerpt, nomen, span
 from . import text as text_database
 from .content_state import ContentState, advance_revision, lock_connected_editions, read_state
 from .locking import lock_nodes
-from .repository import SessionSource, create_id, fetch_all, query_all, query_one, reading, require_node, writing
+from .repository import SessionSource, create_id, fetch_all, query_all, query_one, reading, writing
+from .schema import SCHEMA
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -77,6 +78,12 @@ MATCH (m)-[:EDITION_OF]->(e:Text)
 WITH DISTINCT m, e
 {_EDITION_RETURN}
 """
+CHECK_CREATE_QUERY: LiteralString = """
+MATCH (t:Text {id: $text_id})
+RETURN $critical AND EXISTS {
+    (t)<-[:EDITION_OF]-(:Edition)-[:HAS_TYPE]->(:EditionType {name: 'critical'})
+} AS duplicate_critical
+"""
 CREATE_QUERY: LiteralString = """
 MATCH (e:Text {id: $text_id})
 OPTIONAL MATCH (it:Nomen {id: $incipit_nomen_id})
@@ -110,6 +117,9 @@ async def get_all(
 @writing
 async def delete(tx: AsyncManagedTransaction, edition_id: str) -> None:
     await advance_revision(tx, edition_id)
+    result = await tx.run("RETURN count { (:Recording)-[:FOLLOWS]->(:Edition {id: $id}) } AS followers", id=edition_id)
+    if followers := (await result.single(strict=True))["followers"]:
+        raise DataConflictError(f"Edition '{edition_id}' cannot be deleted while {followers} recording(s) follow it")
     if (await read_state(tx, edition_id)).is_excerpt:
         await tx.run(excerpt.DELETE_QUERY, edition_id=edition_id)
     elif users := (await excerpt.excerpt_editions_of(tx, edition_id)):
@@ -118,11 +128,6 @@ async def delete(tx: AsyncManagedTransaction, edition_id: str) -> None:
         )
     else:
         await segmentation_database.delete_by_edition(tx, edition_id)
-    cued = await recording.count_cued_followers(tx, edition_id)
-    if cued:
-        raise DataConflictError(
-            f"Edition '{edition_id}' cannot be deleted because {cued} recording(s) with cues follow it"
-        )
     for query in (
         pagination_database.DELETE_ALL_QUERY,
         table_of_contents.DELETE_ALL_QUERY,
@@ -144,7 +149,12 @@ async def _create(
     content_key: str | None = None,
 ) -> str:
     await lock_nodes(tx, "Text", [text_id])
-    await _validate_create(tx, edition, text_id)
+    result = await tx.run(CHECK_CREATE_QUERY, text_id=text_id, critical=edition.type is EditionType.CRITICAL)
+    record = await result.single()
+    if record is None:
+        raise DataValidationError(f"Text {text_id} does not exist. Cannot create edition for non-existent text.")
+    if record["duplicate_critical"]:
+        raise DataValidationError(SCHEMA["relationship_templates"]["critical_edition_per_text"]["description"])
     incipit_nomen_id = (
         await nomen.create(tx, edition.incipit_title.root, [alt.root for alt in edition.alt_incipit_titles or []])
         if edition.incipit_title
@@ -158,25 +168,13 @@ async def _create(
         text_id=text_id,
         bdrc=edition.bdrc,
         wiki=edition.wiki,
-        type=edition.type.value if edition.type else None,
+        type=edition.type.value,
         colophon=edition.colophon,
         incipit_nomen_id=incipit_nomen_id,
         source=edition.source,
         content_length=content_length,
         content_key=None if edition.type is EditionType.EXCERPT else content_key or edition_key(text_id, edition_id),
     )
-
-
-async def _validate_create(tx: AsyncManagedTransaction, edition: EditionInput, text_id: str) -> None:
-    await validate_text_exists(tx, text_id)
-    critical = EditionType.CRITICAL
-    if edition.type == critical and await get_all(tx, text_id, critical):
-        raise DataValidationError("Critical edition already present for this text")
-
-
-async def validate_text_exists(tx: AsyncManagedTransaction, text_id: str) -> None:
-    error = DataValidationError(f"Text {text_id} does not exist. Cannot create edition for non-existent text.")
-    await require_node(tx, "Text", text_id, error)
 
 
 async def get(db: SessionSource, edition_id: str) -> EditionOutput:

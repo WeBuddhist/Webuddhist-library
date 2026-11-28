@@ -2,11 +2,11 @@ from typing import TYPE_CHECKING, LiteralString
 
 from neo4j.exceptions import ResultNotSingleError
 
-from database.content_state import advance_revision, lock_connected_editions, touch_edition, validate_edition_exists
+from database.content_state import advance_revision, lock_connected_editions, touch_edition
 from database.cypher import segment_lines
 from database.excerpt import read_edition
-from database.repository import SessionSource, fetch_all, fetch_one, require, writing
-from errors import DataConflictError, DataNotFoundError
+from database.repository import SessionSource, create_id, fetch_all, fetch_one, writing
+from errors import DataConflictError
 from identifier import generate_id
 from models.annotation import SegmentationInput, SegmentationOutput, SegmentOutput
 
@@ -16,7 +16,8 @@ if TYPE_CHECKING:
     from database.excerpt import ExcerptMap
 
 
-_GET_PARENT_QUERY_BODY: LiteralString = """
+GET_BY_EDITION_ID_QUERY: LiteralString = """
+MATCH (edition:Edition {id: $edition_id})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
 MATCH (edition)-[:EDITION_OF]->(text:Text)
 RETURN segmentation.id AS id,
        edition.id AS edition_id,
@@ -24,7 +25,8 @@ RETURN segmentation.id AS id,
        [(segmentation)-[:HAS_METADATA]->(m:AnnotationMetadata) | m {.name}][0] AS metadata
 ORDER BY id
 """
-_SEGMENT_LINES: LiteralString = f"""
+_EDITION_SEGMENT_LINES: LiteralString = f"""
+MATCH (:Edition {{id: $edition_id}})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
 MATCH (segment:Segment)-[:SEGMENT_OF]->(segmentation)
 {segment_lines("segment")}
 WITH segment, lines, min_start
@@ -35,18 +37,12 @@ ORDER BY min_start, lines[-1].end, segment.id
 RETURN segment.id AS id, segment.type AS type, segment.reference AS reference, lines
 """
 GET_SEGMENTS_IN_RANGE_QUERY: LiteralString = f"""
-MATCH (:Edition {{id: $edition_id}})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
-{_SEGMENT_LINES}
+{_EDITION_SEGMENT_LINES}
   AND min_start <= $end AND lines[-1].end >= $start
 {_SEGMENTS_RETURN}
 """
-GET_BY_EDITION_ID_QUERY: LiteralString = f"""
-MATCH (edition:Edition {{id: $edition_id}})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
-{_GET_PARENT_QUERY_BODY}
-"""
 GET_SEGMENTS_QUERY: LiteralString = f"""
-MATCH (:Edition {{id: $edition_id}})-[:HAS_SEGMENTATION]->(segmentation:Segmentation)
-{_SEGMENT_LINES}
+{_EDITION_SEGMENT_LINES}
 {_SEGMENTS_RETURN}
 SKIP $offset
 """
@@ -67,7 +63,7 @@ SET segment.reference = segment_data.reference,
 WITH segmentation, segment, segment_data
 UNWIND segment_data.lines AS line
 CREATE (:Span {start: line.start, end: line.end})-[:SPAN_OF]->(segment)
-RETURN segmentation.id AS id, count(*) AS segment_count
+RETURN DISTINCT segmentation.id AS id
 """
 DELETE_BY_EDITION_ID_QUERY: LiteralString = """
 MATCH (edition:Edition {id: $edition_id})
@@ -86,26 +82,22 @@ async def add(tx: AsyncManagedTransaction, edition_id: str, segmentation: Segmen
     state.validate_span(segmentation.max_end)
     segmentation_id = generate_id()
     segments_data = [seg.model_dump(mode="json") | {"id": generate_id()} for seg in segmentation.segments]
-    result = await tx.run(
-        CREATE_QUERY,
-        edition_id=edition_id,
-        segmentation_id=segmentation_id,
-        segments=segments_data,
-        metadata=[{"id": generate_id(), "name": segmentation.metadata.name}]
-        if segmentation.metadata is not None
-        else [],
-    )
+    metadata = [{"id": generate_id(), "name": segmentation.metadata.name}] if segmentation.metadata else []
     try:
-        record = await result.single(strict=True)
+        return await create_id(
+            tx,
+            CREATE_QUERY,
+            "id",
+            edition_id=edition_id,
+            segmentation_id=segmentation_id,
+            segments=segments_data,
+            metadata=metadata,
+        )
     except ResultNotSingleError as exc:
         raise DataConflictError(f"Edition with ID '{edition_id}' already has a segmentation") from exc
-    if record["segment_count"] == 0:
-        raise DataConflictError(f"Edition with ID '{edition_id}' already has a segmentation")
-    return str(record["id"])
 
 
 async def _get_by_edition(tx: AsyncManagedTransaction, edition_id: str) -> SegmentationOutput:
-    await validate_edition_exists(tx, edition_id)
     return await fetch_one(
         tx,
         GET_BY_EDITION_ID_QUERY,
@@ -118,21 +110,11 @@ async def _get_by_edition(tx: AsyncManagedTransaction, edition_id: str) -> Segme
 async def _segments(
     tx: AsyncManagedTransaction, edition_id: str, *, offset: int = 0, limit: int | None = None
 ) -> list[SegmentOutput]:
-    await validate_edition_exists(tx, edition_id)
     query = GET_SEGMENTS_QUERY if limit is None else GET_SEGMENTS_QUERY + " LIMIT $limit"
     segments = await fetch_all(tx, query, SegmentOutput, edition_id=edition_id, offset=offset, limit=limit)
     if not segments:
-        await _validate_edition_has_segmentation(tx, edition_id)
+        await _get_by_edition(tx, edition_id)
     return segments
-
-
-async def _validate_edition_has_segmentation(tx: AsyncManagedTransaction, edition_id: str) -> None:
-    await require(
-        tx,
-        "(:Edition {id: $edition_id})-[:HAS_SEGMENTATION]->(:Segmentation)",
-        DataNotFoundError(f"Segmentation for edition '{edition_id}' not found"),
-        edition_id=edition_id,
-    )
 
 
 @writing

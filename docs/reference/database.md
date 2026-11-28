@@ -16,7 +16,9 @@ This document provides an overview of the Neo4j-backed data access layer in [dat
 
 ## Overview
 
-The **Database** class in [database/database.py](../../database/database.py) holds an async Neo4j driver. Domain operations live in modules such as `text` and `person`. The graph schema supplies the unique constraints and required relationship rules. Each required relationship generates an APOC existence check, plus an at-most-one check when its cardinality is `one`. The trigger module also defines domain-specific rules. [Graph schema](../../database/neo4j_schema.yaml) · [Lookup indexes](../../database/schema.py) · [APOC triggers](../../database/neo4j_triggers.py)
+The **Database** class in [database/database.py](../../database/database.py) holds an async Neo4j driver. Domain operations live in modules such as `text` and `person`. The graph schema generates native uniqueness constraints, property indexes, and APOC checks for property types, required fields, and valid relationship endpoints. Python enums supply the accepted lookup names, recording formats, and segment types for API validation and migration audits. The trigger module defines domain-specific rules. Running `python -m scripts.migrate` audits the configured graph. [Graph schema](../../database/neo4j_schema.yaml) · [Schema generator](../../database/schema.py) · [APOC triggers](../../database/neo4j_triggers.py)
+
+For YAML declarations, cardinality, recursive conditions, and worked examples, see the [graph schema syntax reference](graph-schema.md).
 
 ---
 
@@ -49,7 +51,7 @@ Import a module and alias it when the short name would shadow a local (e.g. `fro
 | [edition.py](../../database/edition.py) | Edition CRUD, content, related editions, and text relationships. |
 | [alignment.py](../../database/alignment.py) | Direct edition-pair segment alignment relationships. |
 | [segment.py](../../database/segment.py) | Segment retrieval, related segments, tag context, and span lookup; segments are created through segmentation. |
-| [audio.py](../../database/audio.py) | Audio (one performance of a text): recited text, Work, title, language, license and performers. |
+| [audio.py](../../database/audio.py) | One performance of a text, with its recited text, title, language, license and performers. |
 | [recording.py](../../database/recording.py) | Recording files of an audio, the edition each follows, and their cues. |
 | [person.py](../../database/person.py) | Person CRUD and listing with BDRC/wiki filters; name search uses the catalog search service. |
 | [language.py](../../database/language.py) | Language code creation, deletion, and listing. |
@@ -81,12 +83,17 @@ Import a module and alias it when the short name would shadow a local (e.g. `fro
 | [contribution.py](../../database/contribution.py) | Shared contribution creation and updates. |
 | [content_state.py](../../database/content_state.py) | Internal edition revision guards and validated reads. |
 | [span.py](../../database/span.py) | Span adjustments within the content service's validated edit transaction. |
-| [schema.py](../../database/schema.py) | Loads neo4j_schema.yaml for unique constraints; holds the explicit lookup indexes. |
-| [neo4j_triggers.py](../../database/neo4j_triggers.py) | APOC triggers: required/at-most-one relationships and the custom rules. |
+| [schema.py](../../database/schema.py) | Generates uniqueness constraints and property indexes from neo4j_schema.yaml. |
+| [neo4j_triggers.py](../../database/neo4j_triggers.py) | Generates structural APOC triggers from the schema and defines domain-specific triggers and audits. |
 | [annotation/single_span.py](../../database/annotation/single_span.py) | Shared persistence for bibliographic metadata, notes, and marks. |
 | [repository.py](../../database/repository.py) | `SessionSource`, `@reading`/`@writing`, fetch helpers, constraint wrapping. |
 
 For method-level detail and Cypher usage, see the linked source files.
+
+Pydantic checks audio performer roles and mutually exclusive text relationships on incoming
+requests. The graph also checks both rules at commit. Direct importers still need to validate
+span bounds, cue times, and segment reference uniqueness within a segmentation. Content edits
+validate the span offsets they calculate.
 
 ### Manual schema upgrades
 

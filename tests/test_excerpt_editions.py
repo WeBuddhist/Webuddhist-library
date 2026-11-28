@@ -2,9 +2,10 @@
 import json
 
 import pytest
+from neo4j.exceptions import ClientError
 
 from database import person as person_database
-from database import text
+from database import migrations, text
 from database.content_state import read_state
 from identifier import generate_id
 from models.base import LocalizedString
@@ -337,6 +338,69 @@ async def test_deletes_keep_excerpt_editions_resolvable(client, test_database):
     async with test_database.get_session() as session:
         record = await (await session.run("MATCH (n:Span) RETURN count(n) AS count")).single()
     assert record["count"] == 0
+
+
+async def test_edition_content_keys_and_migration_audit(client, test_database):
+    _, source, _, excerpt = await _part(client, test_database)
+    assert (await test_database.read(read_state, source)).object_key
+    assert (await test_database.read(read_state, excerpt)).object_key is None
+
+    audit = migrations.AUDITS["enforce_excerpt_edition"]
+    async with test_database.get_session() as session, await session.begin_transaction() as tx:
+        assert await (await tx.run(audit)).value() == []
+        await tx.run("""
+            MATCH (s:Edition {id: $source}), (e:Edition {id: $excerpt})
+            SET e.content_key = s.content_key REMOVE s.content_key
+        """, source=source, excerpt=excerpt)
+        assert set(await (await tx.run(audit)).value()) == {source, excerpt}
+        await tx.rollback()
+
+
+async def test_source_can_become_an_excerpt_only_after_its_dependents_are_gone(client, test_database):
+    text_id = await _text(test_database, "Source")
+    response = await client.post(
+        f"/v2/texts/{text_id}/editions", json={"metadata": {"type": "collated"}, "content": WHOLE}
+    )
+    assert response.status_code == 201, response.text
+    source = response.json()["id"]
+    target = await _stored(client, await _text(test_database, "New source"), WHOLE, SECTIONS)
+    excerpt = await _excerpt(client, await _text(test_database, "Selection"), source, (5, 10))
+    assert excerpt.status_code == 201, excerpt.text
+    dependent = excerpt.json()["id"]
+
+    convert = """
+        MATCH (e:Edition {id: $source})-[kind:HAS_TYPE]->(), (target:Edition {id: $target}),
+              (excerpt:EditionType {name: 'excerpt'})
+        DELETE kind
+        REMOVE e.content_key
+        CREATE (e)-[:HAS_TYPE]->(excerpt), (e)-[:EXCERPT_OF]->(target),
+               (:Span {start: 0, end: e.content_length, index: 0})-[:SPAN_OF]->(e)
+    """
+    with pytest.raises(ClientError, match="enforce_edition_excerpt_of_when_2_max_zero"):
+        await test_database.query(convert, write=True, source=source, target=target)
+    assert await _content(client, dependent) == "Two. "
+
+    assert (await client.delete(f"/v2/editions/{dependent}")).status_code == 204
+    await test_database.query(convert, write=True, source=source, target=target)
+    assert await _content(client, source) == WHOLE
+
+
+async def test_renaming_excerpt_type_rechecks_its_editions(client, test_database):
+    _, _, _, excerpt = await _part(client, test_database)
+    with pytest.raises(ClientError, match="enforce_edition_has_type_when_[12]"):
+        await test_database.query("MATCH (t:EditionType {name: 'excerpt'}) SET t.name = 'collated'", write=True)
+    assert await _content(client, excerpt) == "Two. "
+
+
+@pytest.mark.parametrize(("edit", "rule"), [
+    ("MATCH (e)-[r:EXCERPT_OF]->() DELETE r", "enforce_edition_excerpt_of_when_1"),
+    ("MATCH (s:Span)-[:SPAN_OF]->(e) DETACH DELETE s", "enforce_span_span_of_per_edition_when_1"),
+])
+async def test_excerpt_cannot_lose_its_source_or_last_span(client, test_database, edit, rule):
+    _, _, _, excerpt = await _part(client, test_database)
+    with pytest.raises(ClientError, match=f"{rule}.*{excerpt}"):
+        await test_database.query(f"MATCH (e:Edition {{id:$id}}) {edit}", write=True, id=excerpt)
+    assert await _content(client, excerpt) == "Two. "
 
 
 async def test_invalid_excerpt_editions_are_rejected(client, test_database):

@@ -4,6 +4,8 @@ from collections.abc import Awaitable, Callable
 from contextlib import aclosing
 from typing import TYPE_CHECKING
 
+from opensearchpy import Q, Search
+
 from database import language as language_database
 from database import person as person_database
 from database import text as text_database
@@ -21,9 +23,23 @@ if TYPE_CHECKING:
 
     from database import Database
     from models.requests import PersonFilter, TextFilter
+
 PERSON_DOCUMENT_TYPE = "person"
 TEXT_DOCUMENT_TYPE = "text"
 _TEXT_MINIMUM_SHOULD_MATCH = "3<75%"
+_SEARCH_FIELDS = (
+    "primary_labels^6",
+    "alt_labels^3",
+    "search_labels_bo^4",
+    "search_labels_bo.phonetic^3",
+    "search_labels_bo.ewts^3",
+    "search_labels_bo_ewts^4",
+    "search_labels_bo_ewts.phonetic^3",
+    "search_labels_sa^4",
+    "search_labels_sa_deva^3",
+    "search_labels_plain^3",
+    "search_labels_folded^2",
+)
 
 
 class CatalogSearchService:
@@ -187,59 +203,24 @@ def _contributor_ids(text: TextOutput) -> list[str]:
 
 
 def _search_body(*, query: str, document_type: str, limit: int, filters: list[dict]) -> dict:
-    fields = _search_fields()
-    return {
-        "size": limit,
-        "sort": [{"_score": "desc"}, {"id": "asc"}],
-        "query": {
-            "bool": {
-                "filter": [{"term": {"document_type": document_type}}, *filters],
-                "must": [
-                    {
-                        "bool": {
-                            "should": _match_clauses(query=query, document_type=document_type, fields=fields),
-                            "minimum_should_match": 1,
-                        }
-                    }
-                ],
-            }
-        },
-    }
-
-
-def _match_clauses(*, query: str, document_type: str, fields: list[str]) -> list[dict]:
-    phrase = {"multi_match": {"query": query, "type": "phrase", "fields": fields, "boost": 4}}
-    prefix = {"match_phrase_prefix": {"search_labels_folded": query}}
-    if document_type == PERSON_DOCUMENT_TYPE:
-        return [phrase, prefix]
-    return [
-        phrase,
-        {
-            "multi_match": {
-                "query": query,
-                "type": "best_fields",
-                "fields": fields,
-                "minimum_should_match": _TEXT_MINIMUM_SHOULD_MATCH,
-            }
-        },
-        prefix,
-    ]
-
-
-def _search_fields() -> list[str]:
-    return [
-        "primary_labels^6",
-        "alt_labels^3",
-        "search_labels_bo^4",
-        "search_labels_bo.phonetic^3",
-        "search_labels_bo.ewts^3",
-        "search_labels_bo_ewts^4",
-        "search_labels_bo_ewts.phonetic^3",
-        "search_labels_sa^4",
-        "search_labels_sa_deva^3",
-        "search_labels_plain^3",
-        "search_labels_folded^2",
-    ]
+    matches = [Q("multi_match", query=query, type="phrase", fields=_SEARCH_FIELDS, boost=4)]
+    if document_type != PERSON_DOCUMENT_TYPE:
+        matches.append(
+            Q(
+                "multi_match",
+                query=query,
+                type="best_fields",
+                fields=_SEARCH_FIELDS,
+                minimum_should_match=_TEXT_MINIMUM_SHOULD_MATCH,
+            )
+        )
+    matches.append(Q("match_phrase_prefix", search_labels_folded=query))
+    search = Search().query(
+        "bool",
+        filter=[Q("term", document_type=document_type), *filters],
+        must=[Q("bool", should=matches, minimum_should_match=1)],
+    )
+    return search.sort({"_score": "desc"}, {"id": "asc"}).extra(size=limit).to_dict()
 
 
 def _text_filters(filters: TextFilter) -> list[dict]:

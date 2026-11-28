@@ -370,16 +370,10 @@ class TestExistingDeleteCascades:
         tag_id = tag_response.json()["id"]
         text_id = await _create_text(client, person_id)
         await client.post(f"/v2/texts/{text_id}/tags/{tag_id}")
-        segment_id = _unique("seg")
-        async with test_database.get_session() as session:
-            await session.run(
-                """
-                CREATE (sgn:Segmentation {id: $segmentation_id})
-                CREATE (:Segment {id: $segment_id})-[:SEGMENT_OF]->(sgn)
-                """,
-                segmentation_id=f"{segment_id}_segmentation",
-                segment_id=segment_id,
-            )
+        edition_id = await _create_diplomatic_edition(client, text_id)
+        await _create_segmentation(client, edition_id, [(0, 5)])
+        segments = await client.get(f"/v2/editions/{edition_id}/segmentation/segments")
+        segment_id = segments.json()["items"][0]["id"]
         assert (await client.post(f"/v2/segments/{segment_id}/tags/{tag_id}")).status_code == 204
 
         response = await client.delete(f"/v2/tags/{tag_id}", headers=APPLICATION_HEADER)

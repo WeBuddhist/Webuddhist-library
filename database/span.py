@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Literal, LiteralString
 
 from errors import DataValidationError
+from models.annotation import Span
 
 if TYPE_CHECKING:
     from neo4j import AsyncManagedTransaction
@@ -139,7 +140,8 @@ async def adjust_spans(tx: AsyncManagedTransaction, edition_id: str, start: int,
         if new is None:
             deletes.append(span_id)
         elif new != old:
-            updates.append({"span_id": span_id, "new_start": new[0], "new_end": new[1]})
+            span = Span(start=new[0], end=new[1])
+            updates.append({"span_id": span_id, "new_start": span.start, "new_end": span.end})
 
     entities: dict[tuple[str, str, bool], list[tuple[str, int, int]]] = {}
     result = await tx.run(FIND_SPANS_QUERY, edition_id=edition_id)

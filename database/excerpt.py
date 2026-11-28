@@ -41,10 +41,12 @@ class ExcerptSlice:
     def to_local(self, position: int) -> int:
         return self.offset + min(max(position, self.start), self.end) - self.start
 
-    def to_source(self, start: int, end: int) -> tuple[int, int] | None:
+    def to_source(self, span: Span) -> Span | None:
         """The part of a range of excerpt edition positions that falls in this span, in source positions."""
-        start, end = (max(start, self.offset), min(end, self.offset + self.end - self.start))
-        return (self.start + start - self.offset, self.start + end - self.offset) if start < end else None
+        start, end = (max(span.start, self.offset), min(span.end, self.offset + self.end - self.start))
+        if start < end:
+            return Span(start=self.start + start - self.offset, end=self.start + end - self.offset)
+        return None
 
     def project(self, span: Span, *, whole: bool = False) -> Span | None:
         """Trim and shift a source span; `whole` keeps only spans fully inside. A point at the end goes to the last."""
@@ -179,11 +181,11 @@ async def add(tx: AsyncManagedTransaction, edition_id: str, text_id: str, excerp
     if whole is not None and named.text_id != whole["id"]:
         raise DataValidationError(f"Edition '{named.edition_id}' is not an edition of '{whole['id']}', the whole text")
     named.validate_span(max(span.end for span in excerpt_of.spans))
-    ranges = [(span.start, span.end) for span in excerpt_of.spans]
+    ranges = excerpt_of.spans
     if named.is_excerpt:
         slices = await get_slices(tx, named.edition_id)
-        ranges = [source for start, end in ranges for piece in slices if (source := piece.to_source(start, end))]
-    spans = [{"index": i, "start": start, "end": end} for i, (start, end) in enumerate(ranges)]
+        ranges = [source_span for span in ranges for piece in slices if (source_span := piece.to_source(span))]
+    spans = [{"index": i, "start": span.start, "end": span.end} for i, span in enumerate(ranges)]
     result = await tx.run(CREATE_QUERY, edition_id=edition_id, source_id=source_id, spans=spans)
     await result.consume()
 
@@ -217,7 +219,8 @@ async def propagate_edit(tx: AsyncManagedTransaction, source_id: str, start: int
             if growth or local_start != local_end:
                 edits.append((local_start, local_end, local_end - local_start + growth))
             if adjusted != (piece.start, piece.end):
-                updates.append({"index": piece.index, "start": adjusted[0], "end": adjusted[1]})
+                span = Span(start=adjusted[0], end=adjusted[1])
+                updates.append({"index": piece.index, "start": span.start, "end": span.end})
             delta += growth
         for local_start, local_end, inserted in reversed(edits):
             await span_database.adjust_spans(tx, edition_id, local_start, local_end, inserted)

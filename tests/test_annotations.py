@@ -19,9 +19,11 @@ Requires environment variables:
 - NEO4J_TEST_URI: Neo4j test instance URI
 - NEO4J_TEST_PASSWORD: Password for test instance
 """
+import asyncio
 import logging
 
 import pytest
+from neo4j.exceptions import ClientError
 
 from database import edition, person, text
 from database.annotation import bibliographic
@@ -343,8 +345,82 @@ class TestGetPagination(TestAnnotationsEndpoints):
         assert len(data["volumes"][0]["pages"][0]["lines"]) == 2
 
 
+class TestPaginationCardinality(TestAnnotationsEndpoints):
+    @pytest.mark.parametrize(("edition_type", "count", "violation"), [
+        ("critical", 0, None),
+        ("critical", 1, None),
+        ("critical", 2, "enforce_pagination_pagination_of_per_edition_max_one"),
+        ("diplomatic", 0, "enforce_pagination_pagination_of_per_edition_when_1"),
+        ("diplomatic", 1, None),
+        ("diplomatic", 2, "enforce_pagination_pagination_of_per_edition_max_one"),
+    ])
+    async def test_pagination_count_at_commit(self, test_database, test_person_data, edition_type, count, violation):
+        person_id = await self._create_test_person(test_database, test_person_data)
+        text_id = await self._create_test_text(test_database, person_id)
+        edition_id = await self._create_test_edition(test_database, text_id, edition_type=EditionType.CRITICAL)
+
+        # Change the edition type and attach the requested number of complete paginations in one write.
+        write = """
+            MATCH (e:Edition {id:$id})-[old:HAS_TYPE]->(:EditionType)
+            MERGE (t:EditionType {name:$edition_type})
+            DELETE old
+            CREATE (e)-[:HAS_TYPE]->(t)
+            FOREACH (i IN range(1, $count) |
+                CREATE (p:Pagination {id:randomUUID()})-[:PAGINATION_OF]->(e)
+                CREATE (v:Volume {id:randomUUID()})-[:VOLUME_OF]->(p)
+                CREATE (page:Page {id:randomUUID(), reference:toString(i)})-[:PAGE_OF]->(v)
+                CREATE (:Span {start:0, end:1})-[:SPAN_OF]->(page))
+        """
+        params = {"id": edition_id, "edition_type": edition_type, "count": count}
+        if violation:
+            with pytest.raises(ClientError, match=f"{violation}.*{edition_id}"):
+                await test_database.query(write, write=True, **params)
+        else:
+            await test_database.query(write, write=True, **params)
+        record, = await test_database.query("""
+            MATCH (e:Edition {id:$id})-[:HAS_TYPE]->(t:EditionType)
+            RETURN t.name AS edition_type, count { (:Pagination)-[:PAGINATION_OF]->(e) } AS count
+        """, id=edition_id)
+        assert (record["edition_type"], record["count"]) == (("critical", 0) if violation else (edition_type, count))
+
+
 class TestDeletePagination(TestAnnotationsEndpoints):
     """Tests for DELETE /v2/paginations/{pagination_id}"""
+
+    async def test_renaming_an_edition_type_rechecks_its_editions(self, test_database, test_person_data):
+        person_id = await self._create_test_person(test_database, test_person_data)
+        text_id = await self._create_test_text(test_database, person_id)
+        edition_id = await self._create_test_edition(test_database, text_id, edition_type=EditionType.CRITICAL)
+        async with test_database.get_session() as session:
+            with pytest.raises(ClientError, match=f"enforce_pagination_pagination_of_per_edition_when_1.*{edition_id}"):
+                await (await session.run("MATCH (t:EditionType {name:'critical'}) SET t.name = 'diplomatic'")).consume()
+
+    async def test_type_rename_and_pagination_removal_cannot_both_commit(self, test_database, test_person_data):
+        person_id = await self._create_test_person(test_database, test_person_data)
+        text_id = await self._create_test_text(test_database, person_id)
+        edition_id = await self._create_test_edition(test_database, text_id)
+        await test_database.query("MATCH (t:EditionType {name:'diplomatic'}) SET t.name = 'critical'", write=True)
+
+        results = await asyncio.gather(
+            test_database.query("MATCH (t:EditionType {name:'critical'}) SET t.name = 'diplomatic'", write=True),
+            test_database.query(pagination_database.DELETE_ALL_QUERY, write=True, edition_id=edition_id),
+            return_exceptions=True,
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        assert len(errors) == 1
+        assert isinstance(errors[0], ClientError)
+        assert "enforce_pagination_pagination_of_per_edition_when_1" in str(errors[0])
+
+    async def test_database_rejects_deleting_last_diplomatic_pagination(self, test_database, test_person_data):
+        person_id = await self._create_test_person(test_database, test_person_data)
+        text_id = await self._create_test_text(test_database, person_id)
+        edition_id = await self._create_test_edition(test_database, text_id, edition_type=EditionType.DIPLOMATIC)
+
+        async with test_database.get_session() as session:
+            with pytest.raises(ClientError, match="enforce_pagination_pagination_of_per_edition_when_1"):
+                result = await session.run(pagination_database.DELETE_ALL_QUERY, edition_id=edition_id)
+                await result.consume()
+        assert await pagination_database.get_all(test_database, edition_id) is not None
 
     async def test_delete_pagination_success(self, client, test_database, test_person_data):
         """Test successful pagination deletion"""

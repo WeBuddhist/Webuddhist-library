@@ -5,7 +5,7 @@ An audio is one performance of a text: one artist (or group, or AI) and one take
 ## Concepts
 
 - **Recited text**: Every audio recites exactly one text, chosen when the audio is created. It cannot change. To recite another text, create another audio. The audio belongs to that text's Work.
-- **No edition needed**: An audio needs only its text. A recording links to an edition later, when cues are added.
+- An audio needs only its text. Each recording also needs an edition of that text. Supply its `edition_id` when uploading the recording.
 - **Performers**: Credited through the same `contributions` shape used by texts. Every contribution must have role `narrator`, `singer`, or `musician`, and points to one person or AI.
 - **One performance**: A second take by the same artist is a new audio. Versions of the same take are recordings of one audio.
 
@@ -135,4 +135,4 @@ Deleting a text fails with `409 Conflict` while an audio recites it.
 - Routers: `routers/audios.py`; the text-scoped list and create routes live in `routers/texts.py`.
 - Models: `models/audio.py` and `models/contribution.py`.
 - Database: `database/audio.py`, with the shared `Contribution` queries in `database/contribution.py`.
-- Graph: `(:Audio)-[:AUDIO_OF]->(:Work)` and `(:Audio)-[:RECITATION_OF]->(:Text)`. The Work is taken from the recited text when the audio is created, and a trigger keeps the two in agreement. Title, language, license, and contributions use the same relationships as on a text.
+- Follow `(:Audio)-[:RECITATION_OF]->(:Text)-[:TEXT_OF]->(:Work)` to find the Work. Title, language, license, and contributions use the same relationships as on a text.

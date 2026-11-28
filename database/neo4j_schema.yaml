@@ -1,736 +1,660 @@
+property_templates:
+  - &required_string {type: string, required: true}
+  - &optional_string {type: string, required: false}
+  - &required_unique_string {type: string, required: true, unique: true}
+  - &optional_unique_string {type: string, required: false, unique: true}
+  - &required_integer {type: integer, required: true}
+  - &required_boolean {type: boolean, required: true}
+  - &optional_integer {type: integer, required: false}
+
+node_templates:
+  identified: &identified {id: *required_unique_string}
+  external_ids: &external_ids {<<: *identified, bdrc: *optional_unique_string, wiki: *optional_unique_string}
+  named_lookup: &named_lookup {properties: {name: *required_unique_string}}
+
+relationship_templates:
+  required_name_bound: &required_name_bound {target: Nomen, cardinality: "0..1 -> 1"}
+  optional_name_bound: &optional_name_bound {target: Nomen, cardinality: "0..1 -> 0..1"}
+  forbid_alternative_nomen: &forbid_alternative_nomen
+    target: Nomen
+    when: {target: {has_outgoing: ALTERNATIVE_OF}}
+    cardinality: 0
+  metadata_bound: &metadata_bound {target: AnnotationMetadata, cardinality: "0..1 -> 0..1"}
+  excerpt_type: &excerpt_type {properties: {name: excerpt}}
+  excerpt_edition: &excerpt_edition
+    has_outgoing:
+      HAS_TYPE: {target: *excerpt_type}
+  forbid_excerpt_target: &forbid_excerpt_target
+    target: Edition
+    when: {target: *excerpt_edition}
+    cardinality: 0
+  critical_edition_per_text: &critical_edition_per_text
+    target: Text
+    when:
+      source:
+        has_outgoing:
+          HAS_TYPE: {target: {properties: {name: critical}}}
+    cardinality: "0..1 -> 0..*"
+    description: "Critical edition already present for this text"
+  audio_contribution: &audio_contribution
+    has_incoming:
+      HAS_CONTRIBUTION:
+        source: {has_outgoing: RECITATION_OF}
+
 nodes:
   Application:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      name:
-        type: string
-        required: true
+      id: *required_unique_string
+      name: *required_string
 
   ApiKey:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      name:
-        type: string
-        required: true
-      email:
-        type: string
-        required: true
-      api_key_hash:
-        type: string
-        required: true
-        unique: true
-      is_active:
-        type: boolean
-        required: true
+      id: *required_unique_string
+      name: *required_string
+      email: *required_string
+      api_key_hash: *required_unique_string
+      is_active: *required_boolean
       created_at:
         type: datetime
         required: true
     relationships:
       BOUND_TO:
-        target: Application
-        cardinality: one
-        required: false
+        - target: Application
+          cardinality: "0..* -> 0..1"
+          description: "An API key can be bound to at most one application."
 
   Work:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      wiki:
-        type: string
-        required: false
-        unique: true
-      bdrc:
-        type: string
-        required: false
-        unique: true
+    properties: *external_ids
     relationships:
       HAS_CATEGORY:
-        target: Category
-        cardinality: one
-        required: true
+        - target: Category
+          cardinality: "0..* -> 1"
+          description: "A work must have exactly one category."
       HAS_TAG:
-        target: Tag
-        cardinality: many
-        required: false
+        - target: Tag
+          cardinality: "0..* -> 0..*"
+          description: "A work can have any number of tags, and a tag can be used on any number of works."
 
   Tag:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       BELONGS_TO:
-        target: Application
-        cardinality: one
-        required: true
+        - target: Application
+          cardinality: "0..* -> 1"
+          description: "A tag must belong to exactly one application."
       HAS_TITLE:
-        target: Nomen
-        cardinality: one
-        required: true
+        - <<: *required_name_bound
+          description: >-
+            A tag must have exactly one primary title. Each title record can serve as the
+            primary title for at most one tag.
+        - <<: *forbid_alternative_nomen
+          description: "Use the primary title on the tag. An alternative title belongs under its primary form."
       HAS_DESCRIPTION:
-        target: Nomen
-        cardinality: one
-        required: false
+        - <<: *optional_name_bound
+          description: >-
+            A tag can have at most one primary description. Each description record can serve as
+            the primary description for at most one tag.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary description on the tag. An alternative description belongs under its
+            primary form.
 
   Category:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       BELONGS_TO:
-        target: Application
-        cardinality: one
-        required: true
+        - target: Application
+          cardinality: "0..* -> 1"
+          description: "A category must belong to exactly one application."
       HAS_TITLE:
-        target: Nomen
-        cardinality: one
-        required: true
+        - <<: *required_name_bound
+          description: >-
+            A category must have exactly one primary title. Each title record can serve as the
+            primary title for at most one category.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary title on the category. An alternative title belongs under its
+            primary form.
       HAS_DESCRIPTION:
-        target: Nomen
-        cardinality: one
-        required: false
+        - <<: *optional_name_bound
+          description: >-
+            A category can have at most one primary description. Each description record can
+            serve as the primary description for at most one category.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary description on the category. An alternative description belongs
+            under its primary form.
       HAS_PARENT:
-        target: Category
-        cardinality: one
-        required: false
+        - target: Category
+          cardinality: "0..* -> 0..1"
+          description: "A category can have at most one parent category."
 
   Text:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      wiki:
-        type: string
-        required: false
-        unique: true
-      bdrc:
-        type: string
-        required: false
-        unique: true
-      date:
-        type: string
-        required: false
+      <<: *external_ids
+      date: *optional_string
     relationships:
       TEXT_OF:
-        target: Work
-        cardinality: one
-        required: true
-        properties:
-          original:
-            type: boolean
-            required: true
+        - target: Work
+          cardinality: "0..* -> 1"
+          description: "A text must belong to exactly one work."
+          properties:
+            original: *required_boolean
+        - target: Work
+          when: {properties: {original: true}}
+          cardinality: "0..1 -> 0..*"
+          description: "A work can have at most one original text."
+        - target: Work
+          when:
+            source: {has_outgoing: PART_OF}
+            properties: {original: true}
+          cardinality: "0..* -> 1"
+          description: "A text that is part of another text must be marked as the original text of its work."
+        - target: Work
+          when:
+            source: {has_outgoing: COMMENTARY_OF}
+            properties: {original: true}
+          cardinality: "0..* -> 1"
+          description: "A commentary must be marked as the original text of its work."
       TRANSLATION_OF:
-        target: Text
-        cardinality: one
-        required: false
+        - target: Text
+          cardinality: "0..* -> 0..1"
+          description: "A translation can identify at most one text as its source."
+        - target: Text
+          when: {source: {has_outgoing: COMMENTARY_OF}}
+          cardinality: 0
+          description: "A commentary cannot also be a translation."
       COMMENTARY_OF:
-        target: Text
-        cardinality: one
-        required: false
+        - target: Text
+          cardinality: "0..* -> 0..1"
+          description: "A commentary can identify at most one text as its subject."
       PART_OF:
-        target: Text
-        cardinality: one
-        required: false
+        - target: Text
+          cardinality: "0..* -> 0..1"
+          description: "A text can be a direct part of at most one other text."
+        - target: Text
+          when: {source: {has_outgoing: TRANSLATION_OF}}
+          cardinality: 0
+          description: "A translation cannot also be part of another text."
+        - target: Text
+          when: {source: {has_outgoing: COMMENTARY_OF}}
+          cardinality: 0
+          description: "A commentary cannot also be part of another text."
       HAS_LANGUAGE:
-        target: Language
-        cardinality: one
-        required: true
-        properties:
-          bcp47:
-            type: string
-            required: false
+        - target: Language
+          cardinality: "0..* -> 1"
+          description: "A text must have exactly one language."
+          properties:
+            bcp47: *optional_string
       HAS_CONTRIBUTION:
-        target: Contribution
-        cardinality: many
-        required: false
+        - target: Contribution
+          cardinality: "0..1 -> 0..*"
+          description: "A contribution can be credited to at most one text."
+        - target: Contribution
+          when: {target: *audio_contribution}
+          cardinality: 0
+          description: "A contribution credited to an audio performance cannot also be credited to a text."
       HAS_TITLE:
-        target: Nomen
-        cardinality: one
-        required: true
+        - <<: *required_name_bound
+          description: >-
+            A text must have exactly one primary title. Each title record can serve as the
+            primary title for at most one text.
+        - <<: *forbid_alternative_nomen
+          description: "Use the primary title on the text. An alternative title belongs under its primary form."
       HAS_LICENSE:
-        target: LicenseType
-        cardinality: one
-        required: true
+        - target: LicenseType
+          cardinality: "0..* -> 1"
+          description: "A text must have exactly one license."
 
   Edition:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      content_length:
-        type: integer
-        required: true
-      content_key:
-        type: string
-        required: false  # absent exactly when the edition type is excerpt
-      revision:
-        type: integer
-        required: true
-      colophon:
-        type: string
-        required: false
-      bdrc:
-        type: string
-        required: false
-        unique: true
-      wiki:
-        type: string
-        required: false
-        unique: true
+      <<: *external_ids
+      content_length: *required_integer
+      content_key: *optional_string
+      revision: *required_integer
+      colophon: *optional_string
     relationships:
       HAS_TYPE:
-        target: EditionType
-        cardinality: one
-        required: true
+        - target: EditionType
+          cardinality: "0..* -> 1"
+          description: "An edition must have exactly one edition type."
+        - target: EditionType
+          when: {source: {has_outgoing: EXCERPT_OF}, target: *excerpt_type}
+          cardinality: "0..* -> 1"
+          description: "An edition that names an excerpt source must have the excerpt type."
+        - target: EditionType
+          when: {source: {has_incoming: SPAN_OF}, target: *excerpt_type}
+          cardinality: "0..* -> 1"
+          description: "An edition with spans attached directly to it must have the excerpt type."
       HAS_INCIPIT_TITLE:
-        target: Nomen
-        cardinality: one
-        required: false
+        - <<: *optional_name_bound
+          description: >-
+            An edition can have at most one primary incipit title. Each incipit title record can
+            serve as the primary incipit title for at most one edition.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary incipit title on the edition. An alternative incipit title belongs
+            under its primary form.
       EDITION_OF:
-        target: Text
-        cardinality: one
-        required: true
+        - target: Text
+          cardinality: "0..* -> 1"
+          description: "An edition must belong to exactly one text."
+        - *critical_edition_per_text
       HAS_SOURCE:
-        target: Source
-        cardinality: one
-        required: false
+        - target: Source
+          cardinality: "0..* -> 0..1"
+          description: "An edition can name at most one source."
       HAS_SEGMENTATION:
-        target: Segmentation
-        cardinality: one
-        required: false
+        - target: Segmentation
+          cardinality: "1 -> 0..1"
+          description: >-
+            An edition can have at most one segmentation. Each segmentation must belong to
+            exactly one edition.
+        - target: Segmentation
+          when: {source: *excerpt_edition}
+          cardinality: 0
+          description: "An excerpt edition cannot have its own segmentation."
       EXCERPT_OF:
-        target: Edition
-        cardinality: one
-        required: false  # present exactly when the edition type is excerpt
+        - target: Edition
+          cardinality: "0..* -> 0..1"
+          description: "An edition can draw its excerpt from at most one source edition."
+        - target: Edition
+          when: {source: *excerpt_edition}
+          cardinality: "0..* -> 1"
+          description: "An excerpt must identify exactly one source edition."
+        - <<: *forbid_excerpt_target
+          description: "An excerpt cannot use another excerpt as its source."
 
   Audio:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      date:
-        type: string
-        required: false
+      id: *required_unique_string
+      date: *optional_string
     relationships:
-      AUDIO_OF:
-        target: Work
-        cardinality: one
-        required: true
       RECITATION_OF:
-        target: Text
-        cardinality: one
-        required: true
+        - target: Text
+          cardinality: "0..* -> 1"
+          description: "An audio performance must recite exactly one text."
       HAS_TITLE:
-        target: Nomen
-        cardinality: one
-        required: false
+        - <<: *optional_name_bound
+          description: >-
+            An audio performance can have at most one primary title. Each title record can serve
+            as the primary title for at most one audio performance.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary title on the audio performance. An alternative title belongs under
+            its primary form.
       HAS_LANGUAGE:
-        target: Language
-        cardinality: one
-        required: true
-        properties:
-          bcp47:
-            type: string
-            required: false
+        - target: Language
+          cardinality: "0..* -> 1"
+          description: "An audio performance must have exactly one language."
+          properties:
+            bcp47: *optional_string
       HAS_LICENSE:
-        target: LicenseType
-        cardinality: one
-        required: true
+        - target: LicenseType
+          cardinality: "0..* -> 1"
+          description: "An audio performance must have exactly one license."
       HAS_CONTRIBUTION:
-        target: Contribution
-        cardinality: many
-        required: true
+        - target: Contribution
+          cardinality: "0..1 -> 1..*"
+          description: >-
+            An audio performance needs at least one contribution. Each contribution can be
+            credited to at most one audio performance.
 
   Recording:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
+      id: *required_unique_string
       audio_key:
-        type: string
-        required: true
-      format:
-        type: string
-        required: true
-        allowed_values:
-          - mp3
-          - wav
-          - m4a
-          - ogg
-          - flac
-      size_bytes:
-        type: integer
-        required: true
-      duration_ms:
-        type: integer
-        required: false
+        <<: *required_string
+        description: "A recording must have a string storage key for its audio file."
+      format: *required_string
+      size_bytes: *required_integer
+      duration_ms: *optional_integer
     relationships:
       RENDITION_OF:
-        target: Audio
-        cardinality: one
-        required: true
+        - target: Audio
+          cardinality: "0..* -> 1"
+          description: "A recording must belong to exactly one audio performance."
       FOLLOWS:
-        target: Edition
-        cardinality: one
-        required: false
+        - target: Edition
+          cardinality: "0..* -> 1"
+          description: "A recording must identify exactly one edition that it follows."
       HAS_TITLE:
-        target: Nomen
-        cardinality: one
-        required: false
+        - <<: *optional_name_bound
+          description: >-
+            A recording can have at most one primary title. Each title record can serve as the
+            primary title for at most one recording.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary title on the recording. An alternative title belongs under its
+            primary form.
 
   Cue:
     properties:
-      start_ms:
-        type: integer
-        required: true
-      end_ms:
-        type: integer
-        required: true
+      start_ms: *required_integer
+      end_ms: *required_integer
     relationships:
       CUE_OF:
-        target: Recording
-        cardinality: one
-        required: true
+        - target: Recording
+          cardinality: "0..* -> 1"
+          description: "A cue must belong to exactly one recording."
 
-  Source:
-    properties:
-      name:
-        type: string
-        required: true
+  Source: *named_lookup
 
   Segmentation:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            A segmentation can have at most one annotation metadata record. Each metadata record
+            can belong to at most one segmentation.
 
   Segment:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      type:
-        type: string
-        required: true
-        allowed_values:
-          - paragraph
-          - verse
-          - title
-          - back_matter
-          - front_matter
-          - top_segment
+      id: *required_unique_string
+      type: *required_string
       reference:
-        type: string
-        required: false
+        <<: *optional_string
+        indexed: true
     relationships:
       SEGMENT_OF:
-        target: Segmentation
-        cardinality: one
-        required: true
+        - target: Segmentation
+          cardinality: "0..* -> 1"
+          description: "A segment must belong to exactly one segmentation."
       ALIGNED_TO:
-        target: Segment
-        cardinality: many
-        required: false
+        - target: Segment
+          cardinality: "0..* -> 0..*"
+          description: "A segment can be aligned with any number of other segments."
       HAS_TAG:
-        target: Tag
-        cardinality: many
-        required: false
+        - target: Tag
+          cardinality: "0..* -> 0..*"
+          description: "A segment can have any number of tags, and a tag can be used on any number of segments."
 
   Span:
     properties:
-      start:
-        type: integer
-        required: true
-      end:
-        type: integer
-        required: true
+      start: *required_integer
+      end: *required_integer
       index:
         type: integer
-        required: false  # order of an excerpt edition's spans; those are in its source edition's positions
+        required: false
+        description: >-
+          A span index must be an integer when supplied. In an excerpt, the index orders the spans.
+          Their start and end positions refer to the source edition.
     relationships:
       SPAN_OF:
-        target: Segment | BibliographicMetadata | Note | Mark | Attribute | Page | TableOfContentsSection | Cue | Edition
-        cardinality: one
-        required: true
+        - target: [Cue, Note, Mark, BibliographicMetadata, TableOfContentsSection]
+          cardinality: "1 -> 1"
+          description: &span_ownership >-
+            Each span must have exactly one owner. Each cue, note, mark, bibliographic metadata
+            record and table-of-contents section needs exactly one span. Each segment and page
+            needs at least one span.
+        - target: [Segment, Page]
+          cardinality: "1..* -> 1"
+          description: *span_ownership
+        - target: [Attribute, Edition]
+          cardinality: "0..* -> 1"
+          description: *span_ownership
+        - target: Edition
+          when: {target: *excerpt_edition}
+          cardinality: "1..* -> 0..*"
+          description: "An excerpt edition must have at least one span."
 
   BibliographicMetadata:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       BIBLIOGRAPHY_OF:
-        target: Edition
-        cardinality: one
-        required: true
+        - target: Edition
+          cardinality: "0..* -> 1"
+          description: "A bibliographic metadata record must belong to exactly one edition."
+        - <<: *forbid_excerpt_target
+          description: "Bibliographic metadata cannot be attached directly to an excerpt edition."
       HAS_TYPE:
-        target: BibliographyType
-        cardinality: one
-        required: true
+        - target: BibliographyType
+          cardinality: "0..* -> 1"
+          description: "A bibliographic metadata record must have exactly one bibliography type."
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            A bibliographic metadata record can have at most one annotation metadata record.
+            Each metadata record can belong to at most one bibliographic metadata record.
 
   Note:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      text:
-        type: string
-        required: true
+      id: *required_unique_string
+      text: *required_string
     relationships:
       NOTE_OF:
-        target: Edition
-        cardinality: one
-        required: true
+        - target: Edition
+          cardinality: "0..* -> 1"
+          description: "A note must belong to exactly one edition."
+        - <<: *forbid_excerpt_target
+          description: "A note cannot be attached directly to an excerpt edition."
       HAS_TYPE:
-        target: NoteType
-        cardinality: one
-        required: true
+        - target: NoteType
+          cardinality: "0..* -> 1"
+          description: "A note must have exactly one note type."
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            A note can have at most one annotation metadata record. Each metadata record can
+            belong to at most one note.
 
   Mark:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       MARK_OF:
-        target: Edition
-        cardinality: one
-        required: true
+        - target: Edition
+          cardinality: "0..* -> 1"
+          description: "A mark must belong to exactly one edition."
+        - <<: *forbid_excerpt_target
+          description: "A mark cannot be attached directly to an excerpt edition."
       HAS_TYPE:
-        target: MarkType
-        cardinality: one
-        required: true
+        - target: MarkType
+          cardinality: "0..* -> 1"
+          description: "A mark must have exactly one mark type."
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            A mark can have at most one annotation metadata record. Each metadata record can
+            belong to at most one mark.
 
   Attribute:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
+      id: *required_unique_string
       value:
         type: any
         required: true
     relationships:
       ATTRIBUTE_OF:
-        target: Edition
-        cardinality: one
-        required: true
+        - target: Edition
+          cardinality: "0..* -> 1"
+          description: "An attribute must belong to exactly one edition."
+        - <<: *forbid_excerpt_target
+          description: "An attribute cannot be attached directly to an excerpt edition."
       HAS_TYPE:
-        target: AttributeType
-        cardinality: one
-        required: true
+        - target: AttributeType
+          cardinality: "0..* -> 1"
+          description: "An attribute must have exactly one attribute type."
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            An attribute can have at most one annotation metadata record. Each metadata record
+            can belong to at most one attribute.
 
   Pagination:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       PAGINATION_OF:
-        target: Edition
-        cardinality: one
-        required: true
+        - target: Edition
+          cardinality: "0..1 -> 1"
+          description: >-
+            A pagination must belong to exactly one edition. An edition can have at most one
+            pagination.
+        - target: Edition
+          when:
+            target:
+              has_outgoing:
+                HAS_TYPE:
+                  target: {properties: {name: diplomatic}}
+          cardinality: "1 -> 0..*"
+          description: "A diplomatic edition must have exactly one pagination."
+        - <<: *forbid_excerpt_target
+          description: "Pagination cannot be attached directly to an excerpt edition."
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            A pagination can have at most one annotation metadata record. Each metadata record
+            can belong to at most one pagination.
 
   TableOfContents:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       TOC_OF:
-        target: Edition
-        cardinality: one
-        required: true
+        - target: Edition
+          cardinality: "0..* -> 1"
+          description: "A table of contents must belong to exactly one edition."
+        - <<: *forbid_excerpt_target
+          description: "A table of contents cannot be attached directly to an excerpt edition."
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            A table of contents can have at most one annotation metadata record. Each metadata
+            record can belong to at most one table of contents.
 
   TableOfContentsSection:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       SECTION_OF:
-        target: TableOfContents
-        cardinality: one
-        required: true
+        - target: TableOfContents
+          cardinality: "0..* -> 1"
+          description: "A section must belong to exactly one table of contents."
       SUBSECTION_OF:
-        target: TableOfContentsSection
-        cardinality: one
-        required: false
+        - target: TableOfContentsSection
+          cardinality: "0..* -> 0..1"
+          description: "A table-of-contents section can have at most one parent section."
       HAS_TITLE:
-        target: Nomen
-        cardinality: one
-        required: true
+        - <<: *required_name_bound
+          description: >-
+            A table-of-contents section must have exactly one primary title. Each title record
+            can serve as the primary title for at most one table-of-contents section.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary title on the table-of-contents section. An alternative title belongs
+            under its primary form.
       HAS_SUMMARY:
-        target: Nomen
-        cardinality: one
-        required: false
+        - <<: *optional_name_bound
+          description: >-
+            A table-of-contents section can have at most one primary summary. Each summary
+            record can serve as the primary summary for at most one table-of-contents section.
+        - <<: *forbid_alternative_nomen
+          description: >-
+            Use the primary summary on the table-of-contents section. An alternative summary
+            belongs under its primary form.
 
   Volume:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      index:
-        type: integer
-        required: false
+      id: *required_unique_string
+      index: *optional_integer
     relationships:
       VOLUME_OF:
-        target: Pagination
-        cardinality: one
-        required: true
+        - target: Pagination
+          cardinality: "1..* -> 1"
+          description: >-
+            A volume must belong to exactly one pagination. Each pagination must contain at
+            least one volume.
       HAS_METADATA:
-        target: AnnotationMetadata
-        cardinality: one
-        required: false
+        - <<: *metadata_bound
+          description: >-
+            A volume can have at most one annotation metadata record. Each metadata record can
+            belong to at most one volume.
 
   Page:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      reference:
-        type: string
-        required: true
+      id: *required_unique_string
+      reference: *required_string
     relationships:
       PAGE_OF:
-        target: Volume
-        cardinality: one
-        required: true
+        - target: Volume
+          cardinality: "1..* -> 1"
+          description: "A page must belong to exactly one volume. Each volume must contain at least one page."
 
   AnnotationMetadata:
     properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      name:
-        type: string
-        required: false
+      id: *required_unique_string
+      name: *optional_string
 
   Contribution:
     relationships:
       BY:
-        target: Person | AI
-        cardinality: one
-        required: true
+        - target: [Person, AI]
+          cardinality: "0..* -> 1"
+          description: "A contribution must credit exactly one contributor, either a person or an AI."
       WITH_ROLE:
-        target: RoleType
-        cardinality: one
-        required: true
+        - target: RoleType
+          cardinality: "0..* -> 1"
+          description: "A contribution must have exactly one role."
+        - target: RoleType
+          when:
+            source: *audio_contribution
+            target:
+              properties: {name: [narrator, singer, musician]}
+          cardinality: "0..* -> 1"
+          description: "An audio contributor must be credited as a narrator, singer or musician."
 
   AI:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
 
   Person:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
-      bdrc:
-        type: string
-        required: false
-        unique: true
-      wiki:
-        type: string
-        required: false
-        unique: true
+    properties: *external_ids
     relationships:
       HAS_NAME:
-        target: Nomen
-        cardinality: one
-        required: true
+        - <<: *required_name_bound
+          description: >-
+            A person must have exactly one primary name. Each name record can serve as the
+            primary name for at most one person.
+        - <<: *forbid_alternative_nomen
+          description: "Use the primary name on the person. An alternative name belongs under its primary form."
 
   Nomen:
-    properties:
-      id:
-        type: string
-        required: true
-        unique: true
+    properties: *identified
     relationships:
       HAS_LOCALIZATION:
-        target: LocalizedText
-        cardinality: many
-        required: true
+        - target: LocalizedText
+          cardinality: "1 -> 1..*"
+          description: >-
+            A name must have at least one localized wording. Each localized wording must belong
+            to exactly one name.
       ALTERNATIVE_OF:
-        target: Nomen
-        cardinality: one
-        required: false
+        - target: Nomen
+          cardinality: "0..* -> 0..1"
+          description: "An alternative name can refer to at most one primary name."
+        - target: Nomen
+          when: {source: {has_incoming: ALTERNATIVE_OF}}
+          cardinality: 0
+          description: "A name with alternatives of its own cannot also be an alternative name."
 
   LocalizedText:
     properties:
       text:
-        type: string
-        required: true
+        <<: *required_string
+        indexed: true
     relationships:
       HAS_LANGUAGE:
-        target: Language
-        cardinality: one
-        required: true
-        properties:
-          bcp47:
-            type: string
-            required: false
+        - target: Language
+          cardinality: "0..* -> 1"
+          description: "A localized wording must have exactly one language."
+          properties:
+            bcp47: *optional_string
 
   Language:
     properties:
-      code:
-        type: string
-        required: true
-        unique: true
-      name:
-        type: string
-        required: true
+      code: *required_unique_string
+      name: *required_string
 
-  EditionType:
-    enum: true
-    properties:
-      name:
-        type: string
-        unique: true
-        required: true
-        allowed_values:
-          - diplomatic
-          - critical
-          - collated
-          - excerpt
-
-  LicenseType:
-    enum: true
-    properties:
-      name:
-        type: string
-        unique: true
-        required: true
-        allowed_values:
-          - cc0
-          - public
-          - cc-by
-          - cc-by-sa
-          - cc-by-nd
-          - cc-by-nc
-          - cc-by-nc-sa
-          - cc-by-nc-nd
-          - copyrighted
-          - unknown
-
-  BibliographyType:
-    enum: true
-    properties:
-      name:
-        type: string
-        unique: true
-        required: true
-        allowed_values:
-          - colophon
-          - incipit
-          - alt_incipit
-          - alt_title
-          - person
-          - title
-          - author
-
-  NoteType:
-    enum: true
-    properties:
-      name:
-        type: string
-        unique: true
-        required: true
-        allowed_values:
-          - durchen
-          - footnote
-
-  MarkType:
-    enum: true
-    properties:
-      name:
-        type: string
-        unique: true
-        required: true
-        allowed_values:
-          - yigchung
-
-  AttributeType:
-    enum: true
-    properties:
-      name:
-        type: string
-        unique: true
-        required: true
-        allowed_values:
-          - ocr_confidence
-
-  RoleType:
-    enum: true
-    properties:
-      name:
-        type: string
-        unique: true
-        required: true
-        allowed_values:
-          - reviser
-          - author
-          - translator
-          - scholar
-          - narrator
-          - singer
-          - musician
+  EditionType: *named_lookup
+  LicenseType: *named_lookup
+  BibliographyType: *named_lookup
+  NoteType: *named_lookup
+  MarkType: *named_lookup
+  AttributeType: *named_lookup
+  RoleType: *named_lookup

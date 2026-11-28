@@ -290,10 +290,7 @@ async def get_related_editions(edition_id: EditionId, db: DatabaseDep) -> list[E
     "/{edition_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete edition",
-    description=(
-        "Delete edition metadata and associated database annotations. Recordings that follow the edition "
-        "stay; the request is rejected while any of them has cues."
-    ),
+    description="Delete edition metadata and associated annotations. Delete any recordings that follow it first.",
 )
 async def delete_edition(search: SearchUpdatesDep, edition_id: EditionId, db: DatabaseDep) -> None:
     logger.info("Deleting edition with edition ID: %s", edition_id)

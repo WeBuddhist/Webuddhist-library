@@ -155,7 +155,6 @@ Delete behavior:
 
 - Deletes the `Edition` node and its incipit title `Nomen` and `LocalizedText` subgraphs.
 - Cascade-deletes segmentations, alignments, pagination, table of contents, bibliographic metadata, durchen notes, footnotes, yigchung marks, spans, segments, pages, volumes, and table of contents sections associated with the edition, including annotations added after edition creation.
-- Never deletes audio. Recordings that follow the edition stop following it and stay, together with their audio.
 - Deletes the edition's `HAS_SOURCE` relationship, but preserves the `Source` node.
 - Does not delete the parent `Text`, underlying `Work`, categories, tags, contributors, or lookup/type nodes.
 - Does not delete stored base text, recording audio files, or other non-database side effects.
@@ -163,7 +162,7 @@ Delete behavior:
 Error responses:
 
 - `404 Not Found`: Edition does not exist.
-- `409 Conflict`: A recording with cues follows the edition. Remove its cues or its follow first; see [recordings-api.md](recordings-api.md#follow-an-edition).
+- A recording that follows the edition blocks deletion with `409 Conflict`, even when it has no cues. [Delete the recording](recordings-api.md#delete-recording) first.
 - `409 Conflict`: An excerpt edition uses the edition. Delete the excerpt edition first. Deleting an excerpt edition removes only its spans, never its source edition.
 - `401 Unauthorized`: Missing or invalid API key in deployed environments.
 

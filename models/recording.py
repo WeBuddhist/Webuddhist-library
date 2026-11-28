@@ -8,17 +8,12 @@ from .base import LocalizedString, NonEmptyStr, OpenPechaModel, PatchModel
 from .enums import AudioFormat
 
 
-class RecordingBase(OpenPechaModel):
+class RecordingInput(OpenPechaModel):
     """One audio file of an Audio. `title` names the version, for example "With music"."""
 
     title: LocalizedString | None = None
     duration_ms: int | None = Field(default=None, ge=0)
-
-
-class RecordingInput(RecordingBase):
-    edition_id: NonEmptyStr | None = Field(
-        default=None, description="Edition the recording follows; needed before cues can be added"
-    )
+    edition_id: NonEmptyStr = Field(description="Edition of the recited text that this recording follows.")
 
 
 class RecordingPatch(PatchModel):
@@ -26,11 +21,10 @@ class RecordingPatch(PatchModel):
     duration_ms: int | MISSING = Field(default=MISSING, ge=0)
 
 
-class RecordingOutput(RecordingBase):
+class RecordingOutput(RecordingInput):
     id: NonEmptyStr
     audio_id: NonEmptyStr
     text_id: NonEmptyStr
-    edition_id: NonEmptyStr | None = None
     format: AudioFormat
     size_bytes: int
 

@@ -7,7 +7,7 @@ import argparse
 import asyncio
 import logging
 
-from neo4j import AsyncGraphDatabase
+from neo4j import AsyncGraphDatabase, AsyncResult
 
 from config import settings
 from database.migrations import install_constraints
@@ -28,6 +28,23 @@ async def main(steps: list[str]) -> None:
         for step in steps:
             await STEPS[step](driver, settings.neo4j_database)
             logger.info("Neo4j %s installed.", step)
+        if "triggers" in steps:
+            invalid = await driver.execute_query(
+                """MATCH (r:Recording)
+                   WHERE (r)-[:RECORDING_OF]->()
+                      OR count { (r)-[:FOLLOWS]->() } <> 1 OR count { (r)-[:RENDITION_OF]->() } <> 1
+                      OR NOT EXISTS {
+                          (r)-[:FOLLOWS]->(:Edition)-[:EDITION_OF]->(:Text)<-[:RECITATION_OF]-(:Audio)<-[:RENDITION_OF]-(r)
+                      }
+                   RETURN coalesce(toStringOrNull(r.id), elementId(r)) AS id LIMIT 20""",
+                database_=settings.neo4j_database,
+                result_transformer_=AsyncResult.value,
+            )
+            if invalid:
+                raise SystemExit(
+                    f"Recordings with incomplete or inconsistent links (up to 20 IDs): {', '.join(invalid)}. "
+                    "Run the recording migration or repair the reported links before restarting the API."
+                )
 
 
 if __name__ == "__main__":

@@ -11,7 +11,6 @@ Requires Docker for Neo4j testcontainer.
 import logging
 
 import pytest
-from neo4j.exceptions import ClientError
 
 from database import person, text
 from database import segment as segment_database
@@ -935,31 +934,27 @@ class TestSegmentsRelatedEdgeCases(SegmentTestBase):
         found4 = await find_by_span(test_database, edition_id, start=16, end=20)
         assert len(found4) == 0, "Span [16,20) should overlap no segments"
 
-    async def test_segment_get_with_broken_graph(self, client, test_database):
-        """Segment node exists but missing path to Edition/Text -> DataNotFoundError."""
-        from errors import DataNotFoundError
+    async def test_orphan_segmentation_rejected_at_commit(self, test_database):
+        from neo4j.exceptions import ClientError
 
         async with test_database.get_session() as session:
-            await session.run("""
-                CREATE (sgn:Segmentation {id: 'orphan_segmentation'})
-                CREATE (seg:Segment {id: 'orphan_segment'})-[:SEGMENT_OF]->(sgn)
-                CREATE (span:Span {start: 0, end: 10})-[:SPAN_OF]->(seg)
-            """)
+            with pytest.raises(ClientError, match="enforce_edition_has_segmentation_per_segmentation"):
+                await (await session.run("CREATE (:Segmentation {id: 'orphan_segmentation'})")).consume()
 
-        with pytest.raises(DataNotFoundError):
-            await segment_database.get(test_database, "orphan_segment")
-
-    async def test_segment_get_with_inverted_spans_excluded(self, client, test_database):
-        """Inverted spans are rejected by installed Neo4j triggers."""
-        seg_id = f"seg_inverted_span_{generate_id()[:6]}"
-        async with test_database.get_session() as session:
-            with pytest.raises(ClientError, match="enforce_span_start_lte_end"):
-                result = await session.run("""
-                    CREATE (sgn:Segmentation {id: $sgn_id})
-                    CREATE (seg:Segment {id: $seg_id})-[:SEGMENT_OF]->(sgn)
-                    CREATE (span:Span {start: 6, end: 5})-[:SPAN_OF]->(seg)
-                """, sgn_id=f"sgn_{seg_id}", seg_id=seg_id)
-                await result.consume()
+    @pytest.mark.parametrize(
+        ("segments", "message"),
+        [
+            ([(6, 5)], "'start' must not be greater than 'end'"),
+            (
+                [{"start": 0, "end": 5, "reference": "1"}, {"start": 5, "end": 10, "reference": "1"}],
+                "segment references must be unique within a segmentation",
+            ),
+        ],
+    )
+    async def test_invalid_segmentation_rejected_at_input(self, client, segments, message):
+        response = await self._post_segmentation_raw(client, generate_id(), segments)
+        assert response.status_code == 422
+        assert message in response.text
 
 
 # ---------------------------------------------------------------------------

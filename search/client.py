@@ -4,6 +4,7 @@ from contextlib import aclosing
 from typing import TYPE_CHECKING, cast
 
 import botocore.session
+from aiohttp import encode_basic_auth
 from aioitertools.itertools import batched
 from opensearchpy import AsyncHttpConnection, AsyncOpenSearch, AWSV4SignerAsyncAuth
 from opensearchpy.exceptions import RequestError
@@ -27,9 +28,10 @@ def create_search_client(config: Settings, *, request_timeout: int = 120, max_re
     auth_mode = config.opensearch_auth_mode
     if not endpoint:
         raise InvalidRequestError("OPENSEARCH_ENDPOINT is required")
-    http_auth: tuple[str, str] | AWSV4SignerAsyncAuth | None = None
+    http_auth = None
+    headers = {}
     if auth_mode == "basic":
-        http_auth = (config.opensearch_username, config.opensearch_password)
+        headers["Authorization"] = encode_basic_auth(config.opensearch_username, config.opensearch_password, "latin1")
     elif auth_mode == "aws":
         credentials = botocore.session.get_session().get_credentials()
         if credentials is None:
@@ -42,6 +44,7 @@ def create_search_client(config: Settings, *, request_timeout: int = 120, max_re
         verify_certs=True,
         connection_class=AsyncHttpConnection,
         http_auth=http_auth,
+        headers=headers,
         timeout=request_timeout,
         max_retries=max_retries,
         retry_on_timeout=True,

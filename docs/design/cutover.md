@@ -12,6 +12,7 @@ The [environment sync from prod](../../README.md#refresh-testing-or-dev-from-pro
 | Pagination | Audit for empty pages, volumes, and paginations. Correct invalid records before upgrading. Nonempty pages are ordered by offsets; no ordering field or backfill is needed. |
 | Segmentation | Audit line continuity within and between segments. Gaps and overlaps require an explicit correction before upgrade; migration does not guess new boundaries. |
 | Editions | Record each existing S3 key, verified content length, and internal revision. Existing files stay at their current locations; no copy is needed. Future edits always write fresh keys. |
+| Audio | The schema migration drops the obsolete triggers and deletes existing `AUDIO_OF` relationships. Each Audio reaches its Work through `RECITATION_OF` and `TEXT_OF`. |
 | Recordings | Convert each recording attached to an edition (`RECORDING_OF`) into an `Audio` plus its `Recording`. Title, language, license, date, and contributions move to the new audio, which recites the edition's text and belongs to its Work. The recording follows the same edition (`FOLLOWS`), keeps its cues unchanged, and records its existing S3 key in `audio_key`. No file is copied. |
 | Search | Rebuild the environment's configured indexes when changing mappings or repairing missed updates. Content projection version 3 changes the chunk mapping and adds immutable-content references. |
 
@@ -20,8 +21,7 @@ Schema upgrades repeat idempotent steps without a version marker. Content backfi
 ### Retire the objects/ prefix
 
 New editions use `base_texts/{text_id}/{edition_id}.txt`. Each edit writes a fresh
-`base_texts/{text_id}/{edition_id}/{version_id}.txt`. Audio uses `recordings/{recording_id}.{format}`,
-including recordings without an edition. Existing files remain readable from their stored keys during rollout.
+`base_texts/{text_id}/{edition_id}/{version_id}.txt`. Audio uses `recordings/{recording_id}.{format}`. Existing files remain readable from their stored keys during rollout.
 For edition text under `objects/`, relocation uses the old key's suffix as the version ID, preserving any
 earlier file at `base_texts/{text_id}/{edition_id}.txt`.
 
@@ -45,11 +45,13 @@ zero and the restore procedure covers any supported backups that still reference
 
 ### Recording conversion
 
-`python -m scripts.migrate --apply` converts every recording still attached to an edition in one transaction, after the new triggers are live; either all convert or none do. Later runs find nothing to convert. The read-only `python -m scripts.migrate` reports pending recordings as a count, and recordings that cannot be converted as `legacy_recording_unconvertible`; repair those first.
+Run the schema audit before upgrading. The converter carries a legacy `RECORDING_OF` link over to the same edition. For a recording with neither edition link, confirm which edition it follows and repair the link. After installing the triggers, deployment checks that each recording has completed conversion and links to both an audio and an edition of the recited text. An invalid recording stops the API restart.
+
+`python -m scripts.migrate --apply` converts legacy recordings in one transaction after the new triggers are live. Later runs find nothing to convert. The read-only `python -m scripts.migrate` reports current schema violations, including missing edition links. Repair any recordings listed under `legacy_recording_unconvertible` before applying the migration.
 
 The release that introduces `Audio` depends on this conversion: its API neither lists unconverted recordings nor moves their cues on content edits, and the previous API does the same for converted ones. So keep the API stopped from the conversion until the new release starts:
 
-1. Run `python -m scripts.migrate` (read-only) against the environment and repair what it reports.
+1. Run `python -m scripts.migrate` (read-only) against the environment. Legacy recordings can appear in both the current-schema violations and the list awaiting conversion. The apply step supplies their missing audio keys and links. Repair unconvertible recordings and unrelated violations before applying.
 2. Stop the API (`sudo systemctl stop openpecha-api`).
 3. From the release checkout, run `python -m scripts.migrate --apply`.
 4. Merge the release; deploy installs it and starts the API.
