@@ -142,19 +142,21 @@ class SegmentTestBase:
         assert resp.status_code == 200
         return [seg["id"] for seg in resp.json()["items"]]
 
-    async def _create_translation_text(self, db, person_id, original_text_id, language="en"):
+    async def _create_translation_text(self, db, person_id, original_text_id, language="en", **kwargs):
         return await self._create_text(
             db, person_id,
             title=LocalizedString({language: "Translation"}),
             language=language,
             translation_of=original_text_id,
+            **kwargs,
         )
 
-    async def _create_commentary_text(self, db, person_id, original_text_id):
+    async def _create_commentary_text(self, db, person_id, original_text_id, **kwargs):
         return await self._create_text(
             db, person_id,
             title=LocalizedString({"bo": "འགྲེལ་པ།", "en": "Commentary"}),
             commentary_of=original_text_id,
+            **kwargs,
         )
 
     def _collect_all_segments(self, data):
@@ -445,6 +447,53 @@ class TestDirectSegmentRelated(SegmentTestBase):
         )
         assert empty_resp.status_code == 200
         assert self._related_items(empty_resp.json()) == []
+
+    async def test_segment_related_filters_by_license(self, client, test_database):
+        """License filter keeps related segments whose text has any of the repeated licenses."""
+        person_id = await self._create_person(test_database)
+
+        root_text_id = await self._create_text(
+            test_database, person_id, title=LocalizedString({"bo": "རྩ་བ།", "en": "License Filter Root"}),
+            license="cc0",
+        )
+        root_edition_id = await self._create_edition(client, root_text_id, "0123456789")
+        await self._post_segmentation(client, root_edition_id, [(0, 10)])
+
+        trans_text_id = await self._create_translation_text(
+            test_database, person_id, root_text_id, license="copyrighted"
+        )
+        trans_edition_id = await self._create_edition(client, trans_text_id, "ABCDEFGHIJ")
+        await self._post_segmentation(client, trans_edition_id, [(0, 10)])
+
+        comm_text_id = await self._create_commentary_text(test_database, person_id, root_text_id, license="cc-by")
+        comm_edition_id = await self._create_edition(client, comm_text_id, "KLMNOPQRST")
+        await self._post_segmentation(client, comm_edition_id, [(0, 10)])
+
+        for target_edition_id in (trans_edition_id, comm_edition_id):
+            await self._post_alignment(
+                client, root_edition_id, target_edition_id,
+                source_segments=[(0, 10)],
+                target_segments=[(0, 10)],
+                alignment_map=[(0, [0])],
+            )
+
+        seg_ids = await self._get_segment_ids_from_segmentation(client, root_edition_id)
+        url = f"/v2/segments/{seg_ids[0]}/related"
+
+        async def related_text_ids(params) -> set[str]:
+            response = await client.get(url, params=params)
+            assert response.status_code == 200
+            return {item["text_id"] for item in self._related_items(response.json())}
+
+        assert await related_text_ids({}) == {trans_text_id, comm_text_id}
+        assert await related_text_ids({"license": "copyrighted"}) == {trans_text_id}
+        assert await related_text_ids({"license": ["cc-by", "copyrighted"]}) == {trans_text_id, comm_text_id}
+        # The source segment's own license does not matter; only the related segment's text license does.
+        assert await related_text_ids({"license": "cc0"}) == set()
+        assert await related_text_ids({"license": "copyrighted", "language": "bo"}) == set()
+
+        invalid = await client.get(url, params={"license": "not-a-license"})
+        assert invalid.status_code == 422
 
     async def test_segment_related_has_more(self, client, test_database):
         """Direct related segment pagination should report when another page exists."""

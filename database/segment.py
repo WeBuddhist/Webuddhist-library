@@ -50,6 +50,7 @@ MATCH (seg:Segment {{id: segment_id}})-[:SEGMENT_OF]->(sgn:Segmentation)
 WHERE ($text_id IS NULL OR text.id = $text_id)
   AND ($filter_edition_id IS NULL OR edition.id = $filter_edition_id)
   AND {has_language("text")}
+  AND (size($licenses) = 0 OR EXISTS {{ (text)-[:HAS_LICENSE]->(l:LicenseType) WHERE l.name IN $licenses }})
 {segment_lines("seg")}
 WITH text, edition, sgn, seg, lines, min_start
 WHERE size(lines) > 0
@@ -126,6 +127,7 @@ async def _resolve_segment_page(
         filter_edition_id=filters.edition_id,
         language=filters.language,
         language_base=language_code,
+        licenses=[license_type.value for license_type in filters.license],
     )
 
 

@@ -73,6 +73,7 @@ class RelatedSegmentsFilter(OpenPechaModel):
     text_id: str | None = Field(default=None, description="Filter related segments by text ID")
     edition_id: str | None = Field(default=None, description="Filter related segments by edition ID")
     language: LanguageFilter | None = Field(default=None, description="Filter related segments by text language")
+    license: list[LicenseType] = Field(default=[], description="Repeat the parameter to match any of several licenses.")
 
 
 class DirectRelatedSegmentsQueryParams(PaginationParams, RelatedSegmentsFilter):
