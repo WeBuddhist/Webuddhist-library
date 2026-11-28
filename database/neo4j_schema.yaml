@@ -7,11 +7,6 @@ property_templates:
   - &required_boolean {type: boolean, required: true}
   - &optional_integer {type: integer, required: false}
 
-node_templates:
-  identified: &identified {id: *required_unique_string}
-  external_ids: &external_ids {<<: *identified, bdrc: *optional_unique_string, wiki: *optional_unique_string}
-  named_lookup: &named_lookup {properties: {name: *required_unique_string}}
-
 relationship_templates:
   required_name_bound: &required_name_bound {target: Nomen, cardinality: "0..1 -> 1"}
   optional_name_bound: &optional_name_bound {target: Nomen, cardinality: "0..1 -> 0..1"}
@@ -64,7 +59,10 @@ nodes:
           description: "An API key can be bound to at most one application."
 
   Work:
-    properties: *external_ids
+    properties:
+      bdrc: *optional_unique_string
+      wiki: *optional_unique_string
+      id: *required_unique_string
     relationships:
       HAS_CATEGORY:
         - target: Category
@@ -76,7 +74,8 @@ nodes:
           description: "A work can have any number of tags, and a tag can be used on any number of works."
 
   Tag:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       BELONGS_TO:
         - target: Application
@@ -100,7 +99,8 @@ nodes:
             primary form.
 
   Category:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       BELONGS_TO:
         - target: Application
@@ -131,8 +131,10 @@ nodes:
 
   Text:
     properties:
-      <<: *external_ids
       date: *optional_string
+      bdrc: *optional_unique_string
+      wiki: *optional_unique_string
+      id: *required_unique_string
     relationships:
       TEXT_OF:
         - target: Work
@@ -208,11 +210,13 @@ nodes:
 
   Edition:
     properties:
-      <<: *external_ids
       content_length: *required_integer
       content_key: *optional_string
       revision: *required_integer
       colophon: *optional_string
+      bdrc: *optional_unique_string
+      wiki: *optional_unique_string
+      id: *required_unique_string
     relationships:
       HAS_TYPE:
         - target: EditionType
@@ -338,10 +342,13 @@ nodes:
           cardinality: "0..* -> 1"
           description: "A cue must belong to exactly one recording."
 
-  Source: *named_lookup
+  Source:
+    properties:
+      name: *required_unique_string
 
   Segmentation:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       HAS_METADATA:
         - <<: *metadata_bound
@@ -400,7 +407,8 @@ nodes:
           description: "An excerpt edition must have at least one span."
 
   BibliographicMetadata:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       BIBLIOGRAPHY_OF:
         - target: Edition
@@ -440,7 +448,8 @@ nodes:
             belong to at most one note.
 
   Mark:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       MARK_OF:
         - target: Edition
@@ -482,7 +491,8 @@ nodes:
             can belong to at most one attribute.
 
   Pagination:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       PAGINATION_OF:
         - target: Edition
@@ -507,7 +517,8 @@ nodes:
             can belong to at most one pagination.
 
   TableOfContents:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       TOC_OF:
         - target: Edition
@@ -522,7 +533,8 @@ nodes:
             record can belong to at most one table of contents.
 
   TableOfContentsSection:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       SECTION_OF:
         - target: TableOfContents
@@ -602,10 +614,14 @@ nodes:
           description: "An audio contributor must be credited as a narrator, singer or musician."
 
   AI:
-    properties: *identified
+    properties:
+      id: *required_unique_string
 
   Person:
-    properties: *external_ids
+    properties:
+      bdrc: *optional_unique_string
+      wiki: *optional_unique_string
+      id: *required_unique_string
     relationships:
       HAS_NAME:
         - <<: *required_name_bound
@@ -616,7 +632,8 @@ nodes:
           description: "Use the primary name on the person. An alternative name belongs under its primary form."
 
   Nomen:
-    properties: *identified
+    properties:
+      id: *required_unique_string
     relationships:
       HAS_LOCALIZATION:
         - target: LocalizedText
@@ -651,10 +668,30 @@ nodes:
       code: *required_unique_string
       name: *required_string
 
-  EditionType: *named_lookup
-  LicenseType: *named_lookup
-  BibliographyType: *named_lookup
-  NoteType: *named_lookup
-  MarkType: *named_lookup
-  AttributeType: *named_lookup
-  RoleType: *named_lookup
+  EditionType:
+    properties:
+      name: *required_unique_string
+
+  LicenseType:
+    properties:
+      name: *required_unique_string
+
+  BibliographyType:
+    properties:
+      name: *required_unique_string
+
+  NoteType:
+    properties:
+      name: *required_unique_string
+
+  MarkType:
+    properties:
+      name: *required_unique_string
+
+  AttributeType:
+    properties:
+      name: *required_unique_string
+
+  RoleType:
+    properties:
+      name: *required_unique_string
